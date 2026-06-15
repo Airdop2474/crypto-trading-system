@@ -29,7 +29,8 @@
       "Bash(python -c \"import sqlalchemy; print\\('sqlalchemy OK'\\)\")",
       "Bash(python -c \"from src.utils.database import DatabaseManager; print\\('database import OK'\\)\")",
       "Bash(python -m pytest -p no:asyncio tests/unit/test_downloader.py tests/unit/test_database.py -q)",
-      "Bash(xargs wc -l)"
+      "Bash(xargs wc -l)",
+      "Bash(python -m pytest -p no:asyncio tests/unit/test_alert_channels.py tests/unit/test_alert_manager.py -q)"
     ]
   }
 }
