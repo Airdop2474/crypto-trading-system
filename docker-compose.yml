@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: crypto_trading_db
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-crypto_trading}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./config/sql:/docker-entrypoint-initdb.d
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: crypto_trading_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: crypto_trading_grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana:/etc/grafana/provisioning
+    ports:
+      - "3000:3000"
+    depends_on:
+      - timescaledb
+    restart: unless-stopped
+
+  # 交易系统主服务（开发完成后取消注释）
+  # trading_system:
+  #   build: .
+  #   container_name: crypto_trading_app
+  #   depends_on:
+  #     timescaledb:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   env_file:
+  #     - .env
+  #   volumes:
+  #     - ./logs:/app/logs
+  #     - ./data:/app/data
+  #     - ./config:/app/config
+  #   restart: unless-stopped
+  #   command: python src/main.py
+
+volumes:
+  timescaledb_data:
+  redis_data:
+  grafana_data:
+
+networks:
+  default:
+    name: crypto_trading_network

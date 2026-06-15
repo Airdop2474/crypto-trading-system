@@ -1,0 +1,40 @@
+{
+  "backtest_id": "3c3005e1-7b3e-465e-8090-ae5d06a1c005",
+  "metadata": {
+    "run_time": "2026-06-15T16:42:17.363139",
+    "data_version": "f79843d00b06b2cf2b98f8d1189ff4ae8de56014b2027f0bd07328b201a13e58",
+    "strategy_name": "GridTrading",
+    "parameters": {
+      "lower_price": 45072.954,
+      "upper_price": 55208.106,
+      "grid_count": 10,
+      "position_per_grid": 0.1
+    },
+    "period": {
+      "start": "2024-01-01T00:00:00",
+      "end": "2024-03-24T04:00:00"
+    },
+    "initial_balance": 10000.0,
+    "cost_model": {
+      "commission": 0.001,
+      "slippage": 0.0005
+    }
+  },
+  "performance": {
+    "total_return": 0.053608548613216046,
+    "annual_return": 0.2575762878737944,
+    "max_drawdown": -0.11815214398671989,
+    "sharpe_ratio": 0.778083686442367,
+    "win_rate": 0.9642857142857143,
+    "profit_factor": 621.4318924337813,
+    "avg_trade": 15.551650661721549,
+    "total_trades": 119,
+    "final_equity": 10536.08548613216
+  },
+  "cost_analysis": {
+    "total_commission": 119.86488319437657,
+    "total_slippage": 59.93095426925701,
+    "total_cost": 179.79583746363357,
+    "cost_percentage": 0.017979583746363357
+  }
+}

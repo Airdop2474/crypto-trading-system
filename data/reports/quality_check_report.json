@@ -1,0 +1,60 @@
+{
+  "check_time": "2026-06-13T14:57:26.311239",
+  "record_count": 43,
+  "timeframe": "4h",
+  "checks": {
+    "time_continuity": {
+      "passed": true,
+      "gaps": [],
+      "gap_count": 0,
+      "expected_delta": "0 days 04:00:00"
+    },
+    "time_uniqueness": {
+      "passed": true,
+      "duplicates": [],
+      "duplicate_count": 0
+    },
+    "price_logic": {
+      "passed": true,
+      "invalid_rows": [],
+      "invalid_count": 0
+    },
+    "price_reasonability": {
+      "passed": true,
+      "abnormal_rows": [],
+      "abnormal_count": 0,
+      "abnormal_ratio": 0.0,
+      "threshold": 0.5
+    },
+    "volume_reasonability": {
+      "passed": true,
+      "zero_volume_count": 0,
+      "abnormal_volume_count": 0,
+      "issues": []
+    },
+    "data_completeness": {
+      "passed": true,
+      "null_counts": {
+        "timestamp": 0,
+        "open": 0,
+        "high": 0,
+        "low": 0,
+        "close": 0,
+        "volume": 0
+      },
+      "total_nulls": 0
+    },
+    "data_version": {
+      "passed": true,
+      "hash": "d69c67c3b3ca0e24d409fe2122085296b83f44d62285e717929142dbe24abf87",
+      "algorithm": "SHA256",
+      "data_size": 2767
+    }
+  },
+  "summary": {
+    "total_checks": 7,
+    "passed": 7,
+    "failed": 0,
+    "all_passed": true
+  }
+}

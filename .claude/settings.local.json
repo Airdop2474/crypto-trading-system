@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/unit/test_quality_checker.py -p no:asyncio -q)",
+      "Bash(python -m pytest tests/unit/test_metrics.py -p no:cacheprovider -o addopts=\"\" -q)",
+      "Bash(python -m pytest tests/unit/test_metrics.py -p no:asyncio -p no:cacheprovider -o addopts=\"\" -q)",
+      "Bash(python -m pytest tests/ -p no:asyncio -p no:cacheprovider -o addopts=\"\" -q)",
+      "Bash(python -c \"from src.data.exchange import ExchangeClient, create_binance_client; print\\('import OK'\\)\")",
+      "Bash(python -m pytest tests/ -p no:asyncio -q)",
+      "Bash(git check-ignore *)",
+      "Bash(git add *)",
+      "Bash(python -c ' *)",
+      "Bash(python -m pytest tests/unit/test_engine.py tests/unit/test_grid_trading.py -p no:asyncio -p no:cacheprovider -o addopts=\"\" -q)",
+      "Bash(python scripts/test_grid_strategy.py)",
+      "Bash(python scripts/generate_oscillating_data.py)",
+      "Bash(python scripts/validate_grid_strategy.py)",
+      "Bash(grep -v \"INFO\\\\|DEBUG\\\\|WARNING\\\\|Pyarrow\\\\|pandas\\\\|installed\\\\|feedback\\\\|^ *$\\\\|import pandas\")",
+      "Bash(python -m pytest tests/unit/test_paper_broker.py -p no:asyncio -p no:cacheprovider -o addopts=\"\" -q)",
+      "Bash(python -m pytest tests/unit/test_paper_trading_runner.py -p no:asyncio -p no:cacheprovider -o addopts=\"\" -q)",
+      "Bash(grep -v \"INFO\\\\|DEBUG\\\\|WARNING\\\\|Pyarrow\\\\|pandas\\\\|installed\\\\|feedback\\\\|^ *$\")",
+      "Bash(python scripts/run_paper_trading.py)",
+      "Bash(grep -v \"INFO\\\\|DEBUG\\\\|WARNING\\\\|Pyarrow\\\\|pandas\\\\|installed\\\\|feedback\\\\|^ *$\\\\|more performant\\\\|problems for you\")",
+      "Bash(python -m pytest tests/unit/test_risk_manager.py -p no:asyncio -p no:cacheprovider -o addopts=\"\" -q)",
+      "Bash(ls config/)",
+      "Bash(ls -la config/grafana)",
+      "Bash(python -m pytest -p no:asyncio -q)",
+      "Bash(python -c \"import psycopg2; print\\('psycopg2 OK'\\)\")",
+      "Bash(python -c \"import redis; print\\('redis OK'\\)\")",
+      "Bash(python -c \"import sqlalchemy; print\\('sqlalchemy OK'\\)\")",
+      "Bash(python -c \"from src.utils.database import DatabaseManager; print\\('database import OK'\\)\")",
+      "Bash(python -m pytest -p no:asyncio tests/unit/test_downloader.py tests/unit/test_database.py -q)",
+      "Bash(xargs wc -l)"
+    ]
+  }
+}
