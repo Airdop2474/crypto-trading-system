@@ -336,3 +336,43 @@ class TestMetricsWiring:
         runner.run(data, ScriptedStrategy({0: [Order("BUY", tag=1, fraction=0.1)]}))
         assert collector.snapshots[-1]["risk"]["enabled"] is True
         assert collector.snapshots[-1]["risk"]["state"] == rm.state
+
+
+class TestExecutionConfig:
+    """Stage 2：runner 经济参数收口到 ExecutionConfig，paper 路径行为不变。"""
+
+    def test_from_broker_snapshots_economics(self):
+        from src.execution.paper_trading_runner import ExecutionConfig
+        broker = PaperBroker(50000.0, commission=0.002,
+                             slippage={"BTC/USDT": 0.0007})
+        cfg = ExecutionConfig.from_broker(broker)
+        assert cfg.commission == 0.002
+        assert cfg.slippage == {"BTC/USDT": 0.0007}
+        assert cfg.initial_balance == 50000.0
+
+    def test_injected_config_matches_default_path(self):
+        """显式注入与 broker 等值的 ExecutionConfig，成交结果逐位一致。"""
+        from src.execution.paper_trading_runner import ExecutionConfig
+        data = make_data([100, 110, 120, 115, 105])
+        strat_def = {0: [Order("BUY", tag=1, fraction=0.2)],
+                     2: [Order("SELL", tag=1)]}
+
+        # 默认路径（from_broker）
+        r1, b1 = make_runner()
+        r1.run(data, ScriptedStrategy(dict(strat_def)))
+
+        # 显式注入等值 config
+        b2 = PaperBroker(100000.0, commission=0.001,
+                         slippage={"BTC/USDT": 0.0},
+                         max_position_per_trade=1.0, max_total_position=1.0)
+        cfg = ExecutionConfig(commission=0.001, slippage={"BTC/USDT": 0.0},
+                              initial_balance=100000.0)
+        r2 = PaperTradingRunner(b2, "BTC/USDT", exec_config=cfg)
+        r2.run(data, ScriptedStrategy(dict(strat_def)))
+
+        assert r1.realized_pnl == r2.realized_pnl  # 逐位一致
+        h1, h2 = b1.get_trade_history(), b2.get_trade_history()
+        assert len(h1) == len(h2)
+        for a, b in zip(h1, h2):
+            assert a["price"] == b["price"]
+            assert a["amount"] == b["amount"]

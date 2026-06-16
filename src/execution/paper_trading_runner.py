@@ -12,14 +12,55 @@ bar t 收盘生成信号 -> bar t+1 开盘价经 Broker 成交。
   并在平仓时按 tag 找回对应数量。
 """
 
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Protocol
 
 import pandas as pd
 
 from src.execution.broker import Order as BrokerOrder
-from src.execution.paper_broker import PaperBroker
+from src.execution.broker import OrderResult
 from src.strategy.base import Order as StrategyOrder
 from src.utils.logger import logger
+
+
+@dataclass(frozen=True)
+class ExecutionConfig:
+    """成交经济参数（手续费/滑点/初始资金）。
+
+    Stage 2：把 runner 对 broker 内部经济参数的读取收口到这里。paper 路径用
+    `from_broker(broker)` 快照，数值与原先逐位一致；将来 exchange 路径（Stage 3）
+    显式传入真实手续费/滑点/起始权益，runner 主循环不再触碰 broker 内部。
+    """
+
+    commission: float
+    slippage: Dict[str, float]
+    initial_balance: float
+
+    @classmethod
+    def from_broker(cls, broker) -> "ExecutionConfig":
+        """从 PaperBroker 快照经济参数（slippage 按引用，运行中不被改写）。"""
+        return cls(
+            commission=broker.commission,
+            slippage=broker.slippage,
+            initial_balance=broker.initial_balance,
+        )
+
+
+class RunnerBroker(Protocol):
+    """runner 运行所需的最小 broker 协议（仅类型提示，无运行时开销）。
+
+    刻意不继承 BrokerInterface：保持窄接口，便于 Stage 3 用 exchange 适配器替换。
+    """
+
+    def get_balance(self) -> float: ...
+
+    def get_position(self, symbol: str) -> float: ...
+
+    def place_order(self, order: BrokerOrder, timestamp=None) -> OrderResult: ...
+
+    def get_statistics(self) -> dict: ...
+
+    def get_trade_history(self) -> List[dict]: ...
 
 
 class PaperTradingRunner:
@@ -27,19 +68,21 @@ class PaperTradingRunner:
 
     LEGACY_TAG = "_all"
 
-    def __init__(self, broker: PaperBroker, symbol: str, risk_manager=None,
-                 metrics_collector=None):
+    def __init__(self, broker: RunnerBroker, symbol: str, risk_manager=None,
+                 metrics_collector=None, exec_config: Optional[ExecutionConfig] = None):
         """
         参数：
-            broker: PaperBroker 实例
+            broker: 满足 RunnerBroker 协议的实例（paper 为 PaperBroker）
             symbol: 交易对（如 'BTC/USDT'）
             risk_manager: 可选 RiskManager，提供账户级熔断门禁
             metrics_collector: 可选 MetricsCollector，逐根采集运行时指标快照
+            exec_config: 可选成交经济参数；省略则从 broker 快照（paper 路径行为不变）
         """
         self.broker = broker
         self.symbol = symbol
         self.risk_manager = risk_manager
         self.metrics_collector = metrics_collector
+        self.exec_cfg = exec_config or ExecutionConfig.from_broker(broker)
         # tag -> {"amount": 数量, "cost_price": 加权平均成本价}
         self.lots: Dict[object, Dict[str, float]] = {}
         # 累计已实现盈亏（卖出时累加）
@@ -177,8 +220,8 @@ class PaperTradingRunner:
         profit = None
         if lot is not None:
             qty = result.filled_amount
-            proceeds = qty * result.filled_price * (1 - self.broker.commission)
-            cost_basis = qty * lot["cost_price"] * (1 + self.broker.commission)
+            proceeds = qty * result.filled_price * (1 - self.exec_cfg.commission)
+            cost_basis = qty * lot["cost_price"] * (1 + self.exec_cfg.commission)
             profit = proceeds - cost_basis
             self.realized_pnl += profit
             self.closed_trades.append({"tag": tag, "time": time, "profit": profit})
@@ -188,15 +231,15 @@ class PaperTradingRunner:
 
     def _all_cash_amount(self, price: float) -> float:
         """用全部现金可买的数量（含滑点+手续费余量）"""
-        slip = self.broker.slippage.get(self.symbol, 0.0005)
-        unit_cost = price * (1 + slip) * (1 + self.broker.commission)
+        slip = self.exec_cfg.slippage.get(self.symbol, 0.0005)
+        unit_cost = price * (1 + slip) * (1 + self.exec_cfg.commission)
         return self.broker.get_balance() / unit_cost if unit_cost > 0 else 0.0
 
     def _fraction_amount(self, fraction: float, price: float) -> float:
         """按初始资金比例可买的数量"""
-        slip = self.broker.slippage.get(self.symbol, 0.0005)
-        unit_cost = price * (1 + slip) * (1 + self.broker.commission)
-        budget = fraction * self.broker.initial_balance
+        slip = self.exec_cfg.slippage.get(self.symbol, 0.0005)
+        unit_cost = price * (1 + slip) * (1 + self.exec_cfg.commission)
+        budget = fraction * self.exec_cfg.initial_balance
         return budget / unit_cost if unit_cost > 0 else 0.0
 
     def _notify_fill(self, strategy, result, side, tag, time, profit) -> None:
@@ -230,4 +273,4 @@ class PaperTradingRunner:
 
 
 # 导出
-__all__ = ["PaperTradingRunner"]
+__all__ = ["PaperTradingRunner", "ExecutionConfig", "RunnerBroker"]
