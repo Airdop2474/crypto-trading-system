@@ -130,6 +130,29 @@ class TestPlaceOrder:
         assert res.status == "timeout"
         assert a._unconfirmed == ["T1"]
         assert a.get_trade_history() == []
+        assert a._errors == 1
+
+
+class TestGuard:
+    def test_guard_rejection_counts_error_no_ledger(self):
+        from src.execution.order_guard import OrderRateGuard
+        a = _adapter()
+        # 单笔上限极小 → 必拒
+        a.guard = OrderRateGuard(reference_capital=1.0, max_position_per_trade=0.0001)
+        res = a.place_order(Order("BTC/USDT", "buy", 0.01, 65000.0, "market"),
+                            timestamp="t0")
+        assert res.status == "rejected"
+        assert a.get_trade_history() == []  # 未触达交易所
+        assert a._errors == 1
+
+    def test_guard_records_on_fill(self):
+        from src.execution.order_guard import OrderRateGuard
+        a = _adapter()
+        a.guard = OrderRateGuard(reference_capital=1e9, max_position_per_trade=1.0,
+                                 min_trade_interval=0, max_trades_per_day=100)
+        a.place_order(Order("BTC/USDT", "buy", 0.01, 65000.0, "market"),
+                      timestamp="2024-01-01 00:00")
+        assert a.guard._count == 1  # 成交后登记
 
 
 # ---- 统计 ----

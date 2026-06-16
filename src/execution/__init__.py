@@ -5,6 +5,7 @@ from src.execution.exchange_broker import ExchangeBroker
 from src.execution.exchange_runner_broker import (
     ExchangeRunnerBroker, assess_position_drift,
 )
+from src.execution.order_guard import OrderRateGuard
 from src.execution.paper_broker import PaperBroker
 from src.execution.paper_report import PaperTradingReportGenerator
 from src.execution.paper_trading_runner import PaperTradingRunner
@@ -17,6 +18,7 @@ __all__ = [
     "ExchangeBroker",
     "ExchangeRunnerBroker",
     "assess_position_drift",
+    "OrderRateGuard",
     "PaperBroker",
     "PaperTradingRunner",
     "PaperTradingReportGenerator",

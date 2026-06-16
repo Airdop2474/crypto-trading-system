@@ -36,19 +36,23 @@ def assess_position_drift(real_pos, initial_pos, local_net, abs_tol, rel_tol):
 class ExchangeRunnerBroker:
     """ExchangeExecutor → RunnerBroker 协议适配器（v1 市价单）。"""
 
-    def __init__(self, executor, symbol: str, commission: float = 0.001):
+    def __init__(self, executor, symbol: str, commission: float = 0.001,
+                 guard=None):
         """
         参数：
             executor: ExchangeExecutor 实例
             symbol: 交易对（如 'BTC/USDT'）
             commission: 计入账本的手续费率（仅用于成本统计/报表）
+            guard: 可选 OrderRateGuard，下单前节流（单笔上限/间隔/日订单数）
         """
         self.executor = executor
         self.broker = executor.broker  # 底层 ExchangeBroker（查单/撤单/查询）
         self.symbol = symbol
         self.commission = commission
+        self.guard = guard
         self._ledger: List[dict] = []
         self._unconfirmed: List[str] = []
+        self._errors = 0  # 拒单/超时累计（护栏拒、sizing 拒、未确认）
         # 开跑基线：testnet 账户的现有现金/底仓，对账按 delta 扣掉
         self.initial_balance = self.get_balance()
         self.initial_position = self.get_position(symbol)
@@ -65,17 +69,28 @@ class ExchangeRunnerBroker:
 
     def place_order(self, order: Order, timestamp=None) -> OrderResult:
         """下市价单并确认真实成交。timestamp 仅记账本（成交时刻由交易所定）。"""
+        if self.guard is not None:
+            ok, reason = self.guard.check(order.amount * order.price, timestamp)
+            if not ok:
+                self._errors += 1
+                logger.warning(f"下单护栏拒单 {order.symbol} {order.side} "
+                               f"{order.amount}: {reason}")
+                return OrderResult(order_id=None, status="rejected", reason=reason)
+
         res = self.executor.place_and_confirm(
             order.symbol, order.side, order.amount, order.price, order_type="market"
         )
         if res.status in ("filled", "partial"):
             self._record_fill(res, order.side, timestamp)
+            if self.guard is not None:
+                self.guard.record(timestamp)
             # partial 归一成 filled：携真实 filled_amount 交给 runner 记账。
             # 市价单 partial 罕见，剩余不重试，靠每 bar 对账兜底。
             return OrderResult(
                 order_id=res.order_id, status="filled",
                 filled_price=res.filled_price, filled_amount=res.filled_amount,
             )
+        self._errors += 1
         if res.status == "timeout":
             # 下单成功但未确认成交：记为待确认，runner 跳过，对账会发现漂移→熔断
             if res.order_id is not None:
@@ -140,6 +155,7 @@ class ExchangeRunnerBroker:
         return {
             "ledger": list(self._ledger),
             "unconfirmed": list(self._unconfirmed),
+            "errors": self._errors,
             "initial_balance": self.initial_balance,
             "initial_position": self.initial_position,
         }
@@ -147,6 +163,7 @@ class ExchangeRunnerBroker:
     def load_state(self, st: dict) -> None:
         self._ledger = list(st.get("ledger", []))
         self._unconfirmed = list(st.get("unconfirmed", []))
+        self._errors = st.get("errors", 0)
         self.initial_balance = st["initial_balance"]
         self.initial_position = st["initial_position"]
 

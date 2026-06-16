@@ -41,6 +41,7 @@ from src.execution.exchange_execution import ExchangeExecutor
 from src.execution.exchange_runner_broker import (
     ExchangeRunnerBroker, assess_position_drift,
 )
+from src.execution.order_guard import OrderRateGuard
 from src.execution.paper_report import PaperTradingReportGenerator
 from src.execution.paper_trading_runner import ExecutionConfig
 from src.monitor import MetricsCollector, MetricsWriter
@@ -130,6 +131,12 @@ class PaperTradingDaemon:
         exchange_broker = self._make_exchange_broker()
         executor = ExchangeExecutor(exchange_broker)
         adapter = ExchangeRunnerBroker(executor, self.symbol, commission=0.001)
+        adapter.guard = OrderRateGuard(
+            reference_capital=adapter.initial_balance,
+            max_position_per_trade=self.args.max_position_per_trade,
+            min_trade_interval=self.args.min_trade_interval,
+            max_trades_per_day=self.args.max_trades_per_day,
+        )
         exec_config = ExecutionConfig(
             commission=0.001, slippage={self.symbol: 0.0},
             initial_balance=adapter.initial_balance,
@@ -421,6 +428,13 @@ def parse_args(argv=None):
                    help="持仓漂移绝对容差（base 币种数量）")
     p.add_argument("--drift-rel", type=float, default=0.02,
                    help="持仓漂移相对容差（占本地净持仓比例）")
+    # exchange 模式订单级护栏（RISK_CONTROLS）；1m shakedown 可调小 --min-trade-interval
+    p.add_argument("--max-position-per-trade", type=float, default=0.20,
+                   help="单笔名义额占起始资金上限（exchange 模式）")
+    p.add_argument("--min-trade-interval", type=int, default=300,
+                   help="相邻下单决策最小间隔秒（按 bar 判，exchange 模式）")
+    p.add_argument("--max-trades-per-day", type=int, default=10,
+                   help="单日订单数上限（exchange 模式）")
     return p.parse_args(argv)
 
 

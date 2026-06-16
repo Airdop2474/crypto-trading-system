@@ -130,7 +130,7 @@ def test_checkpoint_serializes_adapter_ledger(tmp_path, monkeypatch):
     d._build(40000.0, 60000.0)
     d._checkpoint()
     st = json.loads((tmp_path / "st.json").read_text(encoding="utf-8"))
-    assert set(st["broker"]) == {"ledger", "unconfirmed",
+    assert set(st["broker"]) == {"ledger", "unconfirmed", "errors",
                                  "initial_balance", "initial_position"}
 
 
