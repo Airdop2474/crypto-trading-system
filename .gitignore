@@ -138,3 +138,9 @@ models/*.onnx
 # 一键启动脚本运行日志
 start.log
 start.err
+
+# Paper Trading 守护进程运行时产物（每次运行专属，勿提交）
+logs/
+data/paper_daemon_state.json
+data/paper_daemon_state.json.*
+data/reports/paper/daily/
