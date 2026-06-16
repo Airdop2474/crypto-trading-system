@@ -33,7 +33,16 @@
       "Bash(python -m pytest -p no:asyncio tests/unit/test_alert_channels.py tests/unit/test_alert_manager.py -q)",
       "Bash(python -m pytest -p no:asyncio tests/unit/test_metrics_writer.py -q)",
       "Bash(python -m pytest -p no:asyncio tests/unit/test_paper_trading_runner.py -q)",
-      "Bash(python -m pytest -p no:asyncio \"tests/unit/test_paper_trading_runner.py::TestMetricsWiring::test_metrics_do_not_change_trade_results\")"
+      "Bash(python -m pytest -p no:asyncio \"tests/unit/test_paper_trading_runner.py::TestMetricsWiring::test_metrics_do_not_change_trade_results\")",
+      "Bash(python -c \"import json; d=json.load\\(open\\('config/grafana/dashboards/monitoring.json'\\)\\); print\\('OK, panels:', len\\(d['panels']\\), '| titles:', [p['title'] for p in d['panels']]\\)\")",
+      "Bash(python -c \"import yaml; yaml.safe_load\\(open\\('config/grafana/datasources/timescaledb.yml'\\)\\); yaml.safe_load\\(open\\('config/grafana/dashboards/dashboards.yml'\\)\\); print\\('both OK'\\)\")",
+      "Bash(python -c \"from pathlib import Path; print\\('cwd :', Path.cwd\\(\\)\\); print\\('resolve :', Path\\('.'\\).resolve\\(\\)\\); import sys; print\\('exe :', sys.executable\\)\")",
+      "Read(//c//**)",
+      "Bash(echo \"C:\\\\\\\\Github 已存在\")",
+      "Bash(echo \"C:\\\\\\\\Github 不存在（clone 时自动建）\")",
+      "Bash(git config *)",
+      "Bash(git clone *)",
+      "Bash(git -c safe.directory='*' clone /z/Github/crypto-trading-system /c/Github/crypto-trading-system)"
     ]
   }
 }
