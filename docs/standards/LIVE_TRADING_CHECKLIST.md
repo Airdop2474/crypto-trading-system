@@ -57,8 +57,8 @@
 - [ ] STRATEGY_ASSUMPTIONS.md ✅
 - [ ] AI_USAGE_BOUNDARIES.md ✅
 - [ ] LIVE_TRADING_CHECKLIST.md ✅（本文件）
-- [ ] 操作手册（如何启动/停止）
-- [ ] 故障排查手册
+- [x] 操作手册（如何启动/停止）✅ `OPERATIONS_MANUAL.md`
+- [x] 故障排查手册 ✅ `TROUBLESHOOTING.md`
 
 ---
 
