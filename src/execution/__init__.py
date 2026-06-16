@@ -1,6 +1,7 @@
 """执行层：Broker 三层架构（Paper / Exchange / Live）+ 风控"""
 
 from src.execution.broker import BrokerInterface, Order, OrderResult
+from src.execution.exchange_broker import ExchangeBroker
 from src.execution.paper_broker import PaperBroker
 from src.execution.paper_report import PaperTradingReportGenerator
 from src.execution.paper_trading_runner import PaperTradingRunner
@@ -10,6 +11,7 @@ __all__ = [
     "BrokerInterface",
     "Order",
     "OrderResult",
+    "ExchangeBroker",
     "PaperBroker",
     "PaperTradingRunner",
     "PaperTradingReportGenerator",

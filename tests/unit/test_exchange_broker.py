@@ -1,0 +1,131 @@
+"""
+Exchange Broker 单元测试（Phase 5-6）
+
+完全离线：用 FakeExchange 注入构造器，不触网。
+覆盖：余额、持仓、下单成功/资金不足/网络错误/通用异常、
+撤单成功失败、查单存在/不存在。
+"""
+
+import sys
+from pathlib import Path
+
+project_root = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+import ccxt
+import pytest
+
+from src.execution.broker import Order
+from src.execution.exchange_broker import ExchangeBroker
+
+
+class FakeExchange:
+    """最小化的 ccxt 交易所替身，按需返回数据或抛异常。"""
+
+    def __init__(self, balance=None, create_raises=None, create_result=None):
+        self._balance = balance if balance is not None else {
+            "USDT": {"free": 1000.0},
+            "BTC": {"free": 0.5},
+        }
+        self._create_raises = create_raises
+        self._create_result = create_result or {
+            "id": "EX_1",
+            "status": "open",
+            "average": 50000.0,
+            "filled": 0.1,
+        }
+        self.cancelled = []
+        self.cancel_raises = False
+        self.orders = {"EX_1": {"id": "EX_1", "status": "closed"}}
+
+    def fetch_balance(self):
+        return self._balance
+
+    def create_order(self, symbol, type, side, amount, price):
+        if self._create_raises is not None:
+            raise self._create_raises
+        return self._create_result
+
+    def cancel_order(self, order_id):
+        if self.cancel_raises:
+            raise ccxt.BaseError("cancel failed")
+        self.cancelled.append(order_id)
+
+    def fetch_order(self, order_id):
+        if order_id not in self.orders:
+            raise ccxt.OrderNotFound(order_id)
+        return self.orders[order_id]
+
+
+def make_broker(**fake_kwargs):
+    return ExchangeBroker(exchange=FakeExchange(**fake_kwargs))
+
+
+class TestBalanceAndPosition:
+    def test_get_balance(self):
+        assert make_broker().get_balance() == pytest.approx(1000.0)
+
+    def test_get_balance_missing_usdt(self):
+        b = make_broker(balance={})
+        assert b.get_balance() == 0.0
+
+    def test_get_position(self):
+        assert make_broker().get_position("BTC/USDT") == pytest.approx(0.5)
+
+    def test_get_position_missing(self):
+        assert make_broker().get_position("ETH/USDT") == 0.0
+
+
+class TestPlaceOrder:
+    def test_place_order_success(self):
+        b = make_broker()
+        r = b.place_order(Order("BTC/USDT", "buy", 0.1, 50000))
+        assert r.order_id == "EX_1"
+        assert r.status == "open"
+        assert r.filled_price == pytest.approx(50000.0)
+        assert r.filled_amount == pytest.approx(0.1)
+
+    def test_place_order_insufficient_funds(self):
+        b = make_broker(create_raises=ccxt.InsufficientFunds("no money"))
+        r = b.place_order(Order("BTC/USDT", "buy", 100, 50000))
+        assert r.status == "rejected"
+        assert r.order_id is None
+        assert "资金不足" in r.reason
+
+    def test_place_order_network_error(self):
+        b = make_broker(create_raises=ccxt.NetworkError("timeout"))
+        r = b.place_order(Order("BTC/USDT", "buy", 0.1, 50000))
+        assert r.status == "error"
+        assert "网络错误" in r.reason
+
+    def test_place_order_generic_error(self):
+        b = make_broker(create_raises=ValueError("boom"))
+        r = b.place_order(Order("BTC/USDT", "buy", 0.1, 50000))
+        assert r.status == "error"
+        assert "下单失败" in r.reason
+
+
+class TestCancelAndStatus:
+    def test_cancel_order_success(self):
+        b = make_broker()
+        assert b.cancel_order("EX_1") is True
+
+    def test_cancel_order_failure(self):
+        fake = FakeExchange()
+        fake.cancel_raises = True
+        b = ExchangeBroker(exchange=fake)
+        assert b.cancel_order("EX_1") is False
+
+    def test_get_order_status_found(self):
+        b = make_broker()
+        assert b.get_order_status("EX_1")["status"] == "closed"
+
+    def test_get_order_status_not_found(self):
+        b = make_broker()
+        assert b.get_order_status("NOPE") is None
+
+
+def test_default_testnet_true():
+    """默认 testnet=True（不构造真实 ccxt，注入替身仍校验标志）。"""
+    b = ExchangeBroker(exchange=FakeExchange())
+    assert b.testnet is True
