@@ -48,25 +48,7 @@ def safe_limit_order_params(last_price, notional=20.0, factor=0.7):
     return limit_price, amount
 
 
-def extract_fill(place_result, order_status=None):
-    """从下单结果（+ 可选查单结果）提取真实成交价/量。纯函数。
-
-    市价单可能在 place_order 返回里直接带 average/filled，也可能要再查单才有。
-    优先用 place_result 的 filled_price/filled_amount，缺失则回退到 order_status
-    的 average/filled。返回 (price, amount, source)，source ∈ {place, status, none}。
-
-    这是 Stage 1 place_and_confirm 的取价核心。
-    """
-    p = getattr(place_result, "filled_price", None)
-    a = getattr(place_result, "filled_amount", None)
-    if p and a:
-        return float(p), float(a), "place"
-    if order_status:
-        sp = order_status.get("average") or order_status.get("price")
-        sa = order_status.get("filled")
-        if sp and sa:
-            return float(sp), float(sa), "status"
-    return None, None, "none"
+from src.execution.exchange_execution import extract_fill  # noqa: E402,F401  Stage1 已移至 src，此处复用
 
 
 def _p(status, msg):
