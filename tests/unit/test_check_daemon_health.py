@@ -102,3 +102,55 @@ def test_date_gaps_helper():
     assert _date_gaps(_dates(6, 7, 8)) == []
     assert _date_gaps(_dates(6, 9)) == _dates(7, 8)
     assert _date_gaps(_dates(6)) == []
+
+
+# ---- exchange 模式扩展（卡单 + 下单错误率）----
+
+def _exchange_state(unconfirmed=None, errors=0, fills=0, day_count=3):
+    st = _state(day_count=day_count)
+    st["broker"] = {
+        "unconfirmed": unconfirmed or [],
+        "errors": errors,
+        "ledger": [{} for _ in range(fills)],
+        "initial_balance": 10000.0, "initial_position": 0.0,
+    }
+    return st
+
+
+def test_paper_state_has_no_exchange_checks():
+    """paper 形态（无 broker.unconfirmed 键）不触发 exchange 检查，向后兼容。"""
+    _, checks = assess_health(_state(), _dates(6, 7, 8), 1.0, False)
+    names = [c["name"] for c in checks]
+    assert "卡单（未确认订单）" not in names
+    assert "下单错误率" not in names
+
+
+def test_exchange_clean_passes():
+    ok, checks = assess_health(
+        _exchange_state(fills=5), _dates(6, 7, 8), 1.0, False)
+    assert ok
+    assert _status(checks, "卡单（未确认订单）") == "PASS"
+    assert _status(checks, "下单错误率") == "PASS"
+
+
+def test_stuck_orders_warn():
+    ok, checks = assess_health(
+        _exchange_state(unconfirmed=["X1", "X2"], fills=5), _dates(6, 7, 8),
+        1.0, False)
+    assert ok  # WARN 不算 FAIL
+    assert _status(checks, "卡单（未确认订单）") == "WARN"
+
+
+def test_high_error_rate_warns():
+    # errors=4, fills=6 → rate=40% > 默认 20%
+    _, checks = assess_health(
+        _exchange_state(errors=4, fills=6), _dates(6, 7, 8), 1.0, False)
+    assert _status(checks, "下单错误率") == "WARN"
+
+
+def test_error_rate_threshold_configurable():
+    # rate=40%，阈值放宽到 50% → PASS
+    _, checks = assess_health(
+        _exchange_state(errors=4, fills=6), _dates(6, 7, 8), 1.0, False,
+        error_rate_threshold=0.5)
+    assert _status(checks, "下单错误率") == "PASS"

@@ -60,7 +60,8 @@ def _date_gaps(dates):
 
 
 def assess_health(state, report_dates, checkpoint_age_hours,
-                  resume_flag_present, max_age_hours=12.0):
+                  resume_flag_present, max_age_hours=12.0,
+                  error_rate_threshold=0.2):
     """
     评估守护进程运行健康。纯函数、无 I/O。
 
@@ -70,6 +71,7 @@ def assess_health(state, report_dates, checkpoint_age_hours,
         checkpoint_age_hours: 检查点 mtime 距今小时数；None 表示取不到
         resume_flag_present:  <state-file>.resume 是否存在
         max_age_hours:        新鲜度阈值（超过即 WARN）
+        error_rate_threshold: exchange 模式下单错误率 WARN 阈值
 
     返回：(ok: bool, checks: list[{name,status,detail}])
           ok = 不含任何 FAIL。
@@ -133,6 +135,28 @@ def assess_health(state, report_dates, checkpoint_age_hours,
     else:
         checks.append(_warn("日报连续无缺口", "暂无日报（尚未跨日）"))
 
+    # exchange 模式特有：卡单 + 下单错误率（靠 broker 含 unconfirmed 键区分；
+    # paper 形态无此键则跳过，向后兼容。持仓漂移已由 daemon 实时熔断→风控状态覆盖。）
+    broker = state.get("broker", {})
+    if isinstance(broker, dict) and "unconfirmed" in broker:
+        stuck = broker.get("unconfirmed") or []
+        if stuck:
+            checks.append(_warn("卡单（未确认订单）",
+                                f"{len(stuck)} 笔待确认订单，疑似卡单需人工处理"))
+        else:
+            checks.append(_ok("卡单（未确认订单）", "无未确认订单"))
+
+        errors = broker.get("errors", 0)
+        trades = len(broker.get("ledger", []))
+        rate = errors / max(1, errors + trades)
+        if rate > error_rate_threshold:
+            checks.append(_warn("下单错误率",
+                                f"{rate:.0%}（errors={errors}, fills={trades}）"
+                                f"> 阈值 {error_rate_threshold:.0%}"))
+        else:
+            checks.append(_ok("下单错误率",
+                              f"{rate:.0%}（errors={errors}, fills={trades}）"))
+
     ok = all(c["status"] != "FAIL" for c in checks)
     return ok, checks
 
@@ -163,6 +187,8 @@ def main(argv=None) -> int:
     p.add_argument("--state-file", default="data/paper_daemon_state.json")
     p.add_argument("--report-dir", default="data/reports/paper/daily")
     p.add_argument("--max-checkpoint-age-hours", type=float, default=12.0)
+    p.add_argument("--max-order-error-rate", type=float, default=0.2,
+                   help="exchange 模式下单错误率 WARN 阈值")
     args = p.parse_args(argv)
 
     state_path = Path(args.state_file)
@@ -178,7 +204,8 @@ def main(argv=None) -> int:
     resume_present = Path(str(state_path) + ".resume").exists()
 
     ok, checks = assess_health(state, report_dates, age, resume_present,
-                               max_age_hours=args.max_checkpoint_age_hours)
+                               max_age_hours=args.max_checkpoint_age_hours,
+                               error_rate_threshold=args.max_order_error_rate)
 
     print("=" * 72)
     print("守护进程运行健康巡检")
