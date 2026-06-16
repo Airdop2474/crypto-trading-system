@@ -131,3 +131,6 @@ trading_logs/
 # AI 模型（太大）
 models/*.pth
 models/*.onnx
+
+# Claude Code 本地配置（每台机器专属，勿提交）
+.claude/settings.local.json
