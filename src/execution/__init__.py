@@ -2,6 +2,9 @@
 
 from src.execution.broker import BrokerInterface, Order, OrderResult
 from src.execution.exchange_broker import ExchangeBroker
+from src.execution.exchange_runner_broker import (
+    ExchangeRunnerBroker, assess_position_drift,
+)
 from src.execution.paper_broker import PaperBroker
 from src.execution.paper_report import PaperTradingReportGenerator
 from src.execution.paper_trading_runner import PaperTradingRunner
@@ -12,6 +15,8 @@ __all__ = [
     "Order",
     "OrderResult",
     "ExchangeBroker",
+    "ExchangeRunnerBroker",
+    "assess_position_drift",
     "PaperBroker",
     "PaperTradingRunner",
     "PaperTradingReportGenerator",
