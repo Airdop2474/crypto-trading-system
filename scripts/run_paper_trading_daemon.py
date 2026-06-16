@@ -165,7 +165,9 @@ class PaperTradingDaemon:
 
     def _fetch_live_df(self):
         from src.data.exchange import create_binance_client
-        client = create_binance_client(testnet=False)  # 主网公共行情=真实价格
+        # 主网公共行情=真实价格；public=True 不带凭据（公开数据无需签名，
+        # 且 .env 配的是 testnet key，传给主网会被拒 -2008）。
+        client = create_binance_client(testnet=False, public=True)
         df = client.fetch_ohlcv(self.symbol, self.args.timeframe,
                                 limit=max(WARMUP + 5, 200))
         df["timestamp"] = pd.to_datetime(df["timestamp"])

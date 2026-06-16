@@ -113,3 +113,15 @@ def test_create_binance_client_defaults_testnet():
     c = create_binance_client()
     assert isinstance(c, ExchangeClient)
     assert c.testnet is True
+
+
+def test_public_client_carries_no_credentials():
+    """public=True 不带凭据：公开行情无需签名，且 testnet key 打主网会被拒(-2008)。"""
+    from unittest.mock import patch
+    from src.data import exchange as ex
+    with patch.object(ex.config, "BINANCE_API_KEY", "TESTNET_KEY"), \
+            patch.object(ex.config, "BINANCE_SECRET", "TESTNET_SECRET"):
+        pub = create_binance_client(testnet=False, public=True)
+        auth = create_binance_client(testnet=True)
+    assert not pub.exchange.apiKey  # 公开客户端无 key
+    assert auth.exchange.apiKey == "TESTNET_KEY"  # 非 public 仍带凭据

@@ -231,20 +231,22 @@ class ExchangeClient:
 
 
 # 便捷函数：创建默认的 Binance 客户端
-def create_binance_client(testnet: bool = True) -> ExchangeClient:
+def create_binance_client(testnet: bool = True, public: bool = False) -> ExchangeClient:
     """
     创建 Binance 客户端
 
     参数：
         testnet: 是否使用测试网
+        public: 仅取公开行情时置 True —— 不带任何凭据。公开数据无需签名，
+                且若把 testnet key 传给主网会被拒（-2008 Invalid Api-Key）。
 
     返回：
         ExchangeClient 实例
     """
     return ExchangeClient(
         exchange_id="binance",
-        api_key=config.BINANCE_API_KEY if config.BINANCE_API_KEY else None,
-        secret=config.BINANCE_SECRET if config.BINANCE_SECRET else None,
+        api_key=None if public else (config.BINANCE_API_KEY or None),
+        secret=None if public else (config.BINANCE_SECRET or None),
         testnet=testnet,
     )
 
