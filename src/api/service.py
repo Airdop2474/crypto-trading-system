@@ -22,6 +22,7 @@ from src.execution import PaperBroker, PaperTradingRunner
 from src.execution.paper_report import PaperTradingReportGenerator
 from src.monitor import MetricsCollector
 from src.strategy.grid_trading import GridTradingStrategy
+from src.utils.logger import logger
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 SYMBOL = "BTC/USDT"
@@ -230,7 +231,18 @@ def orders(state: dict, limit: int = 100) -> List[dict]:
 
 
 def tickers(state: dict) -> List[dict]:
-    """从同一份 OHLCV 的最后 6 根（≈24h）派生 BTC/USDT 行情。非外部实时源。"""
+    """实时行情优先用 Binance 公共 ticker；外呼失败则回退为本地 OHLCV 派生。"""
+    from src.api import market
+
+    try:
+        return market.get_live_tickers()
+    except Exception as e:  # 无网络/限流/交易所异常 → 不让前端 500
+        logger.warning(f"实时行情获取失败，回退本地派生: {type(e).__name__}: {e}")
+        return _derived_tickers(state)
+
+
+def _derived_tickers(state: dict) -> List[dict]:
+    """从同一份 OHLCV 的最后 6 根（≈24h）派生 BTC/USDT 行情。离线回退用。"""
     df = state["df"]
     window = df.tail(6)
     last_close = float(df.iloc[-1]["close"])

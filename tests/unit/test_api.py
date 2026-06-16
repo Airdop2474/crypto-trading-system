@@ -80,3 +80,19 @@ def test_strategy_performance_winrate_range(client):
 def test_patch_status_echo(client):
     r = client.patch("/strategies/grid-btc-usdt/status", json={"status": "paused"})
     assert r.json() == {"id": "grid-btc-usdt", "status": "paused"}
+
+
+def test_tickers_fallback_when_exchange_down(client, monkeypatch):
+    """实时行情外呼失败时回退本地派生，不能 500（覆盖离线路径）。"""
+    import src.api.market as market
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated offline")
+
+    monkeypatch.setattr(market, "get_live_tickers", boom)
+    r = client.get("/market/tickers")
+    assert r.status_code == 200
+    rows = r.json()
+    assert rows
+    for k in ["symbol", "price", "changePct", "volume", "high", "low"]:
+        assert k in rows[0]
