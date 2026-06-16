@@ -37,6 +37,8 @@ class FakeExchange:
         self.cancelled = []
         self.cancel_raises = False
         self.orders = {"EX_1": {"id": "EX_1", "status": "closed"}}
+        self.last_cancel_symbol = "__unset__"
+        self.last_fetch_symbol = "__unset__"
 
     def fetch_balance(self):
         return self._balance
@@ -46,12 +48,14 @@ class FakeExchange:
             raise self._create_raises
         return self._create_result
 
-    def cancel_order(self, order_id):
+    def cancel_order(self, order_id, symbol=None):
         if self.cancel_raises:
             raise ccxt.BaseError("cancel failed")
+        self.last_cancel_symbol = symbol
         self.cancelled.append(order_id)
 
-    def fetch_order(self, order_id):
+    def fetch_order(self, order_id, symbol=None):
+        self.last_fetch_symbol = symbol
         if order_id not in self.orders:
             raise ccxt.OrderNotFound(order_id)
         return self.orders[order_id]
@@ -123,6 +127,18 @@ class TestCancelAndStatus:
     def test_get_order_status_not_found(self):
         b = make_broker()
         assert b.get_order_status("NOPE") is None
+
+    def test_symbol_threaded_to_fetch_and_cancel_after_place(self):
+        """回归：下单记 order_id->symbol，查单/撤单回查并把 symbol 传给 ccxt
+        （binance 的 fetch_order/cancel_order 必需 symbol）。"""
+        fake = FakeExchange(create_result={"id": "EX_1", "status": "open",
+                                           "average": None, "filled": 0.0})
+        b = ExchangeBroker(exchange=fake)
+        b.place_order(Order("BTC/USDT", "buy", 0.1, 30000, "limit"))
+        b.get_order_status("EX_1")
+        assert fake.last_fetch_symbol == "BTC/USDT"
+        b.cancel_order("EX_1")
+        assert fake.last_cancel_symbol == "BTC/USDT"
 
 
 def test_default_testnet_true():

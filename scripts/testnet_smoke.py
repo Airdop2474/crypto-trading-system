@@ -29,12 +29,15 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 
-def safe_limit_order_params(last_price, notional=20.0, factor=0.5):
-    """算一笔"远低于市价、不会成交"的限价买单参数。
+def safe_limit_order_params(last_price, notional=20.0, factor=0.7):
+    """算一笔"低于市价、不会成交"的限价买单参数。
 
-    limit_price = last_price * factor（默认半价，挂单不会被吃）；
-    amount = notional / limit_price（按目标名义额反推数量，越过 minNotional）。
-    返回 (limit_price, amount)。纯函数。
+    limit_price = last_price * factor（默认市价 7 折）；amount = notional / limit_price
+    （按目标名义额反推数量，越过 minNotional）。返回 (limit_price, amount)。纯函数。
+
+    factor 取 0.7 而非更低：币安 PERCENT_PRICE_BY_SIDE 过滤器限制买单限价不得低于
+    近 5 分钟均价的 bidMultiplierDown（BTC/USDT 为 0.5）。0.7 稳在价格带内、又有
+    30% 价差挂着不成交；取 0.5 会卡边界被拒。
     """
     if last_price <= 0:
         raise ValueError("last_price 必须为正")

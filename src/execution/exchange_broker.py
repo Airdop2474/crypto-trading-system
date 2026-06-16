@@ -40,6 +40,9 @@ class ExchangeBroker(BrokerInterface):
         """
         self.exchange_id = exchange_id
         self.testnet = testnet
+        # 记本实例下过的单 order_id -> symbol：ccxt binance 的 fetch_order/
+        # cancel_order 强制要 symbol，下单时记下来供查单/撤单回查。
+        self._order_symbols: dict = {}
 
         if exchange is not None:
             self.exchange = exchange
@@ -81,8 +84,11 @@ class ExchangeBroker(BrokerInterface):
                 amount=order.amount,
                 price=order.price if order.order_type == "limit" else None,
             )
+            order_id = result.get("id")
+            if order_id is not None:
+                self._order_symbols[order_id] = order.symbol
             return OrderResult(
-                order_id=result.get("id"),
+                order_id=order_id,
                 status=result.get("status"),
                 filled_price=result.get("average"),
                 filled_amount=result.get("filled"),
@@ -99,17 +105,17 @@ class ExchangeBroker(BrokerInterface):
             )
 
     def cancel_order(self, order_id: str) -> bool:
-        """撤单，返回是否成功"""
+        """撤单，返回是否成功（带回查 symbol，binance 撤单必需）"""
         try:
-            self.exchange.cancel_order(order_id)
+            self.exchange.cancel_order(order_id, self._order_symbols.get(order_id))
             return True
         except Exception:
             return False
 
     def get_order_status(self, order_id: str) -> Optional[dict]:
-        """查询订单状态，不存在或失败返回 None"""
+        """查询订单状态，不存在或失败返回 None（带回查 symbol，binance 查单必需）"""
         try:
-            return self.exchange.fetch_order(order_id)
+            return self.exchange.fetch_order(order_id, self._order_symbols.get(order_id))
         except Exception:
             return None
 
