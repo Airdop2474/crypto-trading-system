@@ -27,16 +27,19 @@ class PaperTradingRunner:
 
     LEGACY_TAG = "_all"
 
-    def __init__(self, broker: PaperBroker, symbol: str, risk_manager=None):
+    def __init__(self, broker: PaperBroker, symbol: str, risk_manager=None,
+                 metrics_collector=None):
         """
         参数：
             broker: PaperBroker 实例
             symbol: 交易对（如 'BTC/USDT'）
             risk_manager: 可选 RiskManager，提供账户级熔断门禁
+            metrics_collector: 可选 MetricsCollector，逐根采集运行时指标快照
         """
         self.broker = broker
         self.symbol = symbol
         self.risk_manager = risk_manager
+        self.metrics_collector = metrics_collector
         # tag -> {"amount": 数量, "cost_price": 加权平均成本价}
         self.lots: Dict[object, Dict[str, float]] = {}
         # 累计已实现盈亏（卖出时累加）
@@ -74,7 +77,24 @@ class PaperTradingRunner:
                     signal, next_bar["open"], next_bar["timestamp"], strategy
                 )
 
+            # 逐根采集指标快照（用当前收盘价计持仓市值）
+            if self.metrics_collector is not None:
+                self.metrics_collector.snapshot(
+                    self._current_state_result(),
+                    {self.symbol: bar["close"]},
+                    risk_manager=self.risk_manager,
+                    timestamp=current_time,
+                )
+
         return self._build_result(signals_log)
+
+    def _current_state_result(self) -> Dict:
+        """构造运行中状态快照（MetricsCollector.snapshot 所需的 runner_result 形态）。"""
+        return {
+            "statistics": self.broker.get_statistics(),
+            "realized_pnl": self.realized_pnl,
+            "open_lots": {t: lot["amount"] for t, lot in self.lots.items()},
+        }
 
     def _execute_signal(self, signal, exec_price, exec_time, strategy) -> None:
         """把策略信号转成 Broker 订单并执行"""

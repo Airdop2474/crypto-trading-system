@@ -25,6 +25,7 @@ from src.execution import (
     PaperTradingRunner,
     PaperTradingReportGenerator,
 )
+from src.monitor import MetricsCollector, MetricsWriter
 from src.strategy.grid_trading import GridTradingStrategy
 from src.utils.logger import setup_logger
 
@@ -70,8 +71,9 @@ def main() -> int:
     print(f"\n[2] Grid: range [{lower:.0f}, {upper:.0f}], 10 grids")
     print("    Broker: PaperBroker, commission 0.1%, slippage 0.05%")
 
-    # 运行
-    runner = PaperTradingRunner(broker, "BTC/USDT")
+    # 运行（接入指标采集：逐根快照）
+    collector = MetricsCollector()
+    runner = PaperTradingRunner(broker, "BTC/USDT", metrics_collector=collector)
     result = runner.run(df, strategy)
 
     last_price = df.iloc[-1]["close"]
@@ -110,6 +112,16 @@ def main() -> int:
     print("\n" + "=" * 60)
     print("Paper Trading run completed")
     print("=" * 60)
+
+    # 指标落库（DB 不可用不应让运行失败，仅报告）
+    print(f"\n[6] Metrics: {len(collector.snapshots)} snapshots collected")
+    try:
+        n = MetricsWriter().write_collector(collector)
+        print(f"    Written to DB (monitor_metrics): {n} records")
+    except Exception as e:
+        print(f"    DB write skipped (DB unavailable): {type(e).__name__}: {e}")
+        print("    提示：启动数据库后可落库（docker-compose up -d timescaledb）")
+
     return 0
 
 

@@ -278,3 +278,61 @@ class TestRiskManagerIntegration:
         strat = ScriptedStrategy({0: [Order("BUY", tag=1, fraction=0.1)]})
         runner.run(data, strat)
         assert len(broker.get_trade_history()) == 1
+
+
+class TestMetricsWiring:
+    def test_collects_one_snapshot_per_bar(self):
+        from src.monitor.metrics_collector import MetricsCollector
+        data = make_data([100, 110, 120])
+        broker = PaperBroker(100000.0, commission=0.001,
+                             slippage={"BTC/USDT": 0.0},
+                             max_position_per_trade=1.0, max_total_position=1.0)
+        collector = MetricsCollector()
+        runner = PaperTradingRunner(broker, "BTC/USDT",
+                                    metrics_collector=collector)
+        strat = ScriptedStrategy({0: [Order("BUY", tag=1, fraction=0.1)]})
+        runner.run(data, strat)
+        # 每根一个快照
+        assert len(collector.snapshots) == len(data)
+        # 快照时间戳来自各 bar
+        assert collector.snapshots[0]["timestamp"] == data.iloc[0]["timestamp"].isoformat()
+
+    def test_metrics_do_not_change_trade_results(self):
+        """采集指标不得扰动成交结果（旁路、只读）。"""
+        from src.monitor.metrics_collector import MetricsCollector
+        data = make_data([100, 110, 120, 115, 105])
+        strat_def = {0: [Order("BUY", tag=1, fraction=0.2)],
+                     2: [Order("SELL", tag=1)]}
+
+        # 无采集
+        r1, b1 = make_runner()
+        r1.run(data, ScriptedStrategy(dict(strat_def)))
+        hist1 = b1.get_trade_history()
+        pnl1 = r1.realized_pnl
+
+        # 有采集
+        r2, b2 = make_runner()
+        r2.metrics_collector = MetricsCollector()
+        r2.run(data, ScriptedStrategy(dict(strat_def)))
+        hist2 = b2.get_trade_history()
+        pnl2 = r2.realized_pnl
+
+        assert len(hist1) == len(hist2)
+        assert pnl1 == pnl2  # 逐位一致
+        for h1, h2 in zip(hist1, hist2):
+            assert h1["price"] == h2["price"]
+            assert h1["amount"] == h2["amount"]
+
+    def test_snapshot_carries_risk_state_when_present(self):
+        from src.monitor.metrics_collector import MetricsCollector
+        data = make_data([100, 110, 120])
+        broker = PaperBroker(100000.0, commission=0.001,
+                             slippage={"BTC/USDT": 0.0},
+                             max_position_per_trade=1.0, max_total_position=1.0)
+        rm = RiskManager(100000.0)
+        collector = MetricsCollector()
+        runner = PaperTradingRunner(broker, "BTC/USDT", risk_manager=rm,
+                                    metrics_collector=collector)
+        runner.run(data, ScriptedStrategy({0: [Order("BUY", tag=1, fraction=0.1)]}))
+        assert collector.snapshots[-1]["risk"]["enabled"] is True
+        assert collector.snapshots[-1]["risk"]["state"] == rm.state

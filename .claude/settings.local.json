@@ -30,7 +30,10 @@
       "Bash(python -c \"from src.utils.database import DatabaseManager; print\\('database import OK'\\)\")",
       "Bash(python -m pytest -p no:asyncio tests/unit/test_downloader.py tests/unit/test_database.py -q)",
       "Bash(xargs wc -l)",
-      "Bash(python -m pytest -p no:asyncio tests/unit/test_alert_channels.py tests/unit/test_alert_manager.py -q)"
+      "Bash(python -m pytest -p no:asyncio tests/unit/test_alert_channels.py tests/unit/test_alert_manager.py -q)",
+      "Bash(python -m pytest -p no:asyncio tests/unit/test_metrics_writer.py -q)",
+      "Bash(python -m pytest -p no:asyncio tests/unit/test_paper_trading_runner.py -q)",
+      "Bash(python -m pytest -p no:asyncio \"tests/unit/test_paper_trading_runner.py::TestMetricsWiring::test_metrics_do_not_change_trade_results\")"
     ]
   }
 }
