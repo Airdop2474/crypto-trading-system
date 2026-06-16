@@ -64,32 +64,43 @@ class PaperTradingRunner:
         self.closed_trades = []
         signals_log = []
 
+        # 无前视：bar t 的信号在 bar t+1 开盘成交。用 pending 串接，逐 bar 推进，
+        # 与守护进程（run_paper_trading_daemon）共用同一 process_bar 逻辑。
+        pending = None
         for i in range(len(data)):
             bar = data.iloc[i]
-            current_time = bar["timestamp"]
             historical = data.iloc[: i + 1]
-
-            signal = strategy.on_bar(historical, current_time)
-            if signal:
-                signals_log.append({"time": current_time, "signal": signal})
-
-            # 无前视偏差：信号在下一根开盘价成交
-            if i < len(data) - 1 and signal:
-                next_bar = data.iloc[i + 1]
-                self._execute_signal(
-                    signal, next_bar["open"], next_bar["timestamp"], strategy
-                )
-
-            # 逐根采集指标快照（用当前收盘价计持仓市值）
-            if self.metrics_collector is not None:
-                self.metrics_collector.snapshot(
-                    self._current_state_result(),
-                    {self.symbol: bar["close"]},
-                    risk_manager=self.risk_manager,
-                    timestamp=current_time,
-                )
+            pending = self.process_bar(bar, historical, strategy, pending)
+            if pending:
+                signals_log.append({"time": bar["timestamp"], "signal": pending})
 
         return self._build_result(signals_log)
+
+    def process_bar(self, bar, historical, strategy, pending_signal):
+        """处理单根 bar（批量与实时共用）：
+
+        1. 先按本 bar 开盘价执行上一根挂起的信号（无前视：t-1 信号 / t 开盘成交）
+        2. 用含本 bar 的历史计算新信号，作为下一根的 pending 返回
+        3. 用本 bar 收盘价采集一次指标快照
+
+        参数 pending_signal 为上一次调用返回的信号（首根传 None）。
+        """
+        if pending_signal is not None:
+            self._execute_signal(
+                pending_signal, bar["open"], bar["timestamp"], strategy
+            )
+
+        signal = strategy.on_bar(historical, bar["timestamp"])
+
+        if self.metrics_collector is not None:
+            self.metrics_collector.snapshot(
+                self._current_state_result(),
+                {self.symbol: bar["close"]},
+                risk_manager=self.risk_manager,
+                timestamp=bar["timestamp"],
+            )
+
+        return signal
 
     def _current_state_result(self) -> Dict:
         """构造运行中状态快照（MetricsCollector.snapshot 所需的 runner_result 形态）。"""

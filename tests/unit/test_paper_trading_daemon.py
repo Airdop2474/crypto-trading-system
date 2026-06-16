@@ -1,0 +1,95 @@
+"""Paper Trading 守护进程测试（回放模式，确定性）。
+
+覆盖：N 份日报、断点续跑==连续运行（end state 一致）、人工恢复机制。
+"""
+
+import json
+import sys
+from pathlib import Path
+
+project_root = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+import pytest
+
+from scripts.run_paper_trading_daemon import PaperTradingDaemon, main, parse_args
+
+
+def _run(state, reports, days, extra=None):
+    argv = ["--replay", "generate", "--days", str(days), "--no-db",
+            "--state-file", str(state), "--report-dir", str(reports)]
+    if extra:
+        argv += extra
+    return main(argv)
+
+
+def _md_count(reports):
+    return len(list(Path(reports).glob("*.md")))
+
+
+def _ckpt(state):
+    return json.loads(Path(state).read_text(encoding="utf-8"))
+
+
+def test_replay_produces_n_daily_reports(tmp_path):
+    state = tmp_path / "st.json"
+    reports = tmp_path / "daily"
+    rc = _run(state, reports, days=4)
+    assert rc == 0
+    assert _md_count(reports) == 4
+    assert state.exists()
+    assert _ckpt(state)["day_count"] == 4
+
+
+def test_resume_equals_continuous(tmp_path):
+    # 连续跑到 4 天
+    s_cont = tmp_path / "cont.json"
+    r_cont = tmp_path / "cont_daily"
+    _run(s_cont, r_cont, days=4)
+    cont = _ckpt(s_cont)
+
+    # 分两段：先 2 天，再用同 state 续到 4 天
+    s_split = tmp_path / "split.json"
+    r_split = tmp_path / "split_daily"
+    _run(s_split, r_split, days=2)
+    mid = _ckpt(s_split)
+    assert mid["day_count"] == 2
+    _run(s_split, r_split, days=4)  # resume
+    split = _ckpt(s_split)
+
+    # 续跑结果必须与连续运行逐位一致（证明不重复、不丢、不重启）
+    assert split["day_count"] == 4
+    assert _md_count(r_split) == 4
+    assert split["broker"]["balance"] == pytest.approx(cont["broker"]["balance"])
+    assert split["broker"]["order_id_counter"] == cont["broker"]["order_id_counter"]
+    assert split["runner"]["realized_pnl"] == pytest.approx(cont["runner"]["realized_pnl"])
+    assert len(split["runner"]["closed_trades"]) == len(cont["runner"]["closed_trades"])
+
+
+def test_manual_resume_clears_pause(tmp_path):
+    # 直接驱动恢复机制：构造守护进程，手动置暂停 + 放 resume 标志
+    args = parse_args(["--replay", "generate", "--state-file",
+                       str(tmp_path / "st.json"), "--report-dir", str(tmp_path / "d")])
+    d = PaperTradingDaemon(args)
+    d._build(40000.0, 60000.0)  # 装配 strategy/risk
+
+    d.risk.emergency_stop("test")  # STOPPED 也算需恢复
+    d.risk.state = "PAUSED"
+    d.strategy.paused = True
+    d.resume_flag.write_text("go", encoding="utf-8")
+
+    d._check_resume()
+
+    assert d.risk.can_trade()         # 风控回到 ACTIVE
+    assert d.strategy.paused is False  # 策略级熔断也解除
+    assert not d.resume_flag.exists()  # 标志已消费
+
+
+def test_fresh_ignores_old_checkpoint(tmp_path):
+    state = tmp_path / "st.json"
+    reports = tmp_path / "daily"
+    _run(state, reports, days=3)
+    assert _ckpt(state)["day_count"] == 3
+    # --fresh 应忽略旧检查点，从头重跑到 2 天（day_count 回到 2 而非 5）
+    _run(state, reports, days=2, extra=["--fresh"])
+    assert _ckpt(state)["day_count"] == 2
