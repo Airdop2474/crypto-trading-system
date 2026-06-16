@@ -71,11 +71,14 @@ class PaperBroker(BrokerInterface):
 
     # ---- 下单 ----
 
-    def place_order(self, order: Order) -> OrderResult:
+    def place_order(self, order: Order, timestamp=None) -> OrderResult:
         """
         下单（简化：价格触及即按下单价 + 滑点立即成交）
 
         流程：参数校验 -> 风控 -> 资金/持仓校验 -> 计算成本 -> 更新状态 -> 记录
+
+        timestamp: 成交时间。回测/纸面运行应传入当根 bar 时间，使订单时间线
+                   可复盘；省略则取 datetime.now()（实时场景）。
         """
         if order.amount <= 0:
             return OrderResult(None, "rejected", reason="下单数量必须为正")
@@ -119,7 +122,7 @@ class PaperBroker(BrokerInterface):
         order_id = self._generate_order_id()
         self.orders.append({
             "order_id": order_id,
-            "timestamp": datetime.now(),
+            "timestamp": timestamp if timestamp is not None else datetime.now(),
             "symbol": order.symbol,
             "side": order.side,
             "amount": order.amount,

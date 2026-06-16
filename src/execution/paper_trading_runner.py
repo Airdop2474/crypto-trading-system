@@ -129,7 +129,7 @@ class PaperTradingRunner:
         if amount <= 0:
             return
         result = self.broker.place_order(
-            BrokerOrder(self.symbol, "buy", amount, price, "market")
+            BrokerOrder(self.symbol, "buy", amount, price, "market"), timestamp=time
         )
         if result.status != "filled":
             return
@@ -155,7 +155,7 @@ class PaperTradingRunner:
             return
         lot = self.lots.get(tag)
         result = self.broker.place_order(
-            BrokerOrder(self.symbol, "sell", amount, price, "market")
+            BrokerOrder(self.symbol, "sell", amount, price, "market"), timestamp=time
         )
         if result.status != "filled":
             return
