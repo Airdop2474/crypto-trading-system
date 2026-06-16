@@ -448,6 +448,10 @@ def recover_from_emergency():
 
 **启动当天，逐项检查：**
 
+> 自动化部分先跑一键自检：`python scripts/preflight_check.py`（聚合 Python/依赖/
+> 安全开关/风控参数/门禁文档/Broker/§2 熔断/测试覆盖率，全过 exit 0）。
+> ⚠️ 自检通过 ≠ 可实盘——脚本会单列下方 MANUAL 门禁，须人工逐项确认。
+
 ### 环境检查
 - [ ] .env 配置正确
 - [ ] API Key 权限验证通过
