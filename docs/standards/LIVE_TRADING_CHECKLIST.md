@@ -192,6 +192,14 @@ LIVE_TRADING_ENABLED=true
 
 ### 双重确认
 
+> **已落地为真实代码：** `python scripts/start_live_trading.py`。
+> 该入口实现下方流程的门禁部分——`verify_live_trading_checklist()` 强制校验
+> 所有可自动验证项（实盘开关须 =true、风控参数、门禁文档、Broker、§2 熔断等），
+> 任一不过即 `raise LiveTradingBlocked`；再经两次人工 `YES` 确认。
+> **注意：** Live Broker（真实下单）属 Phase 7+ 尚未实现，故门禁与双确认全过后
+> 仍会 `raise LiveTradingNotReady` 硬性拒绝启动——门禁是真的，交易动作尚不存在。
+> 下方伪代码为流程示意。
+
 ```python
 def start_live_trading():
     """启动实盘"""
