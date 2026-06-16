@@ -11,7 +11,13 @@ sys.path.insert(0, str(project_root))
 
 import pytest
 
-from scripts.testnet_smoke import main, safe_limit_order_params
+from scripts.testnet_smoke import extract_fill, main, safe_limit_order_params
+
+
+class _Res:
+    def __init__(self, filled_price=None, filled_amount=None):
+        self.filled_price = filled_price
+        self.filled_amount = filled_amount
 
 
 def test_safe_limit_below_market_and_notional():
@@ -33,6 +39,26 @@ def test_safe_limit_rejects_bad_price():
 def test_safe_limit_rejects_bad_factor():
     with pytest.raises(ValueError):
         safe_limit_order_params(100.0, factor=1.5)  # 不低于市价 = 可能成交
+
+
+def test_extract_fill_prefers_place_result():
+    p, a, src = extract_fill(_Res(filled_price=100.0, filled_amount=0.5))
+    assert (p, a, src) == (100.0, 0.5, "place")
+
+
+def test_extract_fill_falls_back_to_status():
+    p, a, src = extract_fill(_Res(), {"average": 101.0, "filled": 0.3})
+    assert (p, a, src) == (101.0, 0.3, "status")
+
+
+def test_extract_fill_status_uses_price_when_no_average():
+    p, a, src = extract_fill(_Res(), {"price": 102.0, "filled": 0.2})
+    assert (p, a, src) == (102.0, 0.2, "status")
+
+
+def test_extract_fill_none_when_nothing():
+    assert extract_fill(_Res(), None) == (None, None, "none")
+    assert extract_fill(_Res(), {"average": 0, "filled": 0}) == (None, None, "none")
 
 
 def test_main_refuses_when_not_testnet(monkeypatch):
