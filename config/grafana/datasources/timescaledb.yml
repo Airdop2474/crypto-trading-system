@@ -1,0 +1,22 @@
+apiVersion: 1
+
+# TimescaleDB 数据源（Phase 5 监控）
+# Grafana 容器经 docker-compose 内部网络访问 timescaledb 服务。
+# 连接参数与 docker-compose 的 POSTGRES_* 默认值对齐；
+# 密码默认读环境变量 POSTGRES_PASSWORD（未设则回退 changeme）。
+datasources:
+  - name: TimescaleDB
+    uid: timescaledb
+    type: postgres
+    access: proxy
+    url: timescaledb:5432
+    user: ${POSTGRES_USER:-postgres}
+    database: ${POSTGRES_DB:-crypto_trading}
+    isDefault: true
+    editable: true
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD:-changeme}

@@ -1,0 +1,16 @@
+apiVersion: 1
+
+# 面板 provider：从挂载目录加载 dashboard JSON。
+# docker-compose 把 ./config/grafana 挂到 /etc/grafana/provisioning，
+# 故面板 JSON 实际路径为 /etc/grafana/provisioning/dashboards。
+providers:
+  - name: crypto-trading
+    orgId: 1
+    folder: Crypto Trading
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false
