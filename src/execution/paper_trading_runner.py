@@ -44,6 +44,8 @@ class PaperTradingRunner:
         self.lots: Dict[object, Dict[str, float]] = {}
         # 累计已实现盈亏（卖出时累加）
         self.realized_pnl: float = 0.0
+        # 逐笔平仓记录：{tag, time, profit}，用于精确胜率/复盘
+        self.closed_trades: List[dict] = []
 
     def run(self, data: pd.DataFrame, strategy) -> Dict:
         """
@@ -59,6 +61,7 @@ class PaperTradingRunner:
         strategy.reset()
         self.lots = {}
         self.realized_pnl = 0.0
+        self.closed_trades = []
         signals_log = []
 
         for i in range(len(data)):
@@ -167,6 +170,7 @@ class PaperTradingRunner:
             cost_basis = qty * lot["cost_price"] * (1 + self.broker.commission)
             profit = proceeds - cost_basis
             self.realized_pnl += profit
+            self.closed_trades.append({"tag": tag, "time": time, "profit": profit})
 
         self.lots.pop(tag, None)
         self._notify_fill(strategy, result, "sell", tag, time, profit=profit)
@@ -210,6 +214,7 @@ class PaperTradingRunner:
             "signals": signals_log,
             "open_lots": {t: lot["amount"] for t, lot in self.lots.items()},
             "realized_pnl": self.realized_pnl,
+            "closed_trades": list(self.closed_trades),
         }
 
 

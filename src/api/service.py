@@ -274,7 +274,9 @@ def pnl_history(state: dict) -> List[dict]:
 
 
 def strategy_performance(state: dict) -> List[dict]:
-    wins, total = _fifo_win_stats(state["result"]["trade_history"])
+    closed = state["result"].get("closed_trades", [])
+    wins = sum(1 for t in closed if t["profit"] > 0)
+    total = len(closed)
     return [{
         "name": getattr(state["strategy"], "name", "GridTrading"),
         "pnl": state["result"]["realized_pnl"],
@@ -291,37 +293,6 @@ def set_strategy_status(strategy_id: str, status: str) -> dict:
 # --------------------------------------------------------------------------
 # 辅助
 # --------------------------------------------------------------------------
-def _fifo_win_stats(trade_history: List[dict]) -> tuple:
-    """对单 symbol 成交做 FIFO 配对，估算盈利平仓占比（winRate 近似）。
-
-    网格实际按 tag 平仓，与 FIFO 不完全一致，故为近似值；聚合盈亏仍以
-    引擎的 realized_pnl 为准。
-    """
-    inventory: List[List[float]] = []  # [price, qty]
-    wins = total = 0
-    for t in sorted(trade_history, key=lambda x: x["timestamp"]):
-        price = t.get("actual_price", t["price"])
-        qty = t["amount"]
-        if t["side"] == "buy":
-            inventory.append([price, qty])
-            continue
-        # sell：FIFO 消耗买入库存，计算成本与盈亏
-        remaining, cost_basis = qty, 0.0
-        while remaining > 1e-12 and inventory:
-            lot = inventory[0]
-            take = min(remaining, lot[1])
-            cost_basis += take * lot[0]
-            lot[1] -= take
-            remaining -= take
-            if lot[1] <= 1e-12:
-                inventory.pop(0)
-        if qty > 0:
-            total += 1
-            if price * qty > cost_basis:
-                wins += 1
-    return wins, total
-
-
 def _running_days(state: dict) -> int:
     df = state["df"]
     span = df["timestamp"].max() - df["timestamp"].min()
