@@ -107,6 +107,16 @@ class ExchangeRunnerBroker:
     def get_order_status(self, order_id: str) -> Optional[dict]:
         return self.broker.get_order_status(order_id)
 
+    def reconcile_unconfirmed(self) -> List[str]:
+        """重启对账：查每个待确认订单，已了结的清掉，仍挂单的返回（调用方拒绝静默续跑）。"""
+        still_open: List[str] = []
+        for oid in list(self._unconfirmed):
+            status = self.get_order_status(oid)
+            if status and status.get("status") in ("open", "pending"):
+                still_open.append(oid)
+        self._unconfirmed = still_open
+        return still_open
+
     # ---- 统计（本地账本 + 实时余额/持仓）----
 
     def get_trade_history(self) -> List[dict]:

@@ -12,10 +12,14 @@ Paper Trading 连续运行守护进程（LIVE_TRADING_CHECKLIST §1）
 
 用法：
   python scripts/run_paper_trading_daemon.py --replay generate --days 5
-  python scripts/run_paper_trading_daemon.py --days 60          # 实时
+  python scripts/run_paper_trading_daemon.py --days 60          # 实时（paper 模拟）
+  python scripts/run_paper_trading_daemon.py --broker exchange --timeframe 1m --days 1
+                                                               # testnet 真实下单
   人工恢复（风控暂停后）：创建文件 <state-file>.resume
 
-不下真实订单（仍 PaperBroker 模拟）；真实交易=Live Broker，Phase 7+。
+--broker paper（默认）：PaperBroker 模拟，崩溃续跑逐位一致。
+--broker exchange：Binance testnet 真实市价单（Phase 7 Stage 3），硬护栏强制 testnet；
+  成交价量真实、每 bar 对账持仓漂移→熔断；**非逐位一致**。真实主网=Live Broker，Phase 7+。
 """
 
 import argparse
@@ -32,7 +36,13 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.execution import PaperBroker, PaperTradingRunner, RiskManager
+from src.execution.exchange_broker import ExchangeBroker
+from src.execution.exchange_execution import ExchangeExecutor
+from src.execution.exchange_runner_broker import (
+    ExchangeRunnerBroker, assess_position_drift,
+)
 from src.execution.paper_report import PaperTradingReportGenerator
+from src.execution.paper_trading_runner import ExecutionConfig
 from src.monitor import MetricsCollector, MetricsWriter
 from src.strategy.base import Order as StrategyOrder
 from src.strategy.grid_trading import GridTradingStrategy
@@ -93,16 +103,46 @@ class PaperTradingDaemon:
             lower_price=lower, upper_price=upper, grid_count=10,
             initial_capital=initial,
         )
-        self.broker = PaperBroker(
-            initial, commission=0.001, slippage={self.symbol: 0.0005},
-            max_position_per_trade=1.0, max_total_position=1.0,
-        )
         self.risk = RiskManager(capital_base=initial)
+        if self.args.broker == "exchange":
+            self.broker, exec_config = self._build_exchange_broker()
+        else:
+            self.broker = PaperBroker(
+                initial, commission=0.001, slippage={self.symbol: 0.0005},
+                max_position_per_trade=1.0, max_total_position=1.0,
+            )
+            exec_config = None  # None → runner 从 PaperBroker 快照（行为不变）
         # runner 持有 risk → process_bar 内 _execute_signal 自动按 can_trade() 门控
         self.runner = PaperTradingRunner(
             self.broker, self.symbol, risk_manager=self.risk,
-            metrics_collector=self.collector,
+            metrics_collector=self.collector, exec_config=exec_config,
         )
+
+    def _build_exchange_broker(self):
+        """构造 testnet 交易所适配链；硬护栏：仅允许 testnet，否则拒启（绝不碰主网）。"""
+        from src.utils.config import config
+        if not config.BINANCE_TESTNET:
+            raise SystemExit(
+                "exchange 模式仅允许 testnet：请设 BINANCE_TESTNET=true（拒绝碰主网）")
+        if not config.BINANCE_API_KEY or not config.BINANCE_SECRET:
+            raise SystemExit(
+                "exchange 模式需配 BINANCE_API_KEY / BINANCE_SECRET（在 .env 填 testnet key）")
+        exchange_broker = self._make_exchange_broker()
+        executor = ExchangeExecutor(exchange_broker)
+        adapter = ExchangeRunnerBroker(executor, self.symbol, commission=0.001)
+        exec_config = ExecutionConfig(
+            commission=0.001, slippage={self.symbol: 0.0},
+            initial_balance=adapter.initial_balance,
+        )
+        logger.warning(f"exchange 模式（testnet）：起始余额 {adapter.initial_balance} "
+                       f"USDT，底仓 {adapter.initial_position} {self.symbol.split('/')[0]}")
+        return adapter, exec_config
+
+    def _make_exchange_broker(self):
+        """构造 ExchangeBroker（注入缝：测试 monkeypatch 成 FakeExchange 后端）。"""
+        from src.utils.config import config
+        return ExchangeBroker(
+            api_key=config.BINANCE_API_KEY, secret=config.BINANCE_SECRET, testnet=True)
 
     # ---- 数据源 ----
     def _load_replay_df(self):
@@ -127,6 +167,17 @@ class PaperTradingDaemon:
 
     # ---- 状态检查点 ----
     def _checkpoint(self):
+        # exchange 模式 broker 无本地余额/持仓/订单，存适配器账本（注释：非逐位一致）；
+        # paper 分支字节级保持原样。
+        if self.args.broker == "exchange":
+            broker_state = self.broker.state_dict()
+        else:
+            broker_state = {
+                "balance": self.broker.balance,
+                "positions": self.broker.positions,
+                "orders": self.broker.orders,
+                "order_id_counter": self.broker.order_id_counter,
+            }
         st = {
             "version": 1, "symbol": self.symbol,
             "day_count": self.day_count,
@@ -134,12 +185,7 @@ class PaperTradingDaemon:
             "last_bar_ts": self.last_bar_ts,
             "bounds": {"lower": self.strategy.lower_price,
                        "upper": self.strategy.upper_price},
-            "broker": {
-                "balance": self.broker.balance,
-                "positions": self.broker.positions,
-                "orders": self.broker.orders,
-                "order_id_counter": self.broker.order_id_counter,
-            },
+            "broker": broker_state,
             "runner": {
                 "lots": {str(k): v for k, v in self.runner.lots.items()},
                 "realized_pnl": self.runner.realized_pnl,
@@ -172,10 +218,18 @@ class PaperTradingDaemon:
         self.last_bar_ts = st["last_bar_ts"]
 
         b = st["broker"]
-        self.broker.balance = b["balance"]
-        self.broker.positions = b["positions"]
-        self.broker.orders = b["orders"]
-        self.broker.order_id_counter = b["order_id_counter"]
+        if self.args.broker == "exchange":
+            self.broker.load_state(b)
+            still_open = self.broker.reconcile_unconfirmed()
+            if still_open:
+                raise SystemExit(
+                    f"重启发现未确认订单仍挂单 {still_open}：请人工处理后再续跑"
+                    f"（exchange 模式非逐位一致）")
+        else:
+            self.broker.balance = b["balance"]
+            self.broker.positions = b["positions"]
+            self.broker.orders = b["orders"]
+            self.broker.order_id_counter = b["order_id_counter"]
 
         r = st["runner"]
         self.runner.lots = {
@@ -211,6 +265,20 @@ class PaperTradingDaemon:
             self.resume_flag.unlink(missing_ok=True)
             logger.warning("检测到 resume 标志，风控/策略已人工恢复 -> ACTIVE")
 
+    # ---- 持仓漂移对账（exchange 模式）----
+    def _reconcile_drift(self):
+        """交易所真实净持仓（按 delta）vs 本地 lots 净持仓，超阈值→熔断。"""
+        real = self.broker.get_position(self.symbol)
+        local_net = sum(lot["amount"] for lot in self.runner.lots.values())
+        ok, drift = assess_position_drift(
+            real, self.broker.initial_position, local_net,
+            abs_tol=self.args.drift_abs, rel_tol=self.args.drift_rel,
+        )
+        if not ok:
+            logger.error(f"持仓漂移 drift={drift:.8f}（real={real}, "
+                         f"local_net={local_net}）→ 触发熔断")
+            self.risk.emergency_stop(f"持仓漂移 {drift:.8f}")
+
     # ---- 日报 ----
     def _write_daily_report(self, day, last_close):
         result = self.runner._build_result([])
@@ -233,6 +301,9 @@ class PaperTradingDaemon:
         )
         for t in self.runner.closed_trades[before:]:
             self.risk.record_fill(t)
+
+        if self.args.broker == "exchange":
+            self._reconcile_drift()
 
         day = pd.Timestamp(bar["timestamp"]).date()
         if self.current_day is None:
@@ -344,6 +415,12 @@ def parse_args(argv=None):
     p.add_argument("--poll-seconds", type=int, default=60)
     p.add_argument("--fresh", action="store_true", help="忽略旧检查点重开")
     p.add_argument("--no-db", action="store_true", help="不落库")
+    p.add_argument("--broker", choices=["paper", "exchange"], default="paper",
+                   help="paper=PaperBroker 模拟（默认）；exchange=testnet 真实下单")
+    p.add_argument("--drift-abs", type=float, default=1e-5,
+                   help="持仓漂移绝对容差（base 币种数量）")
+    p.add_argument("--drift-rel", type=float, default=0.02,
+                   help="持仓漂移相对容差（占本地净持仓比例）")
     return p.parse_args(argv)
 
 
