@@ -129,3 +129,20 @@ def test_default_testnet_true():
     """默认 testnet=True（不构造真实 ccxt，注入替身仍校验标志）。"""
     b = ExchangeBroker(exchange=FakeExchange())
     assert b.testnet is True
+
+
+def _spot_api_url(exchange):
+    api = exchange.urls["api"]
+    return api.get("public") if isinstance(api, dict) else api
+
+
+def test_internal_construction_switches_to_testnet_endpoint():
+    """回归：testnet=True 必须真正切到 testnet endpoint（仅设 options.testnet 无效）。"""
+    b = ExchangeBroker(api_key="k", secret="s", testnet=True)
+    assert "testnet.binance.vision" in _spot_api_url(b.exchange)
+
+
+def test_internal_construction_mainnet_when_not_testnet():
+    """testnet=False 时走主网 endpoint。"""
+    b = ExchangeBroker(api_key="k", secret="s", testnet=False)
+    assert "testnet" not in _spot_api_url(b.exchange)

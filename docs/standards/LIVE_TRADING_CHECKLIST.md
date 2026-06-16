@@ -96,6 +96,11 @@ API_KEY_CONFIG = {
 
 ### 验证步骤
 
+> **已落地为真实代码：** `python scripts/verify_api_key_permissions.py`（用 .env 的
+> key/secret 连交易所查 `apiRestrictions`）。`assess_api_key_permissions()` 纯函数断言：
+> 禁提币 / 禁合约 = FAIL 拦截，允许现货 + 读取 = 必需；未绑 IP 白名单 / 单独开杠杆 = WARN。
+> 退出码 0=合规 / 1=违规 / 2=无法连接。下方伪代码为示意。
+
 ```python
 # 实盘启动前验证
 def verify_api_key_permissions():

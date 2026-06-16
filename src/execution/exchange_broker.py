@@ -49,12 +49,12 @@ class ExchangeBroker(BrokerInterface):
                 "apiKey": api_key,
                 "secret": secret,
                 "enableRateLimit": True,  # 限流保护
-                "options": {
-                    "defaultType": "spot",  # 只做现货
-                    "testnet": testnet,     # Phase 5-6 测试网
-                },
+                "options": {"defaultType": "spot"},  # 只做现货
             }
             self.exchange = exchange_class(params)
+            # 关键：必须用 set_sandbox_mode 才能真正把 API endpoint 切到 testnet。
+            # 仅设 options.testnet 不改请求地址——会打到主网（用主网 key 即真实下单）。
+            self.exchange.set_sandbox_mode(testnet)
 
         logger.info(
             f"ExchangeBroker initialized: {exchange_id} (testnet={testnet})"
