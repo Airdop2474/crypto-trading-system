@@ -10,6 +10,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+import pandas as pd
 import pytest
 
 from scripts.run_paper_trading_daemon import PaperTradingDaemon, main, parse_args
@@ -93,3 +94,52 @@ def test_fresh_ignores_old_checkpoint(tmp_path):
     # --fresh 应忽略旧检查点，从头重跑到 2 天（day_count 回到 2 而非 5）
     _run(state, reports, days=2, extra=["--fresh"])
     assert _ckpt(state)["day_count"] == 2
+
+
+def _live_seed(n_days):
+    """生成 n_days×6 根 4h bar（含跨多日），供 live 冷启动种子测试。"""
+    import numpy as np
+    periods = n_days * 6
+    times = pd.date_range("2026-01-01", periods=periods, freq="4h")
+    closes = 100 + 5 * np.sin(np.arange(periods) / 3.0)
+    return pd.DataFrame({
+        "timestamp": times, "open": closes,
+        "high": closes + 1, "low": closes - 1,
+        "close": closes, "volume": [100.0] * periods,
+    })
+
+
+def test_live_cold_start_seed_is_warmup_only(tmp_path):
+    """live 冷启动：种子（多日历史）只用于定区间，不回填交易/日报/day_count。"""
+    args = parse_args(["--days", "60", "--no-db",
+                       "--state-file", str(tmp_path / "st.json"),
+                       "--report-dir", str(tmp_path / "d")])
+    d = PaperTradingDaemon(args)
+    seed = _live_seed(n_days=10)  # 60 根、跨 10 天历史
+
+    d._seed_live_warmup(seed)
+    # 种子末根成为「已见」基线
+    assert d.last_bar_ts == str(seed.iloc[-1]["timestamp"])
+    # 初次消费同一份种子 → 全部 <= last，零回填
+    d._consume_new_bars()
+    assert d.day_count == 0
+    assert _md_count(tmp_path / "d") == 0
+    assert d.runner.lots == {}
+
+
+def test_live_new_bar_after_seed_is_processed(tmp_path):
+    """启动后真实到达的新 bar 会被处理（day_count 只随真实新 bar 推进）。"""
+    args = parse_args(["--days", "60", "--no-db",
+                       "--state-file", str(tmp_path / "st.json"),
+                       "--report-dir", str(tmp_path / "d")])
+    d = PaperTradingDaemon(args)
+    seed = _live_seed(n_days=10)
+    d._seed_live_warmup(seed)
+
+    # 追加一根种子之后的新 bar，重新喂入 → 只处理这一根
+    new_ts = seed.iloc[-1]["timestamp"] + pd.Timedelta(hours=4)
+    new_row = {"timestamp": new_ts, "open": 103.0, "high": 104.0,
+               "low": 102.0, "close": 103.0, "volume": 100.0}
+    d._history = pd.concat([seed, pd.DataFrame([new_row])], ignore_index=True)
+    d._consume_new_bars()
+    assert d.last_bar_ts == str(new_ts)  # 推进到新 bar

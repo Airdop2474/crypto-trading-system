@@ -366,20 +366,31 @@ class PaperTradingDaemon:
                 break
         return self._finish()
 
+    def _seed_live_warmup(self, seed):
+        """live 冷启动：种子仅用于定网格区间 + 提供历史上下文，**不回填交易/日报**。
+
+        把 last_bar_ts 推进到种子末根，使后续 _consume_new_bars 跳过全部已收盘历史，
+        day_count 只随启动后真实到达的新 bar 推进——60 天=60 天真实连续运行，
+        而非把 200 根种子（~28 天历史）瞬间回填成运行日。
+        （replay 模式保留回填语义：那是加速跑历史的本意。）
+        """
+        warm = seed.iloc[:WARMUP]
+        lo, hi = warm["low"].min(), warm["high"].max()
+        span = hi - lo
+        self._build(lo + span * 0.1, hi - span * 0.1)
+        self._history = seed
+        self.last_bar_ts = str(seed.iloc[-1]["timestamp"])
+        self._checkpoint()  # 持久化预热基线，崩溃可凭此续跑
+
     def _run_live(self, resuming):
         if not resuming:
-            seed = self._fetch_live_df()
-            warm = seed.iloc[:WARMUP]
-            lo, hi = warm["low"].min(), warm["high"].max()
-            span = hi - lo
-            self._build(lo + span * 0.1, hi - span * 0.1)
-            self._history = seed
+            self._seed_live_warmup(self._fetch_live_df())
         else:
             self._history = self._fetch_live_df()
 
         print(f"[live] {self.symbol} {self.args.timeframe}，目标 {self.args.days} 天，"
               f"轮询 {self.args.poll_seconds}s（Ctrl+C 停止，可重启续跑）")
-        # 处理 seed 中尚未处理的已收盘 bar
+        # 只处理启动后真实到达的新 bar（冷启动种子已在 _seed_live_warmup 标记为已见）
         self._consume_new_bars()
         while self.day_count < self.args.days:
             time.sleep(self.args.poll_seconds)
