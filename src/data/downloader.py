@@ -9,10 +9,10 @@ from typing import List, Optional
 import pandas as pd
 from datetime import datetime
 import hashlib
+import time
 
 from src.data.exchange import ExchangeClient, create_binance_client
 from src.utils.logger import logger
-from src.utils.config import config
 
 
 class DataDownloader:
@@ -30,8 +30,10 @@ class DataDownloader:
             exchange_client: 交易所客户端（默认使用 Binance）
             data_dir: 数据保存目录
         """
+        # 历史 OHLCV 是公开数据，无需凭据——用 public=True 走主网拉真实数据，
+        # 避免 testnet=True + 有凭据时 set_sandbox_mode 把数据源切到 testnet
         self.exchange = exchange_client or create_binance_client(
-            testnet=config.BINANCE_TESTNET
+            testnet=False, public=True
         )
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -59,54 +61,67 @@ class DataDownloader:
         返回：
             下载的数据 DataFrame
         """
-        try:
-            logger.info(
-                f"Downloading {symbol} {timeframe} "
-                f"from {start_date} to {end_date}"
-            )
+        max_retries = 3
+        last_error = None
 
-            # 下载数据
-            df = self.exchange.fetch_ohlcv_range(
-                symbol=symbol,
-                timeframe=timeframe,
-                start_date=start_date,
-                end_date=end_date,
-            )
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    delay = 2 ** attempt
+                    logger.info(f"Retry {attempt}/{max_retries} in {delay}s...")
+                    time.sleep(delay)
 
-            if df.empty:
-                logger.warning("No data downloaded")
+                logger.info(
+                    f"Downloading {symbol} {timeframe} "
+                    f"from {start_date} to {end_date}"
+                )
+
+                # 下载数据
+                df = self.exchange.fetch_ohlcv_range(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+
+                if df.empty:
+                    logger.warning("No data downloaded")
+                    return df
+
+                # 保存数据
+                file_path = self._save_data(
+                    df=df,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    format=save_format,
+                )
+
+                # 生成数据版本记录
+                data_hash = self._calculate_hash(df)
+                self._save_metadata(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    start_date=start_date,
+                    end_date=end_date,
+                    file_path=file_path,
+                    data_hash=data_hash,
+                    record_count=len(df),
+                )
+
+                logger.info(
+                    f"✅ Downloaded and saved {len(df)} records to {file_path}"
+                )
+                logger.info(f"   Data hash (SHA256): {data_hash[:16]}...")
+
                 return df
 
-            # 保存数据
-            file_path = self._save_data(
-                df=df,
-                symbol=symbol,
-                timeframe=timeframe,
-                format=save_format,
-            )
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Download attempt {attempt+1}/{max_retries} failed: {e}")
+                continue
 
-            # 生成数据版本记录
-            data_hash = self._calculate_hash(df)
-            self._save_metadata(
-                symbol=symbol,
-                timeframe=timeframe,
-                start_date=start_date,
-                end_date=end_date,
-                file_path=file_path,
-                data_hash=data_hash,
-                record_count=len(df),
-            )
-
-            logger.info(
-                f"✅ Downloaded and saved {len(df)} records to {file_path}"
-            )
-            logger.info(f"   Data hash (SHA256): {data_hash[:16]}...")
-
-            return df
-
-        except Exception as e:
-            logger.error(f"Download failed: {e}")
-            raise
+        logger.error(f"Download failed after {max_retries} attempts: {last_error}")
+        raise last_error
 
     def download_multiple(
         self,

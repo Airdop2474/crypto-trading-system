@@ -51,6 +51,18 @@ class PerformanceMetrics:
         metrics["profit_factor"] = PerformanceMetrics.profit_factor(trades)
         metrics["avg_trade"] = PerformanceMetrics.avg_trade(trades)
 
+        # 新增指标
+        metrics["sortino_ratio"] = PerformanceMetrics.sortino_ratio(
+            equity_curve
+        )
+        metrics["max_drawdown_duration"] = PerformanceMetrics.max_drawdown_duration(
+            equity_curve
+        )
+        metrics["avg_win_loss_ratio"] = PerformanceMetrics.avg_win_loss_ratio(
+            trades
+        )
+        metrics["kelly_criterion"] = PerformanceMetrics.kelly_criterion(trades)
+
         return metrics
 
     @staticmethod
@@ -282,6 +294,152 @@ class PerformanceMetrics:
         total_profit = sum(t.get("profit", 0) for t in closed_trades)
 
         return float(total_profit / len(closed_trades))
+
+    @staticmethod
+    def sortino_ratio(equity_curve: pd.DataFrame, risk_free_rate: float = 0.0) -> float:
+        """
+        计算 Sortino 比率（只惩罚下行波动，比 Sharpe 更适合加密市场）
+
+        参数：
+            equity_curve: 权益曲线
+            risk_free_rate: 无风险利率（年化）
+
+        返回：
+            Sortino 比率
+        """
+        if len(equity_curve) < 2:
+            return 0.0
+
+        equity = equity_curve["total_equity"].values
+        returns = np.diff(equity) / equity[:-1]
+
+        if len(returns) == 0:
+            return 0.0
+
+        mean_return = returns.mean()
+        periods_per_year = PerformanceMetrics._infer_periods_per_year(equity_curve)
+
+        # 下行标准差（只计算负收益的标准差）
+        downside_returns = returns[returns < 0]
+        if len(downside_returns) == 0:
+            return float("inf") if mean_return > 0 else 0.0
+
+        downside_std = downside_returns.std()
+        if downside_std == 0:
+            return 0.0
+
+        sortino = (
+            (mean_return - risk_free_rate / periods_per_year)
+            / downside_std
+            * np.sqrt(periods_per_year)
+        )
+        return float(sortino)
+
+    @staticmethod
+    def max_drawdown_duration(equity_curve: pd.DataFrame) -> float:
+        """
+        计算最大回撤持续时间（从峰值到恢复或至今的最大 bar 数）
+
+        参数：
+            equity_curve: 权益曲线
+
+        返回：
+            最大回撤持续 bar 数
+        """
+        if len(equity_curve) < 2:
+            return 0.0
+
+        equity = equity_curve["total_equity"].values
+        cummax = np.maximum.accumulate(equity)
+
+        # 标记是否处于回撤（当前权益 < 峰值）
+        in_drawdown = equity < cummax
+
+        if not in_drawdown.any():
+            return 0.0
+
+        # 计算最长连续回撤段
+        max_duration = 0
+        current_duration = 0
+        for dd in in_drawdown:
+            if dd:
+                current_duration += 1
+                max_duration = max(max_duration, current_duration)
+            else:
+                current_duration = 0
+
+        return float(max_duration)
+
+    @staticmethod
+    def avg_win_loss_ratio(trades: List[Dict]) -> float:
+        """
+        计算平均盈利/平均亏损比
+
+        参数：
+            trades: 交易记录
+
+        返回：
+            平均盈利 / 平均亏损（绝对值），无亏损返回 inf
+        """
+        if not trades:
+            return 0.0
+
+        closed_trades = [t for t in trades if t["type"] == "SELL"]
+        if not closed_trades:
+            return 0.0
+
+        wins = [t.get("profit", 0) for t in closed_trades if t.get("profit", 0) > 0]
+        losses = [t.get("profit", 0) for t in closed_trades if t.get("profit", 0) < 0]
+
+        if not wins:
+            return 0.0
+        if not losses:
+            return float("inf")
+
+        avg_win = sum(wins) / len(wins)
+        avg_loss = abs(sum(losses) / len(losses))
+
+        if avg_loss == 0:
+            return float("inf")
+
+        return float(avg_win / avg_loss)
+
+    @staticmethod
+    def kelly_criterion(trades: List[Dict]) -> float:
+        """
+        计算 Kelly 比率（最优仓位比例）
+
+        Kelly = W - (1 - W) / R
+        W = 胜率，R = 平均盈亏比
+
+        参数：
+            trades: 交易记录
+
+        返回：
+            Kelly 比率（0-1，0 表示不应交易）
+        """
+        if not trades:
+            return 0.0
+
+        closed_trades = [t for t in trades if t["type"] == "SELL"]
+        if not closed_trades:
+            return 0.0
+
+        total = len(closed_trades)
+        wins = sum(1 for t in closed_trades if t.get("profit", 0) > 0)
+        losses = sum(1 for t in closed_trades if t.get("profit", 0) < 0)
+
+        if total == 0 or wins == 0 or losses == 0:
+            return 0.0
+
+        win_rate = wins / total
+        avg_win_loss = PerformanceMetrics.avg_win_loss_ratio(trades)
+
+        if avg_win_loss == 0 or avg_win_loss == float("inf"):
+            return 0.0
+
+        kelly = win_rate - (1 - win_rate) / avg_win_loss
+        return float(max(0.0, kelly))
 
 
 # 导出

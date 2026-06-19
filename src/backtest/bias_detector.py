@@ -21,8 +21,10 @@ class BiasDetector:
 
     # 危险代码模式
     DANGEROUS_PATTERNS = [
-        (r'\.iloc\[-1\]', '使用当前K线数据（iloc[-1]）', 'high'),
-        (r'\.tail\(1\)', '使用当前K线数据（tail(1)）', 'high'),
+        # iloc[-1] 在 bar-by-bar 模型中是当前已收盘 bar，不是未来数据
+        # 降级为 info，仅作提醒而非高风险误报
+        (r'\.iloc\[-1\]', '使用当前K线数据（iloc[-1]），bar-by-bar 模型下安全', 'info'),
+        (r'\.tail\(1\)', '使用当前K线数据（tail(1)），bar-by-bar 模型下安全', 'info'),
         (r'\.loc\[.*current_time.*\]', '使用当前时间索引数据', 'high'),
         (r'\.shift\(-\d+\)', '使用未来数据（负shift）', 'critical'),
         (r'\.rolling\(.*\)\.mean\(\)\.iloc\[-1\]', '使用包含当前K线的滚动指标', 'medium'),

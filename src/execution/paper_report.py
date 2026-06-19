@@ -77,8 +77,6 @@ class PaperTradingReportGenerator:
             },
         }
 
-    # PLACEHOLDER_RENDER
-
     def render_markdown(self, report: Dict) -> str:
         """渲染为 Markdown 文本"""
         acc = report["account"]

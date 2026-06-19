@@ -4,13 +4,45 @@
 测试策略参数变化对结果的影响
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import pandas as pd
 import numpy as np
 from itertools import product
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from src.backtest.engine import BacktestEngine
 from src.utils.logger import logger
+
+
+def _run_single_backtest(args: Tuple) -> Optional[Dict]:
+    """模块级辅助函数，供 ProcessPoolExecutor pickling。
+
+    args = (strategy_class, param_dict, data, initial_capital, commission, slippage)
+    """
+    strategy_class, param_dict, data, initial_capital, commission, slippage = args
+    try:
+        strategy = strategy_class(**param_dict)
+        engine = BacktestEngine(
+            initial_capital=initial_capital,
+            commission=commission,
+            slippage=slippage,
+        )
+        result = engine.run(data=data, strategy=strategy)
+        if result["success"]:
+            metrics = result.get("metrics", {})
+            return {
+                **param_dict,
+                "total_return": result["total_return"],
+                "annual_return": metrics.get("annual_return", 0),
+                "max_drawdown": metrics.get("max_drawdown", 0),
+                "sharpe_ratio": metrics.get("sharpe_ratio", 0),
+                "sortino_ratio": metrics.get("sortino_ratio", 0),
+                "win_rate": metrics.get("win_rate", 0),
+                "total_trades": result["total_trades"],
+            }
+    except Exception:
+        pass
+    return None
 
 
 class ParameterScanner:
@@ -25,6 +57,7 @@ class ParameterScanner:
         initial_capital: float = 10000.0,
         commission: float = 0.001,
         slippage: float = 0.0005,
+        max_workers: Optional[int] = 1,
     ):
         """
         初始化参数扫描器
@@ -33,10 +66,12 @@ class ParameterScanner:
             initial_capital: 初始资金
             commission: 手续费率
             slippage: 滑点率
+            max_workers: 并行进程数（默认 1=串行；设为 >1 启用多进程并行）
         """
         self.initial_capital = initial_capital
         self.commission = commission
         self.slippage = slippage
+        self.max_workers = max_workers
 
     def grid_search(
         self,
@@ -45,7 +80,7 @@ class ParameterScanner:
         param_grid: Dict[str, List],
     ) -> pd.DataFrame:
         """
-        网格搜索参数空间
+        网格搜索参数空间（支持并行执行）
 
         参数：
             data: OHLCV 数据
@@ -64,41 +99,41 @@ class ParameterScanner:
 
         logger.info(f"Total combinations: {len(combinations)}")
 
+        # 构建任务参数
+        tasks = [
+            (strategy_class, dict(zip(param_names, params)),
+             data, self.initial_capital, self.commission, self.slippage)
+            for params in combinations
+        ]
+
         results = []
 
-        for i, params in enumerate(combinations, 1):
-            # 创建参数字典
-            param_dict = dict(zip(param_names, params))
+        # 并行或串行取决于 max_workers
+        use_parallel = self.max_workers != 1 and len(combinations) > 1
 
-            logger.debug(f"Testing combination {i}/{len(combinations)}: {param_dict}")
-
-            # 创建策略实例
-            strategy = strategy_class(**param_dict)
-
-            # 运行回测
-            engine = BacktestEngine(
-                initial_capital=self.initial_capital,
-                commission=self.commission,
-                slippage=self.slippage,
-            )
-
-            backtest_results = engine.run(data=data, strategy=strategy)
-
-            if backtest_results["success"]:
-                # 提取关键指标
-                metrics = backtest_results.get("metrics", {})
-
-                result = {
-                    **param_dict,
-                    "total_return": backtest_results["total_return"],
-                    "annual_return": metrics.get("annual_return", 0),
-                    "max_drawdown": metrics.get("max_drawdown", 0),
-                    "sharpe_ratio": metrics.get("sharpe_ratio", 0),
-                    "win_rate": metrics.get("win_rate", 0),
-                    "total_trades": backtest_results["total_trades"],
+        if not use_parallel:
+            # 串行模式（默认 / 单组合）
+            for i, task_args in enumerate(tasks, 1):
+                logger.debug(f"Testing combination {i}/{len(combinations)}")
+                result = _run_single_backtest(task_args)
+                if result:
+                    results.append(result)
+        else:
+            # 并行模式（max_workers=None 使用 cpu_count）
+            workers = self.max_workers
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                future_map = {
+                    executor.submit(_run_single_backtest, task_args): i
+                    for i, task_args in enumerate(tasks)
                 }
-
-                results.append(result)
+                done_count = 0
+                for future in as_completed(future_map):
+                    done_count += 1
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                    if done_count % 10 == 0:
+                        logger.info(f"Progress: {done_count}/{len(combinations)}")
 
         # 转换为 DataFrame
         df_results = pd.DataFrame(results)
@@ -186,6 +221,94 @@ class ParameterScanner:
 
         return df_results
 
+    def walk_forward(
+        self,
+        data: pd.DataFrame,
+        strategy_class,
+        param_grid: Dict[str, List],
+        n_windows: int = 3,
+        in_sample_ratio: float = 0.7,
+    ) -> pd.DataFrame:
+        """
+        Walk-Forward 分析：样本内优化 + 样本外验证，防止过拟合
+
+        将数据切分为 n_windows 个窗口，每个窗口内：
+        1. 前 in_sample_ratio 做样本内参数优化（grid_search）
+        2. 后 1 - in_sample_ratio 做样本外验证（用最优参数回测）
+
+        参数：
+            data: OHLCV 数据
+            strategy_class: 策略类
+            param_grid: 参数网格
+            n_windows: 窗口数量
+            in_sample_ratio: 样本内占比（0-1）
+
+        返回：
+            样本外结果 DataFrame（每窗口一行）
+        """
+        if n_windows < 2:
+            raise ValueError("n_windows must be >= 2")
+
+        total_len = len(data)
+        window_size = total_len // n_windows
+        oos_results = []
+
+        logger.info(
+            f"Walk-forward: {n_windows} windows, window_size={window_size}, "
+            f"in_sample_ratio={in_sample_ratio}"
+        )
+
+        for w in range(n_windows):
+            start = w * window_size
+            end = min(start + window_size, total_len)
+            if end - start < 10:
+                break
+
+            window_data = data.iloc[start:end]
+            split_idx = int(len(window_data) * in_sample_ratio)
+
+            in_sample = window_data.iloc[:split_idx]
+            out_sample = window_data.iloc[split_idx:]
+
+            if len(in_sample) < 5 or len(out_sample) < 3:
+                continue
+
+            # 样本内优化
+            in_results = self.grid_search(in_sample, strategy_class, param_grid)
+            if in_results.empty:
+                continue
+
+            # 取样本内 Sharpe 最优参数
+            best_idx = in_results["sharpe_ratio"].idxmax()
+            best_params = {}
+            for key in param_grid:
+                best_params[key] = in_results.loc[best_idx, key]
+
+            # 样本外验证
+            strategy = strategy_class(**best_params)
+            engine = BacktestEngine(
+                initial_capital=self.initial_capital,
+                commission=self.commission,
+                slippage=self.slippage,
+            )
+            oos_bt = engine.run(data=out_sample, strategy=strategy)
+
+            if oos_bt["success"]:
+                metrics = oos_bt.get("metrics", {})
+                oos_results.append({
+                    "window": w,
+                    **best_params,
+                    "in_sample_return": float(in_results.loc[best_idx, "total_return"]),
+                    "out_sample_return": oos_bt["total_return"],
+                    "out_sample_sharpe": metrics.get("sharpe_ratio", 0),
+                    "out_sample_max_drawdown": metrics.get("max_drawdown", 0),
+                    "out_sample_trades": oos_bt["total_trades"],
+                })
+
+        df = pd.DataFrame(oos_results)
+        logger.info(f"Walk-forward completed: {len(oos_results)} windows evaluated")
+        return df
+
     def analyze_stability(
         self,
         sensitivity_results: pd.DataFrame,
@@ -234,4 +357,4 @@ class ParameterScanner:
 
 
 # 导出
-__all__ = ["ParameterScanner"]
+__all__ = ["ParameterScanner", "_run_single_backtest"]

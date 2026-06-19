@@ -105,7 +105,8 @@ class BacktestEngine:
             self.current_time = self.current_bar["timestamp"]
 
             # 策略可以使用到 i 为止的所有数据（不包括未来）
-            historical_data = data.iloc[: i + 1].copy()
+            # 传 view 而非 copy，避免 O(n²) 内存分配；策略只读不写，安全
+            historical_data = data.iloc[: i + 1]
 
             # 调用策略的 on_bar
             signal = strategy.on_bar(historical_data, self.current_time)

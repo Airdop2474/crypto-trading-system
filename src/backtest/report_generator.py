@@ -124,8 +124,6 @@ class BacktestReportGenerator:
             "cost_percentage": cost_pct,
         }
 
-    # PLACEHOLDER_RENDER
-
     def save_json(self, report: Dict) -> Path:
         """保存 JSON 报告，返回路径"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

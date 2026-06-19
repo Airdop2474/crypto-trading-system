@@ -49,12 +49,15 @@ class ExchangeClient:
 
         # 测试网配置（Binance）
         if testnet and exchange_id == "binance":
-            # 注意：Binance 测试网连接可能不稳定
-            # 如果只是获取历史数据，可以使用主网（不需要 API Key）
+            # 如果只是获取历史/公开数据，使用主网（不需要 API Key）
+            # 但若提供了 API Key，必须切换到测试网端点，否则凭据会发往主网
             params["options"] = {"defaultType": "spot"}  # 现货，不是期货
-            # 不配置测试网 URL，使用主网获取公开数据
 
         self.exchange = exchange_class(params)
+
+        # 有凭据的 testnet 必须切换 sandbox 端点，防止测试网 Key 发往主网
+        if testnet and api_key and secret:
+            self.exchange.set_sandbox_mode(True)
 
         logger.info(
             f"Exchange client initialized: {exchange_id} "
