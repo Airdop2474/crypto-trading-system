@@ -21,6 +21,13 @@ from src.strategy.rsi_momentum import RSIMomentumStrategy
 from src.execution.paper_broker import PaperBroker
 from src.execution.paper_trading_runner import PaperTradingRunner
 
+# 覆盖率插桩（或调试器）会设置 trace function，使代码慢 2-3 倍，
+# 绝对墙钟时间断言此时必然失败。跳过这些计时测试（比值/正确性测试不受影响）。
+_UNDER_TRACE = sys.gettrace() is not None
+_skip_if_traced = pytest.mark.skipif(
+    _UNDER_TRACE, reason="覆盖率/调试器插桩下墙钟计时不可靠，跳过绝对时间断言"
+)
+
 
 def _generate_data(n_bars: int, seed: int = 42) -> pd.DataFrame:
     """生成模拟 OHLCV 数据"""
@@ -58,6 +65,7 @@ def _run_strategy(strategy, df):
 class TestRSIPerformance:
     """RSI 策略性能基准"""
 
+    @_skip_if_traced
     def test_rsi_10k_bars_under_2_seconds(self):
         """10000 bar 数据集应在 2 秒内完成"""
         df = _generate_data(10000)
@@ -65,6 +73,7 @@ class TestRSIPerformance:
         elapsed = _run_strategy(strategy, df)
         assert elapsed < 2.0, f"RSI 10k bars took {elapsed:.2f}s (expected < 2s)"
 
+    @_skip_if_traced
     def test_rsi_5k_bars_under_1_second(self):
         """5000 bar 数据集应在 1 秒内完成"""
         df = _generate_data(5000)
@@ -106,6 +115,7 @@ class TestRSIPerformance:
 class TestGridPerformance:
     """Grid 策略性能基准"""
 
+    @_skip_if_traced
     def test_grid_10k_bars_under_5_seconds(self):
         """10000 bar 数据集应在 2 秒内完成"""
         df = _generate_data(10000)
@@ -120,6 +130,7 @@ class TestGridPerformance:
         elapsed = _run_strategy(strategy, df)
         assert elapsed < 5.0, f"Grid 10k bars took {elapsed:.2f}s (expected < 5s)"
 
+    @_skip_if_traced
     def test_grid_5k_bars_under_3_seconds(self):
         """5000 bar 数据集应在 1 秒内完成"""
         df = _generate_data(5000)
