@@ -16,8 +16,8 @@ export default function AnalyticsPage() {
   const totalPnl = points.length ? points[points.length - 1].cumulativePnl : 0
   const winDays = points.filter((p) => p.pnl > 0).length
   const winRate = points.length ? (winDays / points.length) * 100 : 0
-  const bestDay = points.reduce((m, p) => (p.pnl > m ? p.pnl : m), 0)
-  const worstDay = points.reduce((m, p) => (p.pnl < m ? p.pnl : m), 0)
+  const bestDay = points.length ? Math.max(...points.map((p) => p.pnl)) : 0
+  const worstDay = points.length ? Math.min(...points.map((p) => p.pnl)) : 0
 
   return (
     <div className="flex flex-col gap-4 pb-16 md:pb-0">

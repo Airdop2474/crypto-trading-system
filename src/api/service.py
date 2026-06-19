@@ -19,10 +19,14 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from src.execution import PaperBroker, PaperTradingRunner
+from src.execution.multi_runner import MultiStrategyRunner, StrategyConfig
 from src.execution.paper_report import PaperTradingReportGenerator
 from src.monitor import MetricsCollector
 from src.strategy.grid_trading import GridTradingStrategy
+from src.strategy.rsi_momentum import RSIMomentumStrategy
+from src.strategy.simple_ma import SimpleMAStrategy
 from src.utils.logger import logger
+from src.utils.cache import cache, CacheKeys
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 SYMBOL = "BTC/USDT"
@@ -53,12 +57,17 @@ def _load_data() -> pd.DataFrame:
 
 
 def _build_state() -> dict:
-    """跑一次 Paper Trading，返回缓存所需的全部对象（与 run_paper_trading.py 一致）。"""
+    """跑一次 Paper Trading，返回缓存所需的全部对象（与 run_paper_trading.py 一致）。
+
+    同时构建单策略（Grid BTC/USDT）与多策略运行结果。
+    单策略路径保持向后兼容；多策略结果存入 state["multi_results"]。
+    """
     df = _load_data()
     lo, hi = df["low"].min(), df["high"].max()
     span = hi - lo
     lower, upper = lo + span * 0.1, hi - span * 0.1
 
+    # --- 单策略（Grid BTC/USDT）：兼容现有前端映射 ---
     strategy = GridTradingStrategy(
         lower_price=lower, upper_price=upper, grid_count=10,
         initial_capital=INITIAL_CAPITAL,
@@ -74,7 +83,12 @@ def _build_state() -> dict:
     last_price = float(df.iloc[-1]["close"])
     report = PaperTradingReportGenerator().build_report(result, {SYMBOL: last_price})
 
-    return {
+    # --- 多策略（共享 broker，独立 runner）---
+    # Note: Grid strategy runs once in single-strategy path above;
+    # multi_results reuses that result to avoid double execution.
+    multi_results, multi_aggregate = _build_multi_results(df, lo, hi, grid_result=result)
+
+    state = {
         "df": df,
         "last_price": last_price,
         "strategy": strategy,
@@ -82,7 +96,102 @@ def _build_state() -> dict:
         "result": result,
         "report": report,
         "collector": collector,
+        "multi_results": multi_results,
+        "multi_aggregate": multi_aggregate,
     }
+
+    # 保存摘要到 Redis（后续重启可快速提供关键指标）
+    _save_state_summary(state)
+
+    return state
+
+
+def _build_multi_results(
+    df: pd.DataFrame, lo: float, hi: float,
+    grid_result=None,
+) -> tuple:
+    """用 MultiStrategyRunner 跑多个策略，返回 (results_dict, aggregate)。
+
+    当前注册 3 个策略：
+    1. Grid BTC/USDT（与单策略路径相同参数）
+    2. RSI Momentum BTC/USDT
+    3. SimpleMA BTC/USDT
+
+    所有策略共享同一个 broker（资金池 10000 USDT）。
+    """
+    span = hi - lo
+    lower, upper = lo + span * 0.1, hi - span * 0.1
+
+    shared_broker = PaperBroker(
+        INITIAL_CAPITAL, commission=0.001, slippage={SYMBOL: 0.0005},
+        max_position_per_trade=1.0, max_total_position=1.0,
+    )
+    shared_collector = MetricsCollector()
+
+    multi_runner = MultiStrategyRunner(
+        broker=shared_broker,
+        metrics_collector=shared_collector,
+    )
+
+    # 注册策略
+    configs = [
+        StrategyConfig(
+            strategy_id="grid-btc-usdt",
+            strategy=GridTradingStrategy(
+                lower_price=lower, upper_price=upper, grid_count=10,
+                initial_capital=INITIAL_CAPITAL,
+            ),
+            symbol=SYMBOL,
+            description="网格策略：震荡市低买高卖",
+        ),
+        StrategyConfig(
+            strategy_id="rsi-btc-usdt",
+            strategy=RSIMomentumStrategy(),
+            symbol=SYMBOL,
+            description="RSI 动量策略：趋势回调买入/超买卖出",
+        ),
+        StrategyConfig(
+            strategy_id="sma-btc-usdt",
+            strategy=SimpleMAStrategy(),
+            symbol=SYMBOL,
+            description="均线策略：金叉买入/死叉卖出",
+        ),
+    ]
+    multi_runner.register_many(configs)
+
+    # 所有策略用同一份数据（同 symbol）
+    data_map = {SYMBOL: df}
+    results = multi_runner.run(data_map)
+    aggregate = multi_runner.aggregate_results()
+
+    return results, aggregate
+
+
+def _save_state_summary(state: dict) -> None:
+    """将 Paper Trading 状态摘要保存到 Redis"""
+    try:
+        report = state["report"]
+        result = state["result"]
+        summary = {
+            "account": report["account"],
+            "pnl": report["pnl"],
+            "trades_count": result["statistics"]["total_trades"],
+            "realized_pnl": result.get("realized_pnl", 0),
+            "last_price": state["last_price"],
+            "symbol": SYMBOL,
+        }
+        cache.set(CacheKeys.PAPER_STATE, summary, ttl=3600)
+        logger.info(f"Paper trading state saved to {cache.backend_type} cache")
+    except Exception as e:
+        logger.debug(f"Failed to cache paper state: {e}")
+
+
+def get_cached_summary() -> Optional[dict]:
+    """获取 Redis 缓存的 Paper Trading 摘要（无需完整重建状态）"""
+    try:
+        return cache.get(CacheKeys.PAPER_STATE)
+    except Exception:
+        return None
 
 
 def get_state() -> dict:
@@ -219,7 +328,7 @@ def orders(state: dict, limit: int = 100) -> List[dict]:
             "time": pd.Timestamp(t["timestamp"]).isoformat(),
             "symbol": t["symbol"],
             "side": t["side"],
-            "type": "limit",
+            "type": t.get("order_type") or "market",
             "price": t["price"],
             "amount": t["amount"],
             "filled": t["amount"],
@@ -288,6 +397,47 @@ def strategy_performance(state: dict) -> List[dict]:
 def set_strategy_status(strategy_id: str, status: str) -> dict:
     """Paper 模式无常驻策略，回显即可（前端做乐观更新）。"""
     return {"id": strategy_id, "status": status}
+
+
+# --------------------------------------------------------------------------
+# 多策略 API
+# --------------------------------------------------------------------------
+def multi_strategy_summary(state: dict) -> dict:
+    """多策略运行摘要（聚合所有策略的盈亏、交易数、状态）。"""
+    agg = state.get("multi_aggregate", {})
+    return {
+        "totalRealizedPnl": agg.get("total_realized_pnl", 0.0),
+        "totalClosedTrades": agg.get("total_closed_trades", 0),
+        "strategiesCount": agg.get("strategies_count", 0),
+        "strategies": agg.get("strategies", []),
+    }
+
+
+def multi_strategy_details(state: dict) -> List[dict]:
+    """每个策略的详细结果（盈亏、交易历史、开放仓位）。"""
+    results = state.get("multi_results", {})
+    details = []
+    for sid, result in results.items():
+        stats = result.get("statistics", {})
+        closed = result.get("closed_trades", [])
+        wins = sum(1 for t in closed if t["profit"] > 0)
+        total_closed = len(closed)
+        details.append({
+            "strategyId": sid,
+            "symbol": result.get("symbol", SYMBOL),
+            "realizedPnl": result.get("realized_pnl", 0.0),
+            "totalTrades": stats.get("total_trades", 0),
+            "winRate": (wins / total_closed * 100) if total_closed else 0.0,
+            "openLots": len(result.get("open_lots", {})),
+            "closedTrades": total_closed,
+        })
+    return details
+
+
+def multi_strategy_result(state: dict, strategy_id: str) -> Optional[dict]:
+    """获取单个策略的运行结果。"""
+    results = state.get("multi_results", {})
+    return results.get(strategy_id)
 
 
 # --------------------------------------------------------------------------

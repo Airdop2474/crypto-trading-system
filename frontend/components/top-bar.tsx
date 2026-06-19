@@ -1,12 +1,11 @@
 "use client"
 
-import useSWR from "swr"
 import { usePathname } from "next/navigation"
 import { Bell, RadioTower } from "lucide-react"
-import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { fmtNum, fmtPct } from "@/lib/format"
 import { Button } from "@/components/ui/button"
+import { useTickersWs } from "@/hooks/use-tickers-ws"
 
 const titles: Record<string, string> = {
   "/": "总览仪表盘",
@@ -19,17 +18,24 @@ const titles: Record<string, string> = {
 
 export function TopBar() {
   const pathname = usePathname()
-  const { data: tickers } = useSWR("tickers", api.getTickers, {
-    refreshInterval: 5000,
-  })
+  const { tickers, isConnected, isFallback } = useTickersWs()
 
   return (
     <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-border bg-background/80 px-4 backdrop-blur md:px-6">
       <div className="flex items-center gap-4">
         <h1 className="text-sm font-semibold md:text-base">{titles[pathname] ?? "QuantDesk"}</h1>
-        <span className="hidden items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-2.5 py-1 text-[11px] font-medium text-success sm:flex">
+        <span
+          className={cn(
+            "hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium sm:flex",
+            isConnected
+              ? "border-success/30 bg-success/10 text-success"
+              : isFallback
+                ? "border-warning/30 bg-warning/10 text-warning"
+                : "border-destructive/30 bg-destructive/10 text-destructive",
+          )}
+        >
           <RadioTower className="size-3" />
-          实时连接
+          {isConnected ? "实时连接" : isFallback ? "REST 回退" : "断线中"}
         </span>
       </div>
 

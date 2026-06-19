@@ -29,7 +29,14 @@ def client():
 
 
 def test_health(client):
-    assert client.get("/health").json() == {"status": "ok"}
+    d = client.get("/health").json()
+    assert d["status"] == "ok"
+    # WebSocket 状态字段
+    assert "ws_connected" in d
+    assert "ws_clients" in d
+    # 缓存状态字段
+    assert "cache_backend" in d
+    assert "cache_available" in d
 
 
 def test_account_summary_shape(client):

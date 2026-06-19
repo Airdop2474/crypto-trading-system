@@ -7,6 +7,7 @@
 """
 
 import time
+import threading
 from typing import List, Optional
 
 import ccxt
@@ -18,6 +19,7 @@ WATCH_SYMBOLS = [
 
 _CACHE_TTL = 15.0  # 秒
 _exchange = None
+_exchange_lock = threading.Lock()
 _cache: Optional[List[dict]] = None
 _cache_ts = 0.0
 
@@ -25,12 +27,14 @@ _cache_ts = 0.0
 def _client():
     global _exchange
     if _exchange is None:
-        # 公共行情走主网（真实价格），不需要密钥
-        _exchange = ccxt.binance({
-            "enableRateLimit": True,
-            "timeout": 20000,  # 冷启动 load_markets 较慢，放宽避免首次回退
-            "options": {"defaultType": "spot"},
-        })
+        with _exchange_lock:
+            if _exchange is None:
+                # 公共行情走主网（真实价格），不需要密钥
+                _exchange = ccxt.binance({
+                    "enableRateLimit": True,
+                    "timeout": 20000,  # 冷启动 load_markets 较慢，放宽避免首次回退
+                    "options": {"defaultType": "spot"},
+                })
     return _exchange
 
 

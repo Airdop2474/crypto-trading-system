@@ -54,6 +54,9 @@ class Config:
         self.BINANCE_SECRET = os.getenv("BINANCE_SECRET", "")
         self.BINANCE_TESTNET = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
 
+        # API Token for frontend auth
+        self.API_TOKEN = os.getenv("API_TOKEN", "")
+
         # ============================================
         # 实盘控制（重要！）
         # ============================================

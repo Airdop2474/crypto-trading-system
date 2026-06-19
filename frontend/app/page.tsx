@@ -2,6 +2,7 @@ import { AccountCards } from "@/components/overview/account-cards"
 import { ActiveStrategies } from "@/components/overview/active-strategies"
 import { EquityChart } from "@/components/overview/equity-chart"
 import { MarketWatch } from "@/components/overview/market-watch"
+import { MultiStrategyPanel } from "@/components/overview/multi-strategy-panel"
 
 export default function OverviewPage() {
   return (
@@ -16,6 +17,7 @@ export default function OverviewPage() {
       </div>
 
       <ActiveStrategies />
+      <MultiStrategyPanel />
     </div>
   )
 }
