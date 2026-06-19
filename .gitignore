@@ -144,3 +144,14 @@ logs/
 data/paper_daemon_state.json
 data/paper_daemon_state.json.*
 data/reports/paper/daily/
+data/_archive_*/
+
+# 误创建/临时产物
+nul
+tmp_diff_*.txt
+
+# 前端构建产物
+frontend/tsconfig.tsbuildinfo
+
+# Qoder IDE 本地配置
+.qoder/
