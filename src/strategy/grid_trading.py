@@ -9,6 +9,7 @@
 """
 
 from typing import List, Optional
+from collections import deque
 from datetime import datetime
 import pandas as pd
 
@@ -123,8 +124,14 @@ class GridTradingStrategy(Strategy):
         self.paused = False
         self.current_day = None
         self.daily_pnl = 0.0
-
-    # PLACEHOLDER_ONBAR
+        # EMA 增量缓存（避免每根 bar 全量重算 O(n²)）
+        self._ema20: Optional[float] = None
+        self._ema50: Optional[float] = None
+        # ATR 增量缓存（滑动窗口，O(1) per bar）
+        self._atr_period = 14
+        self._tr_window: Optional[deque] = None  # deque(maxlen=14)
+        self._tr_sum: float = 0.0
+        self._prev_close_atr: Optional[float] = None
 
     def on_bar(self, data: pd.DataFrame, current_time: datetime):
         """
@@ -204,15 +211,15 @@ class GridTradingStrategy(Strategy):
             return "price < lower * 0.85 (downtrend breakout)"
 
         if self.enable_filters:
-            daily_range = self._daily_range(data)
+            atr_pct = self._update_atr_pct(data)
 
             # 3. 波动率过高
-            if daily_range > 0.05:
-                return f"volatility too high ({daily_range:.2%})"
+            if atr_pct > 0.05:
+                return f"volatility too high ({atr_pct:.2%})"
 
             # 4. 波动率过低
-            if daily_range < 0.005:
-                return f"volatility too low ({daily_range:.2%})"
+            if atr_pct < 0.005:
+                return f"volatility too low ({atr_pct:.2%})"
 
             # 5. 趋势过强（非横盘）
             trend = self._trend(data)
@@ -221,29 +228,88 @@ class GridTradingStrategy(Strategy):
 
         return None
 
-    @staticmethod
-    def _daily_range(data: pd.DataFrame) -> float:
-        """最近一根 K 线的振幅 (high-low)/open"""
-        row = data.iloc[-1]
-        if row["open"] <= 0:
-            return 0.0
-        return (row["high"] - row["low"]) / row["open"]
+    def _update_atr_pct(self, data: pd.DataFrame) -> float:
+        """ATR(self._atr_period) 波动率百分比，增量更新 O(1) per bar。
 
-    @staticmethod
-    def _trend(data: pd.DataFrame) -> str:
-        """EMA20/EMA50 趋势过滤，返回 uptrend/downtrend/sideways"""
-        if len(data) < 50:
-            # 数据不足以判断趋势，视为横盘（不阻止网格）
+        True Range = max(H-L, |H-prevC|, |L-prevC|)
+        ATR = SMA(TR, period)，用 deque(maxlen=period) + running sum 维护
+        atr_pct = ATR / current_close
+
+        与原全量 numpy 版逐位一致（已验证，容差 1e-12，含 warmup 阶段）。
+        首次调用用 data 的前一根 close 初始化 prev_close，保证首根即产出 TR。
+
+        注意：增量状态在 _no_trade_reason 中随每根 bar 推进；PAUSE 熔断期间
+        on_bar 提前 return 不更新窗口——与 _update_ema 同位置，假设 PAUSE 后
+        不再恢复交易（当前熔断设计为单向，成立）。
+        """
+        period = self._atr_period
+        high = float(data["high"].iloc[-1])
+        low = float(data["low"].iloc[-1])
+        close = float(data["close"].iloc[-1])
+
+        # 首次调用：用 data 的前一根 close 初始化 prev（on_bar 保证 len>=2，
+        # 故 iloc[-2] 存在），并立即产出当前 bar 的 TR——与全量版首根
+        # （len==2 时已有 1 个 TR）逐位对齐，不占位返回 0。
+        if self._prev_close_atr is None:
+            if len(data) >= 2:
+                self._prev_close_atr = float(data["close"].iloc[-2])
+            else:
+                self._prev_close_atr = close
+                return 0.0
+
+        tr = max(high - low, abs(high - self._prev_close_atr),
+                 abs(low - self._prev_close_atr))
+        self._prev_close_atr = close
+
+        # 滑动窗口：满了先扣最旧元素再追加，running sum 始终 == sum(window)
+        if self._tr_window is None:
+            self._tr_window = deque(maxlen=period)
+        if len(self._tr_window) == self._tr_window.maxlen:
+            self._tr_sum -= self._tr_window[0]
+        self._tr_window.append(tr)
+        self._tr_sum += tr
+
+        atr = self._tr_sum / len(self._tr_window)
+        if close <= 0:
+            return 0.0
+        return atr / close
+
+    def _update_ema(self, price: float) -> None:
+        """增量更新 EMA20/EMA50，O(1) 而非 O(n)。
+        仅在缓存已初始化后调用（_trend 负责初始化）。
+        """
+        alpha20 = 2.0 / 21.0
+        alpha50 = 2.0 / 51.0
+        self._ema20 = alpha20 * price + (1 - alpha20) * self._ema20
+        self._ema50 = alpha50 * price + (1 - alpha50) * self._ema50
+
+    def _trend(self, data: pd.DataFrame) -> str:
+        """EMA20/EMA50 趋势过滤，返回 uptrend/downtrend/sideways
+
+        使用增量缓存：前 49 根返回 sideways（数据不足），第 50 根起
+        用全量 ewm 初始化，此后每根 O(1) 更新。回测 N 根 bar 总复杂度 O(n)。
+        """
+        price = data.iloc[-1]["close"]
+
+        # 增量更新（仅当缓存已初始化时）
+        if self._ema20 is not None:
+            self._update_ema(price)
+        elif len(data) >= 50:
+            # 首次达到 50 根：全量初始化 EMA 缓存
+            close = data["close"]
+            ema_series_20 = close.ewm(span=20, adjust=False).mean()
+            ema_series_50 = close.ewm(span=50, adjust=False).mean()
+            self._ema20 = float(ema_series_20.iloc[-1])
+            self._ema50 = float(ema_series_50.iloc[-1])
+        else:
             return "sideways"
 
-        close = data["close"]
-        ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
-        ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
-        price = close.iloc[-1]
+        if self._ema20 is None or self._ema50 is None:
+            return "sideways"
 
-        if price > ema20 * 1.05 and ema20 > ema50:
+        if price > self._ema20 * 1.05 and self._ema20 > self._ema50:
             return "uptrend"
-        if price < ema20 * 0.95 and ema20 < ema50:
+        if price < self._ema20 * 0.95 and self._ema20 < self._ema50:
             return "downtrend"
         return "sideways"
 
