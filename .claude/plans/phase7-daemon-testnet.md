@@ -1,7 +1,6 @@
 # Phase 7 — 守护进程接 testnet（真实执行）
 
-> 状态：**Stage 0-4 代码全部完成（2026-06-17，提交 `2d22db9`/`37eec03`/`3cdca6a`/`283fc80`/`e7f2e75`/`4e5ac52`/`1ef1132`，已推送，基线 313 passed）**。
-> **唯一剩余=真机 testnet 验证（人工，见文末成功标准）**——本会话环境无网未跑。
+> 状态：**Stage 0-4 代码全部完成 + 真机 testnet 验证全部 PASS（2026-06-17，提交 `2d22db9`/`37eec03`/`3cdca6a`/`283fc80`/`e7f2e75`/`4e5ac52`/`1ef1132`，已推送，基线 313 passed；真机验证 Task R 五项核对全 PASS，见文末成功标准）**。
 > 前置已就绪：ExchangeBroker（testnet 实测打通，查余额/下单/查回/撤单全 PASS，提交 `7b506a3`）、
 > `testnet_smoke.py`、`.env` 已配 testnet key。
 
@@ -108,7 +107,13 @@ runner 硬耦合点（`src/execution/paper_trading_runner.py`）：
 - **ExchangeBroker 现状**：place_order 用市价时 price 传 None 已支持；查单/撤单 symbol 已修（`7b506a3`）。
 
 ## 成功标准（整体）
-1. ⏳ **人工待验**：`python scripts/run_paper_trading_daemon.py --broker exchange --timeframe 1m --days 1 --min-trade-interval 30 --no-db` 能在 testnet 真实下单、成交、对账、出日报；核对 ① testnet 端订单存在 ② 余额/持仓按 delta 对得上账本 ③ 超单笔上限/日订单数被拒并计 errors ④ 制造漂移触发熔断 ⑤ `python scripts/check_daemon_health.py` 卡单/高错误率 WARN。
+1. ✅ **真机验证（Task R，2026-06-17 完成）**：`daemon --broker exchange` 在 Binance
+   testnet 真实下单、成交、对账、出日报；五项核对全 PASS——① 3 笔真实市价单
+   (oid 5821092/94/95) testnet 端 status=closed、BTC 持仓 delta==local_net（DRIFT=0.0）；
+   ③ 护栏拒单 errors=3/ledger=0 且 testnet 端 0 漂移；④ 漂移熔断 ACTIVE→STOPPED；
+   ⑤ 健康巡检卡单/高错误率 WARN。验证用 `--replay generate`（合成数据）+ scratch 目录
+   加速跑出真实下单链路，等价覆盖原 1m live 命令的 5 项核对；零代码改动，testnet
+   沙盒因 ① 真买入 0.06006 BTC（测试币）。详见 `.claude/dev-log/2026-06-17.md` Task R。
 2. ✅ paper 路径零回归：全测试 313 + `test_resume_equals_continuous` 逐位一致全绿。
 3. ✅ 崩溃重启从交易所对账续跑（`_unconfirmed` 仍挂单→拒绝静默续跑）；检查点注释写明 exchange 非逐位一致。
 4. ✅ 安全护栏：非 testnet 拒启（3b）；订单级风控参数（单笔/间隔/日订单数）生效（4a）。
