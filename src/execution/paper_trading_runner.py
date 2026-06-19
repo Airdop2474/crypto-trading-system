@@ -122,12 +122,16 @@ class PaperTradingRunner:
     def process_bar(self, bar, historical, strategy, pending_signal):
         """处理单根 bar（批量与实时共用）：
 
-        1. 先按本 bar 开盘价执行上一根挂起的信号（无前视：t-1 信号 / t 开盘成交）
+        0. 先检查 Broker 的限价挂单（用本 bar 的 high/low 撮合）
+        1. 再按本 bar 开盘价执行上一根挂起的信号（无前视：t-1 信号 / t 开盘成交）
         2. 用含本 bar 的历史计算新信号，作为下一根的 pending 返回
         3. 用本 bar 收盘价采集一次指标快照
 
         参数 pending_signal 为上一次调用返回的信号（首根传 None）。
         """
+        # 限价单撮合：用本 bar 的 high/low 检查挂单队列
+        self._check_pending_limit_orders(bar, strategy)
+
         if pending_signal is not None:
             self._execute_signal(
                 pending_signal, bar["open"], bar["timestamp"], strategy
@@ -144,6 +148,32 @@ class PaperTradingRunner:
             )
 
         return signal
+
+    def _check_pending_limit_orders(self, bar, strategy) -> None:
+        """检查并撮合挂单队列中的限价单"""
+        if not hasattr(self.broker, 'check_pending_orders'):
+            return
+        if not self.broker.pending_orders:
+            return
+
+        results = self.broker.check_pending_orders(
+            bar_high=bar["high"],
+            bar_low=bar["low"],
+            timestamp=bar["timestamp"],
+        )
+        # 对每笔成交更新 lots 记账并通知策略
+        for result in results:
+            # 从 broker 的 orders 记录找到对应的 side 和 tag
+            order_record = self.broker.get_order_status(result.order_id)
+            if order_record is None:
+                continue
+            side = order_record["side"]
+            # 查找 pending_limit 中标记的 tag
+            tag = order_record.get("_tag", self.LEGACY_TAG)
+            if side == "buy":
+                self._record_buy_fill(tag, result, strategy, bar["timestamp"])
+            elif side == "sell":
+                self._record_sell_fill(tag, result, strategy, bar["timestamp"])
 
     def _current_state_result(self) -> Dict:
         """构造运行中状态快照（MetricsCollector.snapshot 所需的 runner_result 形态）。"""
@@ -172,25 +202,66 @@ class PaperTradingRunner:
     def _execute_strategy_order(
         self, order: StrategyOrder, exec_price, exec_time, strategy
     ) -> None:
-        """处理多仓位 strategy.Order（按 tag）"""
+        """处理多仓位 strategy.Order（按 tag），支持限价单"""
+        limit_price = getattr(order, 'limit_price', None)
+
         if order.side == "BUY":
             amount = self._fraction_amount(order.fraction, exec_price)
-            self._buy(order.tag, amount, exec_price, exec_time, strategy)
+            self._buy(order.tag, amount, exec_price, exec_time, strategy,
+                      limit_price=limit_price)
         elif order.side == "SELL":
             lot = self.lots.get(order.tag)
             if lot and lot["amount"] > 0:
-                self._sell(order.tag, lot["amount"], exec_price, exec_time, strategy)
+                self._sell(order.tag, lot["amount"], exec_price, exec_time, strategy,
+                           limit_price=limit_price)
 
-    def _buy(self, tag, amount, price, time, strategy) -> None:
-        """下买单；成交后记录该 tag 的数量与成本价（加权平均）"""
+    def _buy(self, tag, amount, price, time, strategy, limit_price=None) -> None:
+        """下买单；成交后记录该 tag 的数量与成本价（加权平均）
+
+        参数 limit_price: 如果非 None，则以限价单方式下单。
+        """
         if amount <= 0:
             return
-        result = self.broker.place_order(
-            BrokerOrder(self.symbol, "buy", amount, price, "market"), timestamp=time
+        order_type = "limit" if limit_price is not None else "market"
+        broker_order = BrokerOrder(
+            self.symbol, "buy", amount, price, order_type
         )
-        if result.status != "filled":
-            return
+        if limit_price is not None:
+            broker_order.limit_price = limit_price
+        result = self.broker.place_order(broker_order, timestamp=time)
+        if result.status == "filled":
+            self._record_buy_fill(tag, result, strategy, time)
+        elif result.status == "pending":
+            # 限价挂单中，在 broker 的订单记录中标记 tag
+            order_record = self.broker.get_order_status(result.order_id)
+            if order_record is not None:
+                order_record["_tag"] = tag
 
+    def _sell(self, tag, amount, price, time, strategy, limit_price=None) -> None:
+        """下卖单；成交后算 profit（同回测引擎公式）并清除记账
+
+        参数 limit_price: 如果非 None，则以限价单方式下单。
+        """
+        if amount <= 0:
+            return
+        lot = self.lots.get(tag)
+        order_type = "limit" if limit_price is not None else "market"
+        broker_order = BrokerOrder(
+            self.symbol, "sell", amount, price, order_type
+        )
+        if limit_price is not None:
+            broker_order.limit_price = limit_price
+        result = self.broker.place_order(broker_order, timestamp=time)
+        if result.status == "filled":
+            self._record_sell_fill(tag, result, strategy, time)
+        elif result.status == "pending":
+            # 限价挂单中，标记 tag 并保留 lot（不立即清除）
+            order_record = self.broker.get_order_status(result.order_id)
+            if order_record is not None:
+                order_record["_tag"] = tag
+
+    def _record_buy_fill(self, tag, result, strategy, time) -> None:
+        """记录买单成交到 lots 记账"""
         existing = self.lots.get(tag)
         if existing:
             total = existing["amount"] + result.filled_amount
@@ -206,17 +277,9 @@ class PaperTradingRunner:
             }
         self._notify_fill(strategy, result, "buy", tag, time, profit=None)
 
-    def _sell(self, tag, amount, price, time, strategy) -> None:
-        """下卖单；成交后算 profit（同回测引擎公式）并清除记账"""
-        if amount <= 0:
-            return
+    def _record_sell_fill(self, tag, result, strategy, time) -> None:
+        """记录卖单成交，计算 profit 并清除 lot"""
         lot = self.lots.get(tag)
-        result = self.broker.place_order(
-            BrokerOrder(self.symbol, "sell", amount, price, "market"), timestamp=time
-        )
-        if result.status != "filled":
-            return
-
         profit = None
         if lot is not None:
             qty = result.filled_amount
@@ -225,7 +288,6 @@ class PaperTradingRunner:
             profit = proceeds - cost_basis
             self.realized_pnl += profit
             self.closed_trades.append({"tag": tag, "time": time, "profit": profit})
-
         self.lots.pop(tag, None)
         self._notify_fill(strategy, result, "sell", tag, time, profit=profit)
 

@@ -25,10 +25,12 @@ class Order:
         side: 'BUY' 或 'SELL'
         tag: 仓位标签（如网格索引），用于配对买入和卖出
         fraction: 占初始资金的比例（仅 BUY 使用，0-1）
+        limit_price: 限价单价格（None 表示市价单，按 next-bar-open 成交）
     """
     side: str
     tag: object
     fraction: float = 0.0
+    limit_price: Optional[float] = None
 
 
 class Strategy(ABC):

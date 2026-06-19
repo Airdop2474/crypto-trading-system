@@ -47,6 +47,8 @@ class PaperBroker(BrokerInterface):
         self.positions: Dict[str, float] = {}
         self.orders: List[dict] = []
         self.order_id_counter = 0
+        # 限价单挂单队列：待撮合的订单
+        self.pending_orders: List[dict] = []
 
         logger.info(
             f"PaperBroker initialized: balance={initial_balance}, "
@@ -73,12 +75,17 @@ class PaperBroker(BrokerInterface):
 
     def place_order(self, order: Order, timestamp=None) -> OrderResult:
         """
-        下单（简化：价格触及即按下单价 + 滑点立即成交）
+        下单：支持市价单（立即成交）和限价单（挂单等待撮合）
 
-        流程：参数校验 -> 风控 -> 资金/持仓校验 -> 计算成本 -> 更新状态 -> 记录
+        市价单（order_type='market' 或 limit_price=None）：
+            按 order.price ± 滑点立即成交
 
-        timestamp: 成交时间。回测/纸面运行应传入当根 bar 时间，使订单时间线
-                   可复盘；省略则取 datetime.now()（实时场景）。
+        限价单（order_type='limit' 且 limit_price != None）：
+            - BUY limit_price=P：当市场价格 <= P 时按 P 成交
+            - SELL limit_price=P：当市场价格 >= P 时按 P 成交
+            如果不满足条件，订单进入 pending_orders 队列等待
+
+        timestamp: 成交时间。回测/纸面运行应传入当根 bar 时间。
         """
         if order.amount <= 0:
             return OrderResult(None, "rejected", reason="下单数量必须为正")
@@ -90,10 +97,36 @@ class PaperBroker(BrokerInterface):
         if order.side == "buy" and not self._check_risk_limits(order):
             return OrderResult(None, "rejected", reason="风控拒绝：超过仓位限制")
 
+        # 限价单：检查是否可立即成交
+        limit_price = getattr(order, 'limit_price', None)
+        is_limit = order.order_type == "limit" and limit_price is not None
+
+        if is_limit:
+            # BUY limit: 当前价 <= limit_price 才能立即成交
+            # SELL limit: 当前价 >= limit_price 才能立即成交
+            can_fill_now = False
+            if order.side == "buy" and order.price <= limit_price:
+                can_fill_now = True
+            elif order.side == "sell" and order.price >= limit_price:
+                can_fill_now = True
+
+            if not can_fill_now:
+                # 挂入 pending 队列
+                return self._place_pending_limit(order, timestamp)
+
+        # 市价单 或 可立即成交的限价单 → 立即成交
+        return self._fill_order(order, order.price, timestamp)
+
+    def _fill_order(self, order: Order, exec_price: float, timestamp) -> OrderResult:
+        """立即成交逻辑（从原 place_order 提取）
+
+        限价单按精确限价成交（无额外滑点），市价单施加滑点。
+        """
         slippage_pct = self.slippage.get(order.symbol, 0.0005)
+        is_limit = order.order_type == "limit" and getattr(order, 'limit_price', None) is not None
 
         if order.side == "buy":
-            actual_price = order.price * (1 + slippage_pct)
+            actual_price = exec_price if is_limit else exec_price * (1 + slippage_pct)
             cost = order.amount * actual_price * (1 + self.commission)
             if cost > self.balance:
                 return OrderResult(
@@ -111,13 +144,13 @@ class PaperBroker(BrokerInterface):
                     None, "rejected",
                     reason=f"持仓不足：需要 {order.amount}，持仓 {current}",
                 )
-            actual_price = order.price * (1 - slippage_pct)
+            actual_price = exec_price if is_limit else exec_price * (1 - slippage_pct)
             proceeds = order.amount * actual_price * (1 - self.commission)
             self.balance += proceeds
             self.positions[order.symbol] = current - order.amount
 
         commission_paid = order.amount * actual_price * self.commission
-        slippage_paid = order.amount * abs(actual_price - order.price)
+        slippage_paid = 0.0 if is_limit else order.amount * abs(actual_price - exec_price)
 
         order_id = self._generate_order_id()
         self.orders.append({
@@ -125,8 +158,9 @@ class PaperBroker(BrokerInterface):
             "timestamp": timestamp if timestamp is not None else datetime.now(),
             "symbol": order.symbol,
             "side": order.side,
+            "order_type": order.order_type,
             "amount": order.amount,
-            "price": order.price,
+            "price": exec_price,
             "actual_price": actual_price,
             "commission": commission_paid,
             "slippage": slippage_paid,
@@ -147,8 +181,121 @@ class PaperBroker(BrokerInterface):
             filled_amount=order.amount,
         )
 
+    def _place_pending_limit(self, order: Order, timestamp) -> OrderResult:
+        """将限价单放入挂单队列"""
+        order_id = self._generate_order_id()
+        limit_price = order.limit_price
+
+        # 买入限价单需预留资金
+        if order.side == "buy":
+            reserved = order.amount * limit_price * (1 + self.commission)
+            if reserved > self.balance:
+                return OrderResult(
+                    None, "rejected",
+                    reason=f"资金不足：需预留 {reserved:.2f}，余额 {self.balance:.2f}",
+                )
+            self.balance -= reserved  # 冻结资金
+
+        # 卖出限价单需检查持仓
+        elif order.side == "sell":
+            current = self.get_position(order.symbol)
+            if order.amount > current:
+                return OrderResult(
+                    None, "rejected",
+                    reason=f"持仓不足：需要 {order.amount}，持仓 {current}",
+                )
+            # 冻结持仓（减少可用）
+            self.positions[order.symbol] = current - order.amount
+
+        self.pending_orders.append({
+            "order_id": order_id,
+            "order": order,
+            "placed_at": timestamp if timestamp is not None else datetime.now(),
+        })
+
+        logger.debug(
+            f"LIMIT {order.side.upper()} {order.amount} {order.symbol} "
+            f"@ {limit_price:.2f} -> {order_id} (pending)"
+        )
+
+        return OrderResult(
+            order_id=order_id,
+            status="pending",
+            filled_price=None,
+            filled_amount=0.0,
+        )
+
+    def check_pending_orders(
+        self,
+        bar_high: float,
+        bar_low: float,
+        timestamp=None,
+    ) -> List[OrderResult]:
+        """检查挂单队列，撮合满足条件的限价单。
+
+        在每根 bar 处理时调用，用 bar 的 high/low 判断是否触及限价：
+        - BUY limit P：bar_low <= P 时按 P 成交（价格跌到了限价）
+        - SELL limit P：bar_high >= P 时按 P 成交（价格涨到了限价）
+
+        参数：
+            bar_high: 当前 bar 最高价
+            bar_low: 当前 bar 最低价
+            timestamp: 撮合时间
+
+        返回：
+            本 bar 成交的 OrderResult 列表
+        """
+        filled_results = []
+        remaining = []
+
+        for pending in self.pending_orders:
+            order = pending["order"]
+            limit_price = order.limit_price
+            filled = False
+
+            if order.side == "buy" and bar_low <= limit_price:
+                # 解冻资金（_fill_order 会重新扣除实际成本）
+                reserved = order.amount * limit_price * (1 + self.commission)
+                self.balance += reserved
+                result = self._fill_order(order, limit_price, timestamp)
+                filled = True
+
+            elif order.side == "sell" and bar_high >= limit_price:
+                # 解冻持仓（_fill_order 会重新扣除）
+                current = self.positions.get(order.symbol, 0.0)
+                self.positions[order.symbol] = current + order.amount
+                result = self._fill_order(order, limit_price, timestamp)
+                filled = True
+
+            if filled:
+                if result.status == "filled":
+                    filled_results.append(result)
+                # 如果成交失败（资金/持仓不足），挂单作废
+            else:
+                remaining.append(pending)
+
+        self.pending_orders = remaining
+        return filled_results
+
     def cancel_order(self, order_id: str) -> bool:
-        """撤单：简化版立即成交，无挂单可撤"""
+        """撤单：取消挂单队列中的限价单，解冻资金/持仓"""
+        for i, pending in enumerate(self.pending_orders):
+            if pending["order_id"] == order_id:
+                order = pending["order"]
+                limit_price = order.limit_price
+
+                # 解冻
+                if order.side == "buy":
+                    reserved = order.amount * limit_price * (1 + self.commission)
+                    self.balance += reserved
+                elif order.side == "sell":
+                    current = self.positions.get(order.symbol, 0.0)
+                    self.positions[order.symbol] = current + order.amount
+
+                self.pending_orders.pop(i)
+                logger.debug(f"CANCEL {order_id}")
+                return True
+
         return False
 
     def get_order_status(self, order_id: str) -> Optional[dict]:
@@ -160,7 +307,13 @@ class PaperBroker(BrokerInterface):
     # ---- 风控 ----
 
     def _check_risk_limits(self, order: Order) -> bool:
-        """单笔 <= max_position_per_trade，总仓位 <= max_total_position"""
+        """单笔 <= max_position_per_trade，总仓位 <= max_total_position
+
+        注意：当前实现假设单币种交易——sum(self.positions.values()) 把所有币种
+        数量相加、统一乘 order.price。多币种场景下此计算不正确（不同币种不可
+        直接相加、价格不可混用）。本项目当前只交易单币种（BTC/USDT），若将来
+        扩展多币种需改为按各币种当前价格分别折算。
+        """
         total_value = self.balance + sum(
             amt * order.price for amt in self.positions.values()
         )
