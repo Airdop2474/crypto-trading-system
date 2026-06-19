@@ -67,6 +67,7 @@ pytest-mock==3.12.0           # Mock 工具
 # Web 框架（Phase 6：前端 API 后端，src/api）
 fastapi==0.133.1              # API 框架
 uvicorn==0.41.0              # ASGI 服务器
+websockets>=12.0              # Binance WS 实时行情
 # streamlit==1.30.0           # 监控面板
 
 # # 监控

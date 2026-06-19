@@ -1,18 +1,26 @@
 "use client"
 
-import useSWR from "swr"
-import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { fmtCompact, fmtNum, fmtPct } from "@/lib/format"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useTickersWs } from "@/hooks/use-tickers-ws"
 
 export function MarketWatch() {
-  const { data } = useSWR("tickers", api.getTickers, { refreshInterval: 5000 })
+  const { tickers: data, isConnected } = useTickersWs()
 
   return (
     <Card className="h-full">
       <CardHeader>
-        <CardTitle className="text-sm font-medium">市场行情</CardTitle>
+        <CardTitle className="text-sm font-medium">
+          市场行情
+          <span
+            className={cn(
+              "ml-2 inline-block size-2 rounded-full",
+              isConnected ? "bg-success" : "bg-destructive",
+            )}
+            title={isConnected ? "WebSocket 已连接" : "WebSocket 断线"}
+          />
+        </CardTitle>
       </CardHeader>
       <CardContent className="px-0">
         <div className="flex flex-col">
