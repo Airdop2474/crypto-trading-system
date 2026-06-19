@@ -88,7 +88,9 @@ def assess_health(state, report_dates, checkpoint_age_hours,
     # 风控状态
     rk = state.get("risk", {})
     rstate = rk.get("state")
-    extra = f"连亏{rk.get('consecutive_losses')}/API失败{rk.get('api_failures')}"
+    extra = (f"连亏{rk.get('consecutive_losses')}"
+             f"/API失败{rk.get('api_failures')}"
+             f"/对账失败{rk.get('reconcile_failures', 0)}")
     if rstate == STOPPED:
         checks.append(_fail("风控状态", "STOPPED（紧急停止，需人工 reset）"))
     elif rstate == PAUSED:

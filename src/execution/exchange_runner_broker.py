@@ -106,6 +106,7 @@ class ExchangeRunnerBroker:
             "timestamp": timestamp,
             "symbol": self.symbol,
             "side": side,
+            "order_type": "market",
             "amount": res.filled_amount,
             "price": res.filled_price,
             "actual_price": res.filled_price,  # 真实成交价已含滑点
@@ -123,11 +124,25 @@ class ExchangeRunnerBroker:
         return self.broker.get_order_status(order_id)
 
     def reconcile_unconfirmed(self) -> List[str]:
-        """重启对账：查每个待确认订单，已了结的清掉，仍挂单的返回（调用方拒绝静默续跑）。"""
+        """重启对账：查每个待确认订单，已了结的清掉，仍挂单的返回（调用方拒绝静默续跑）。
+
+        查询失败（如重启后 ExchangeBroker._order_symbols 丢失导致 fetch_order 缺
+        symbol）时保守视为仍挂单——宁可拒绝续跑要求人工处理，不可静默丢失未确认订单。
+        """
         still_open: List[str] = []
         for oid in list(self._unconfirmed):
             status = self.get_order_status(oid)
-            if status and status.get("status") in ("open", "pending"):
+            if status is None:
+                # 查询失败：用已知 symbol 直接重试（绕过 _order_symbols 缺失问题）
+                try:
+                    status = self.broker.exchange.fetch_order(oid, self.symbol)
+                except Exception:
+                    pass
+            if status is None:
+                # 仍查不到 → 保守视为仍挂单（拒绝静默续跑）
+                logger.warning(f"未确认订单 {oid} 查询失败，保守视为仍挂单")
+                still_open.append(oid)
+            elif status.get("status") in ("open", "pending"):
                 still_open.append(oid)
         self._unconfirmed = still_open
         return still_open
@@ -139,14 +154,22 @@ class ExchangeRunnerBroker:
 
     def get_statistics(self) -> dict:
         total_commission = sum(o["commission"] for o in self._ledger)
+        try:
+            current_balance = self.get_balance()
+            positions = {self.symbol: self.get_position(self.symbol)}
+        except Exception as e:
+            # testnet 闪断等瞬态错误：回退到本地账本快照，不崩溃
+            logger.warning(f"get_statistics 查询失败，回退本地：{type(e).__name__}: {e}")
+            current_balance = self.initial_balance
+            positions = {}
         return {
             "initial_balance": self.initial_balance,
-            "current_balance": self.get_balance(),
+            "current_balance": current_balance,
             "total_trades": len(self._ledger),
             "total_commission": total_commission,
             "total_slippage": 0.0,  # 市价真实成交价已含滑点，不单列
             "total_cost": total_commission,
-            "positions": {self.symbol: self.get_position(self.symbol)},
+            "positions": positions,
         }
 
     # ---- 检查点（exchange 模式非逐位一致，仅记账本 + 基线 + 待确认）----

@@ -25,6 +25,7 @@ Paper Trading 连续运行守护进程（LIVE_TRADING_CHECKLIST §1）
 import argparse
 import glob
 import json
+import signal
 import sys
 import time
 from datetime import date
@@ -45,6 +46,7 @@ from src.execution.order_guard import OrderRateGuard
 from src.execution.paper_report import PaperTradingReportGenerator
 from src.execution.paper_trading_runner import ExecutionConfig
 from src.monitor import MetricsCollector, MetricsWriter
+from src.monitor.alert_manager import AlertManager, CRITICAL, WARNING
 from src.strategy.base import Order as StrategyOrder
 from src.strategy.grid_trading import GridTradingStrategy
 from src.utils.logger import logger, setup_logger
@@ -61,7 +63,8 @@ def _ser_pending(p):
         return {"k": "s", "v": p}
     if isinstance(p, list):
         return {"k": "o", "v": [{"side": o.side, "tag": o.tag,
-                                 "fraction": o.fraction} for o in p]}
+                                 "fraction": o.fraction,
+                                 "limit_price": getattr(o, 'limit_price', None)} for o in p]}
     return None
 
 
@@ -70,7 +73,8 @@ def _deser_pending(d):
         return None
     if d["k"] == "s":
         return d["v"]
-    return [StrategyOrder(side=x["side"], tag=x["tag"], fraction=x["fraction"])
+    return [StrategyOrder(side=x["side"], tag=x["tag"], fraction=x["fraction"],
+                          limit_price=x.get("limit_price"))
             for x in d["v"]]
 
 
@@ -91,11 +95,18 @@ class PaperTradingDaemon:
         self.risk = None
         self.collector = MetricsCollector()
         self.writer = None
+        self.alert_mgr = AlertManager()
 
         self.pending = None
         self.day_count = 0
         self.current_day = None
         self.last_bar_ts = None
+
+        # 对账失败独立计数器——不与 risk.api_failures 共享，避免被
+        # _run_live 主循环的 record_api_success() 重置而永远无法累积到阈值
+        self._reconcile_failures = 0
+        self._max_reconcile_failures = 3
+        self._prev_close = None  # 前一根收盘价（闪崩保护用）
 
     # ---- 组件装配（区间来自预热窗口；与 run_paper_trading 一致）----
     def _build(self, lower, upper):
@@ -211,6 +222,10 @@ class PaperTradingDaemon:
                 "daily_pnl": self.risk.daily_pnl,
                 "consecutive_losses": self.risk.consecutive_losses,
                 "api_failures": self.risk.api_failures,
+                "cumulative_pnl": self.risk.cumulative_pnl,
+                "peak_equity": self.risk.peak_equity,
+                "reconcile_failures": self._reconcile_failures,
+                "prev_close": self._prev_close,
             },
             "pending": _ser_pending(self.pending),
         }
@@ -259,6 +274,10 @@ class PaperTradingDaemon:
         self.risk.daily_pnl = rk["daily_pnl"]
         self.risk.consecutive_losses = rk["consecutive_losses"]
         self.risk.api_failures = rk["api_failures"]
+        self.risk.cumulative_pnl = rk.get("cumulative_pnl", 0.0)
+        self.risk.peak_equity = rk.get("peak_equity", self.risk.capital_base)
+        self._reconcile_failures = rk.get("reconcile_failures", 0)
+        self._prev_close = rk.get("prev_close")
 
         self.pending = _deser_pending(st["pending"])
         logger.info(f"恢复检查点：day_count={self.day_count}, "
@@ -277,7 +296,19 @@ class PaperTradingDaemon:
     # ---- 持仓漂移对账（exchange 模式）----
     def _reconcile_drift(self):
         """交易所真实净持仓（按 delta）vs 本地 lots 净持仓，超阈值→熔断。"""
-        real = self.broker.get_position(self.symbol)
+        try:
+            real = self.broker.get_position(self.symbol)
+        except Exception as e:
+            # testnet 闪断等瞬态错误：独立计数器累积，连续达阈值→紧急停止
+            self._reconcile_failures += 1
+            logger.warning(
+                f"对账查持仓失败（连续 {self._reconcile_failures}/"
+                f"{self._max_reconcile_failures}）：{type(e).__name__}: {e}")
+            if self._reconcile_failures >= self._max_reconcile_failures:
+                self.risk.emergency_stop(
+                    f"对账连续失败 {self._reconcile_failures} 次，无法确认持仓安全")
+            return
+        self._reconcile_failures = 0  # 成功 → 重置
         local_net = sum(lot["amount"] for lot in self.runner.lots.values())
         ok, drift = assess_position_drift(
             real, self.broker.initial_position, local_net,
@@ -300,9 +331,26 @@ class PaperTradingDaemon:
             gen.render_markdown(report), encoding="utf-8")
         logger.info(f"日报已出：{day.isoformat()} (第 {self.day_count + 1} 天)")
 
+    # ---- 闪崩保护 ----
+    def _check_flash_crash(self, bar):
+        """单根 bar 跌幅超阈值 → 触发风控 PAUSE，防止闪崩时大量买入。"""
+        if self._prev_close is None:
+            return
+        drop = (self._prev_close - float(bar["close"])) / self._prev_close
+        if drop >= self.args.max_bar_drop_pct:
+            reason = (f"flash crash: single bar drop {drop:.2%} "
+                      f">= {self.args.max_bar_drop_pct:.2%}")
+            logger.error(reason)
+            self.risk._trip_pause(reason)
+            self.strategy.paused = True
+
     # ---- 单 bar 处理 ----
     def _on_bar(self, bar):
         self._check_resume()
+
+        # 闪崩保护：在信号生成前检查
+        self._check_flash_crash(bar)
+
         before = len(self.runner.closed_trades)
         # historical：截至本 bar 的全部已见数据
         self.pending = self.runner.process_bar(
@@ -314,6 +362,9 @@ class PaperTradingDaemon:
         if self.args.broker == "exchange":
             self._reconcile_drift()
 
+        # 更新前一根收盘价（用于下一根闪崩检测）
+        self._prev_close = float(bar["close"])
+
         day = pd.Timestamp(bar["timestamp"]).date()
         if self.current_day is None:
             self.current_day = day
@@ -321,6 +372,10 @@ class PaperTradingDaemon:
             self._write_daily_report(self.current_day, float(bar["close"]))
             self.day_count += 1
             self.current_day = day
+
+        self.alert_mgr.check_risk_events(self.risk)
+        total_ret = self.runner.realized_pnl / self.args.initial
+        self.alert_mgr.check_drawdown(total_ret)
 
         self.last_bar_ts = str(bar["timestamp"])
         if self.writer is not None:
@@ -333,6 +388,7 @@ class PaperTradingDaemon:
 
     # ---- 主循环 ----
     def run(self):
+        self._install_signal_handlers()
         resuming = self.state_file.exists() and not self.args.fresh
         if resuming:
             self._restore()
@@ -417,8 +473,27 @@ class PaperTradingDaemon:
             if self.day_count >= self.args.days:
                 break
 
+
+    def _install_signal_handlers(self):
+        """Register SIGINT/SIGTERM handlers for graceful exit"""
+        def _graceful_exit(signum, frame):
+            sig_name = signal.Signals(signum).name
+            logger.warning(f"Received {sig_name}, saving checkpoint...")
+            try:
+                if self.strategy is not None:
+                    self._checkpoint()
+                    logger.info("Checkpoint saved, exiting gracefully")
+            except Exception as e:
+                logger.error(f"Failed to save checkpoint on exit: {e}")
+            sys.exit(0)
+        signal.signal(signal.SIGINT, _graceful_exit)
+        signal.signal(signal.SIGTERM, _graceful_exit)
+
     def _finish(self):
         print(f"完成：累计 {self.day_count} 天日报，检查点 {self.state_file}")
+        crits = self.alert_mgr.critical_alerts()
+        if crits:
+            print(f"[ALERT] {len(crits)} CRITICAL alerts")
         return 0
 
 
@@ -448,6 +523,8 @@ def parse_args(argv=None):
                    help="相邻下单决策最小间隔秒（按 bar 判，exchange 模式）")
     p.add_argument("--max-trades-per-day", type=int, default=10,
                    help="单日订单数上限（exchange 模式）")
+    p.add_argument("--max-bar-drop-pct", type=float, default=0.10,
+                   help="单根 bar 跌幅熔断阈值（默认 10%%），超过则 PAUSE")
     return p.parse_args(argv)
 
 

@@ -124,6 +124,44 @@ def check_risk_controls():
     return _ok("§2 风控熔断场景", f"{len(results)}/{len(results)} 场景 PASS")
 
 
+
+
+def check_cache_layer():
+    try:
+        from src.utils.cache import CacheLayer, CacheKeys
+        c = CacheLayer(namespace="preflight_test")
+        c.set("test_key", {"v": 1}, ttl=10)
+        val = c.get("test_key")
+        c.delete("test_key")
+        if val and val.get("v") == 1:
+            return _ok("Cache layer", f"backend={c.backend_type}")
+        return _fail("Cache layer", "get/set failed")
+    except Exception as e:
+        return _fail("Cache layer", f"{type(e).__name__}: {e}")
+
+
+def check_agent_module():
+    try:
+        from src.agent import TradingAnalyzer, AuditLog
+        a = TradingAnalyzer()
+        assert hasattr(a, "analyze_backtest")
+        assert hasattr(a, "analyze_weekly_review")
+        return _ok("Agent module", "analyzer + audit_log OK")
+    except Exception as e:
+        return _fail("Agent module", f"{type(e).__name__}: {e}")
+
+
+def check_ws_feed():
+    try:
+        from src.api.ws_feed import WsFeed, WATCH_SYMBOLS
+        feed = WsFeed()
+        assert len(WATCH_SYMBOLS) >= 6
+        assert feed.client_count == 0
+        return _ok("WS Feed module", f"{len(WATCH_SYMBOLS)} symbols")
+    except Exception as e:
+        return _fail("WS Feed module", f"{type(e).__name__}: {e}")
+
+
 FAST_CHECKS = [
     check_python_version,
     check_core_deps,
@@ -132,6 +170,9 @@ FAST_CHECKS = [
     check_gate_docs,
     check_broker_layers,
     check_risk_controls,
+    check_cache_layer,
+    check_agent_module,
+    check_ws_feed,
 ]
 
 

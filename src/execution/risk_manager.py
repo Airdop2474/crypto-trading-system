@@ -13,6 +13,7 @@
     - 连续亏损达到上限
     - 数据异常
     - API 连续失败达到阈值
+    - 账户级最大回撤达到上限（累计慢亏保护）
 
 职责边界：本模块负责账户级熔断与开关；每单的资金/仓位 sanity 检查
 仍由 Broker 负责（见 PaperBroker）。
@@ -40,6 +41,7 @@ class RiskManager:
         max_consecutive_losses: int = 5,
         max_total_position: float = 0.60,
         max_api_failures: int = 3,
+        max_total_drawdown: float = 0.15,
     ):
         """
         参数：
@@ -48,6 +50,7 @@ class RiskManager:
             max_consecutive_losses: 连续亏损上限（笔）
             max_total_position: 总仓位上限（占总价值比例）
             max_api_failures: API 连续失败熔断阈值
+            max_total_drawdown: 账户级最大回撤上限（占总价值比例，默认 15%）
         """
         if capital_base <= 0:
             raise ValueError("capital_base must be positive")
@@ -57,12 +60,14 @@ class RiskManager:
         self.max_consecutive_losses = max_consecutive_losses
         self.max_total_position = max_total_position
         self.max_api_failures = max_api_failures
+        self.max_total_drawdown = max_total_drawdown
 
         self._init_state()
         logger.info(
             f"RiskManager initialized: capital_base={capital_base}, "
             f"max_daily_loss={max_daily_loss}, "
-            f"max_consecutive_losses={max_consecutive_losses}"
+            f"max_consecutive_losses={max_consecutive_losses}, "
+            f"max_total_drawdown={max_total_drawdown}"
         )
 
     def _init_state(self) -> None:
@@ -72,6 +77,9 @@ class RiskManager:
         self.consecutive_losses = 0
         self.api_failures = 0
         self.events: List[dict] = []
+        # 账户级最大回撤跟踪
+        self.cumulative_pnl = 0.0          # 累计已实现盈亏
+        self.peak_equity = self.capital_base  # 权益峰值（近似）
 
     # ---- 状态查询 ----
 
@@ -84,8 +92,6 @@ class RiskManager:
 
     def is_stopped(self) -> bool:
         return self.state == STOPPED
-
-    # PLACEHOLDER_LOGIC
 
     # ---- 事件记录与状态转移 ----
 
@@ -130,6 +136,7 @@ class RiskManager:
                 self.daily_pnl = 0.0
 
         self.daily_pnl += profit
+        self.cumulative_pnl += profit
 
         # 连亏计数
         if profit < 0:
@@ -148,6 +155,17 @@ class RiskManager:
             loss_ratio = abs(self.daily_pnl) / self.capital_base
             if loss_ratio >= self.max_daily_loss:
                 self._trip_pause(f"daily loss {loss_ratio:.2%}")
+
+        # 账户级最大回撤熔断
+        current_equity = self.capital_base + self.cumulative_pnl
+        if current_equity > self.peak_equity:
+            self.peak_equity = current_equity
+        if self.peak_equity > 0:
+            drawdown = (self.peak_equity - current_equity) / self.peak_equity
+            if drawdown >= self.max_total_drawdown:
+                self._trip_pause(
+                    f"total drawdown {drawdown:.2%} >= {self.max_total_drawdown:.2%}"
+                )
 
     # ---- 数据/API 异常熔断 ----
 
