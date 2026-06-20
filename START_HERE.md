@@ -64,10 +64,10 @@ pytest tests/
 
 ```
 Phase 0: 边界确认（1天）✅
-Phase 1: 数据可信闭环（7天）← 当前
-Phase 2: 回测可信闭环（10天）
-Phase 3: 网格策略验证（10天）
-Phase 4: Paper Trading（60天）
+Phase 1: 数据可信闭环（7天）✅
+Phase 2: 回测可信闭环（10天）✅
+Phase 3: 策略引擎验证（8策略）✅
+Phase 4: Paper Trading（60天）🔄 进行中
 Phase 5: 风控强化（5天）
 Phase 6: 小资金实盘（90天+）
 ────────────────────────────
@@ -133,6 +133,9 @@ docker-compose down
 # 运行测试
 pytest tests/
 
+# 环境检查
+python scripts/check_environment.py
+
 # 代码格式化
 black src/
 isort src/
@@ -163,16 +166,28 @@ git push origin feature/phase-1-data-layer
 
 ## 🎯 当前状态
 
-**Phase 0：✅ 已完成**
-- ✅ 方案 C+ 已定案
-- ✅ 文档体系完整（30个文档）
-- ✅ 协作基础设施就绪
-- ✅ 文件结构已整理
+**Phase 0-3：✅ 全部已完成**
 
-**Phase 1：准备开始**
-- 目标：数据可信闭环
-- 时间：7天
-- 验收标准：见 [docs/standards/DATA_QUALITY_STANDARD.md](docs/standards/DATA_QUALITY_STANDARD.md)
+已完成工作：
+- ✅ 8 策略引擎：Grid / RSI / MA / BuyHold / Donchian / Structure / SuperTrend / Reversal
+- ✅ RiskAwareStrategy 继承体系（统一熔断风控）
+- ✅ 事件驱动回测引擎（无前视偏差）
+- ✅ FastAPI API 层（18 端点 + WebSocket 实时推送）
+- ✅ Next.js 16 仪表盘（SWR + shadcn/ui）
+- ✅ Paper Trading 基础设施（PaperBroker 99% 覆盖）
+- ✅ 481 测试通过（484 总计，3 skipped），83% 代码覆盖率
+- ✅ Docker Compose 一键部署（含 Grafana / Redis 密码认证）
+
+**Phase 4：🔄 Paper Trading 进行中**
+- 目标：60 天连续运行验证
+- 状态：上线前审查阶段
+- 验收标准：见 [docs/standards/STRATEGY_ASSUMPTIONS.md](docs/standards/STRATEGY_ASSUMPTIONS.md)
+
+**第一个任务推荐：**
+1. 运行 `python scripts/check_environment.py` 验证环境
+2. 运行 `pytest tests/` 确认测试通过
+3. 阅读 [docs/reference/API_REFERENCE.md](docs/reference/API_REFERENCE.md) 了解 API
+4. 查看 [docs/planning/ROADMAP_UPDATE.md](docs/planning/ROADMAP_UPDATE.md) 了解路线图
 
 ---
 
@@ -269,8 +284,8 @@ git push origin feature/phase-1-data-layer
 ---
 
 **创建日期：** 2026-06-12  
-**更新日期：** 2026-06-13  
-**项目状态：** Phase 0 完成，Phase 1 准备中  
+**更新日期：** 2026-06-20  
+**项目状态：** Phase 1-3 已完成，Phase 4 Paper Trading 进行中，上线前审查阶段  
 **方案：** C+（已定案）
 
 🚀 **祝你开发顺利！**

@@ -2,10 +2,10 @@
 
 > 加密货币自动化量化交易系统 — 8 策略引擎 + Next.js 仪表盘 + Paper Trading
 
-[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.13+-blue.svg)](https://www.python.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black.svg)](https://nextjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/Tests-475%20passed-green.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-481%20passed%20(484%20total)-green.svg)]()
 [![Status](https://img.shields.io/badge/Status-Paper%20Trading-yellow.svg)]()
 
 ---
@@ -28,7 +28,7 @@
 
 | 层 | 技术 |
 |----|------|
-| 后端 | Python 3.11, FastAPI, pandas, numpy, ccxt |
+| 后端 | Python 3.13, FastAPI, pandas, numpy, ccxt |
 | 前端 | Next.js 16, React 19, TypeScript, Tailwind 4, SWR, shadcn/ui |
 | 数据 | TimescaleDB, Redis |
 | 监控 | Grafana |
@@ -40,7 +40,7 @@
 
 ### 前置要求
 
-- Python 3.11+
+- Python 3.13+
 - Node.js 18+
 - Docker (推荐)
 - TimescaleDB + Redis (Docker 方式自动包含)
@@ -83,8 +83,8 @@ python scripts/run_backtest.py --strategy grid
 # 运行测试
 pytest tests/
 
-# 启动控制台（Phase 4+，当前仓库默认未安装 streamlit）
-streamlit run src/monitor/dashboard.py
+# 验证环境配置
+python scripts/check_environment.py
 ```
 
 ---
@@ -93,8 +93,8 @@ streamlit run src/monitor/dashboard.py
 
 - **[项目策划文档](docs/planning/PROJECT_PLAN.md)** - 需求分析、技术方案、开发计划
 - **[工程开发文档](docs/technical/ENGINEERING.md)** - 环境配置、模块设计、开发规范
-- **[API 文档](docs/API.md)** - 接口说明（待完善）
-- **[部署文档](docs/DEPLOYMENT.md)** - 生产环境部署指南（待完善）
+- **[API 文档](docs/reference/API_REFERENCE.md)** - FastAPI 接口说明（18 端点 + WebSocket）
+- **[部署文档](docs/DEPLOYMENT.md)** - 生产环境部署指南
 
 ---
 
@@ -103,16 +103,19 @@ streamlit run src/monitor/dashboard.py
 ```
 crypto-trading-system/
 ├── src/                    # 源代码
+│   ├── api/               # API 层（FastAPI 18 端点 + WebSocket）
 │   ├── data/              # 数据层（交易所接口、数据库）
-│   ├── strategy/          # 策略层（交易策略实现）
-│   ├── execution/         # 执行层（订单管理、风控）
-│   ├── backtest/          # 回测层（回测引擎、指标计算）
-│   ├── monitor/           # 监控层（仪表盘、告警）
-│   ├── agent/             # AI 优化层（Agent 接口）
-│   └── utils/             # 工具模块
-├── tests/                 # 测试
+│   ├── strategy/          # 策略层（8 策略 + RiskAwareStrategy 基类）
+│   ├── execution/         # 执行层（订单管理、Paper Broker、风控）
+│   ├── backtest/          # 回测层（事件驱动引擎、指标计算）
+│   ├── monitor/           # 监控层（告警、Market Classifier）
+│   ├── agent/             # AI 分析层（Agent 接口）
+│   └── utils/             # 工具模块（trading、config、cache）
+├── frontend/              # 前端仪表盘（Next.js 16 + React 19 + SWR）
+├── tests/                 # 测试（481 passed, 484 total, 83% 覆盖）
 ├── scripts/               # 脚本工具
-├── config/                # 配置文件
+├── config/                # 配置文件（Grafana、SQL、告警）
+├── deliverables/          # 交付物（QA 报告、审查文档）
 ├── data/                  # 数据文件（.gitignore）
 ├── logs/                  # 日志文件（.gitignore）
 └── docs/                  # 文档
@@ -122,47 +125,59 @@ crypto-trading-system/
 
 ## 🎯 开发路线图
 
-### Phase 0: 环境准备 ✅
-- [x] 项目结构设计
-- [x] 文档编写
-- [ ] 环境搭建
+### Phase 0: 边界确认 ✅
+- [x] 明确系统边界（只做现货、BTC/ETH）
+- [x] 风控默认配置安全
+- [x] 实盘开关默认关闭
 
-### Phase 1: 数据层（5 天）
-- [ ] 交易所接口封装
-- [ ] 历史数据下载
-- [ ] 数据库设计实现
+### Phase 1: 数据可信闭环 ✅
+- [x] 数据下载（Binance, ccxt）
+- [x] 7 项强制数据质量检查
+- [x] 数据修复策略与时区统一
+- [x] 数据版本冻结（SHA256）
 
-### Phase 2: 回测框架（7 天）
-- [ ] 回测引擎开发
-- [ ] 网格策略实现
-- [ ] 性能指标计算
+### Phase 2: 回测可信闭环 ✅
+- [x] 事件驱动回测引擎
+- [x] 前视偏差检查（零容忍）
+- [x] 成本模型（手续费 + 滑点）
+- [x] 参数敏感性测试
 
-### Phase 3: 实盘交易（7 天）
-- [ ] 实时行情接入
-- [ ] 订单管理
-- [ ] 风控引擎
+### Phase 3: 策略引擎验证（8策略）✅
+- [x] Grid / RSI / MA / BuyHold 策略
+- [x] Donchian / Structure / SuperTrend / Reversal 策略
+- [x] 熔断风控（连亏/日亏/回撤）
+- [x] RiskAwareStrategy 继承体系
 
-### Phase 4: 监控和 Agent（5 天）
-- [ ] 监控仪表盘
-- [ ] Agent 接口集成
-- [ ] 触发器系统
+### Phase 4: Paper Trading（60天）🔄 进行中
+- [x] Paper Broker 完善实现（99% 覆盖）
+- [x] PaperTradingRunner + Multi-Runner
+- [x] FastAPI API 层（18 端点 + WebSocket）
+- [x] Next.js 16 仪表盘
+- [ ] 60 天连续运行验证
 
-### Phase 5: AI 优化闭环（5 天）
-- [ ] 参数自动调优
-- [ ] A/B 测试框架
-- [ ] 优化审核流程
+### Phase 5: 风控强化
+- [ ] 日亏损限制（3%）
+- [ ] 最大仓位限制（60%）
+- [ ] 人工恢复机制
+- [ ] Grafana 监控仪表盘
 
-### Phase 6: 模拟盘验证（30 天）
-- [ ] 连续运行测试
-- [ ] 问题修复
-- [ ] 文档完善
+### Phase 6: 小资金实盘（90天+）
+- [ ] 前置条件验证（门禁清单）
+- [ ] 初始资金 ≤ $500
+- [ ] 连续 3 月无严重风控事故
+- [ ] 回撤可控、决策可追溯
+
+### Phase 7+: 研究线与 AI 辅助
+- [ ] 价格行为策略研究（独立分支）
+- [ ] AI 辅助分析深化
+- [ ] 技术储备与扩展验证
 
 ---
 
 ## 🔧 技术栈
 
 **语言：**
-- Python 3.11+ (主要开发语言)
+- Python 3.13+ (主要开发语言)
 - Rust (性能优化，可选)
 
 **数据存储：**
@@ -173,9 +188,9 @@ crypto-trading-system/
 **核心库：**
 - ccxt - 交易所接口
 - pandas - 数据处理
-- backtesting.py - 回测框架
+- 自研事件驱动回测引擎（`src/backtest/engine.py`）
 - sqlalchemy - ORM
-- streamlit - Web 控制台
+- Next.js 16 仪表盘（`frontend/`）
 
 **监控：**
 - Grafana - 指标监控
@@ -252,7 +267,6 @@ print(f"夏普比率: {result['metrics']['sharpe_ratio']:.2f}")
 ## 🙏 致谢
 
 - [ccxt](https://github.com/ccxt/ccxt) - 统一交易所接口
-- [backtesting.py](https://kernc.github.io/backtesting.py/) - 回测框架
 - [TimescaleDB](https://www.timescale.com/) - 时序数据库
 
 ---

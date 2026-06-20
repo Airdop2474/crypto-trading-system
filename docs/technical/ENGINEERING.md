@@ -18,12 +18,16 @@
    - Exchange Broker（Phase 5-6，交易所接口）
    - Live Broker（Phase 7+，实盘执行）
 
-2. **Signal 状态管理** ⭐
+2. **API 层迁移** ⭐
+   - 前端已从 Streamlit 迁移到 FastAPI API 层（18 REST 端点 + WebSocket 实时推送）
+   - 仪表盘迁移到 Next.js 16（React 19 + SWR + shadcn/ui）
+
+3. **Signal 状态管理** ⭐
    - NO_SIGNAL（正常等待）
    - NO_TRADE（策略拒绝）
    - PAUSE（系统暂停）
 
-3. **验收标准调整** ⭐
+4. **验收标准调整** ⭐
    - Phase 1-3：系统可信度优先（不看收益）
    - Phase 6：无严重风控事故 + 回撤可控（不要求不亏损）
 
@@ -55,7 +59,7 @@
 #### 1.2.1 Python 环境
 
 ```bash
-# 检查 Python 版本（需要 3.11+）
+# 检查 Python 版本（需要 3.13+）
 python --version
 
 # 创建虚拟环境
@@ -217,7 +221,7 @@ mkdir -p scripts config data/{historical,reports} logs docs
 
 ```bash
 # 数据库配置
-POSTGRES_HOST=localhost
+POSTGRES_SERVER=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=crypto_trading
 POSTGRES_USER=postgres
@@ -241,10 +245,10 @@ LOG_PATH=./logs
 HERMES_API_KEY=your_hermes_key
 HERMES_API_URL=https://api.hermes.ai/v1
 
-# 风控参数
-MAX_POSITION_PCT=0.8
-STOP_LOSS_PCT=0.15
-DAILY_LOSS_LIMIT_PCT=0.05
+# 风控参数（变量名以 src/utils/config.py 为准）
+MAX_POSITION_SIZE=0.20
+MAX_DAILY_LOSS=0.02          # 策略级 2%；账户级 RiskManager 默认 3%
+MAX_CONSECUTIVE_LOSSES=5
 ```
 
 **安全提示：** 将 `.env` 添加到 `.gitignore`
@@ -521,9 +525,11 @@ END;
 $$ LANGUAGE plpgsql;
 ```
 
-### 3.3 初始化脚本
+### 3.3 初始化脚本（示例）
 
-创建 `scripts/init_database.py`:
+> **注意：** 数据管道的实际入口是 `scripts/run_data_pipeline.py`（含数据下载、质量检查、入库一体化流程）。以下代码仅为数据库 Schema 初始化的示意实现。
+
+创建 `scripts/init_database.py`（示例）:
 
 ```python
 """数据库初始化脚本"""
@@ -539,7 +545,7 @@ def init_database():
     db_url = (
         f"postgresql://{os.getenv('POSTGRES_USER')}:"
         f"{os.getenv('POSTGRES_PASSWORD')}@"
-        f"{os.getenv('POSTGRES_HOST')}:"
+        f"{os.getenv('POSTGRES_SERVER')}:"
         f"{os.getenv('POSTGRES_PORT')}/"
         f"{os.getenv('POSTGRES_DB')}"
     )
@@ -658,7 +664,7 @@ class DatabaseManager:
         db_url = (
             f"postgresql://{os.getenv('POSTGRES_USER')}:"
             f"{os.getenv('POSTGRES_PASSWORD')}@"
-            f"{os.getenv('POSTGRES_HOST')}:"
+            f"{os.getenv('POSTGRES_SERVER')}:"
             f"{os.getenv('POSTGRES_PORT')}/"
             f"{os.getenv('POSTGRES_DB')}"
         )
@@ -1219,7 +1225,7 @@ profile = "black"
 line_length = 100
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -1358,7 +1364,7 @@ logger.error("Failed to connect to exchange", exception=True)
 创建 `Dockerfile`:
 
 ```dockerfile
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
@@ -1376,7 +1382,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 运行
-CMD ["python", "src/main.py"]
+CMD ["python", "-m", "uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
 创建 `docker-compose.yml`:
@@ -1386,37 +1392,94 @@ version: '3.8'
 
 services:
   timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:2.17.0-pg16
+    container_name: crypto_trading_db
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: crypto_trading
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-crypto_trading}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
+      - ./config/sql:/docker-entrypoint-initdb.d
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
   
   redis:
-    image: redis:latest
+    image: redis:7.4-alpine
+    container_name: crypto_trading_redis
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  grafana:
+    image: grafana/grafana-oss:10.4.12
+    container_name: crypto_trading_grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana:/etc/grafana/provisioning
+    ports:
+      - "3000:3000"
+    depends_on:
+      - timescaledb
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--timeout=3", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
   
   trading_system:
     build: .
+    container_name: crypto_trading_app
     depends_on:
-      - timescaledb
-      - redis
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file:
       - .env
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./config:/app/config
+    ports:
+      - "8000:8000"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    command: python -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000
 
 volumes:
   timescaledb_data:
   redis_data:
+  grafana_data:
+
+networks:
+  default:
+    name: crypto_trading_network
 ```
 
 ### 6.2 监控和告警
@@ -1552,33 +1615,33 @@ docker-compose up -d timescaledb redis
 cp .env.example .env
 # 编辑 .env 文件，填入你的配置
 
-# 6. 初始化数据库
-python scripts/init_database.py
+# 6. 运行数据管道（下载 + 质量检查 + 入库）
+python scripts/run_data_pipeline.py --symbol BTC/USDT --days 365
 
-# 7. 下载历史数据
-python scripts/download_data.py --symbol BTC/USDT --days 365
-
-# 8. 运行回测
+# 7. 运行回测
 python scripts/run_backtest.py --strategy grid --symbol BTC/USDT
 
-# 9. 查看结果
+# 8. 查看结果
 ls data/reports/
 ```
 
 ### 7.2 开发模式运行
 
 ```bash
-# 启动 Streamlit 控制台
-streamlit run src/monitor/dashboard.py
+# 启动 FastAPI 后端（开发模式）
+python -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
 
-# 启动回测服务
-python src/main.py --mode backtest
+# 启动 Next.js 16 前端仪表盘（另一个终端）
+cd frontend && npm run dev -- --port 3001
+
+# API 文档
+# 打开 http://localhost:8000/docs
 
 # 启动模拟盘交易
-python src/main.py --mode paper
+python scripts/run_paper_trading.py
 
 # 启动实盘交易（谨慎！）
-python src/main.py --mode live
+python scripts/run_live_trading.py
 ```
 
 ### 7.3 常用命令

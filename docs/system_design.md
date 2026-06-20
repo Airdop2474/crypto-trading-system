@@ -179,6 +179,37 @@ classDiagram
     class BuyAndHoldStrategy {
         +bool has_bought
         +int bar_count
+        +Dict PARAM_SCHEMA$
+        +on_bar(data, current_time) str?
+        +reset() None
+    }
+
+    class DonchianChannelStrategy {
+        +int period
+        +Dict PARAM_SCHEMA$
+        +on_bar(data, current_time) str?
+        +reset() None
+    }
+
+    class MarketStructureStrategy {
+        +int lookback
+        +Dict PARAM_SCHEMA$
+        +on_bar(data, current_time) str?
+        +reset() None
+    }
+
+    class SuperTrendStrategy {
+        +int atr_period
+        +float multiplier
+        +Dict PARAM_SCHEMA$
+        +on_bar(data, current_time) str?
+        +reset() None
+    }
+
+    class KeyLevelReversalStrategy {
+        +int lookback
+        +float threshold
+        +Dict PARAM_SCHEMA$
         +on_bar(data, current_time) str?
         +reset() None
     }
@@ -252,7 +283,11 @@ classDiagram
     RiskAwareStrategy <|-- GridTradingStrategy : inherits
     RiskAwareStrategy <|-- RSIMomentumStrategy : inherits
     RiskAwareStrategy <|-- SimpleMAStrategy : inherits
-    Strategy <|-- BuyAndHoldStrategy : inherits (no risk)
+    RiskAwareStrategy <|-- DonchianChannelStrategy : inherits
+    RiskAwareStrategy <|-- MarketStructureStrategy : inherits
+    RiskAwareStrategy <|-- SuperTrendStrategy : inherits
+    RiskAwareStrategy <|-- KeyLevelReversalStrategy : inherits
+    RiskAwareStrategy <|-- BuyAndHoldStrategy : inherits
     
     BacktestEngine ..> TradingUtils : uses
     PaperBroker ..> TradingUtils : uses
@@ -424,7 +459,7 @@ sequenceDiagram
 
 | # | 问题 | 当前假设 | 影响 |
 |---|------|----------|------|
-| 1 | `BuyAndHoldStrategy` 是否也需要继承 `RiskAwareStrategy`？ | **不需要**。BuyAndHold 无风险概念，保持直接继承 `Strategy` | 低 |
+| 1 | `BuyAndHoldStrategy` 是否也需要继承 `RiskAwareStrategy`？ | **已确认：是**。实际代码中 `BuyAndHoldStrategy` 已继承 `RiskAwareStrategy`（含熔断能力，虽然 BuyAndHold 策略本身较少触发） | 低 |
 | 2 | GridTrading 的 `_has_data_anomaly()` 设置 `self.paused` — 这个逻辑是否也应该移到 `RiskAwareStrategy`？ | **不移**。数据异常检测是 Grid 特有的过滤器逻辑（`no_trade_reason` 链的一部分），与通用的盈亏熔断不同 | 低 |
 | 3 | `MultiStrategyRunner` 当前共享 `broker`（共享现金池）。P1-1 要求"各策略独立资金账户"，这是否意味着需要改为每个策略独立 Broker？ | **是**。新增 `PoolMode.SHARED` vs `PoolMode.ISOLATED` 模式。隔离模式下每个 `StrategySlot` 创建独立 `PaperBroker` | 中 |
 | 4 | 网格参数扫描是否需要精确的 48 组组合 × 12 个月 = 576 次回测？ | **是**。使用 `ParameterScanner` 已有的并行 `ProcessPoolExecutor` 加速 | 中 |
@@ -514,6 +549,10 @@ STRATEGY_REGISTRY: dict[str, type[Strategy]] = {
     "rsi": RSIMomentumStrategy,
     "ma": SimpleMAStrategy,
     "buyhold": BuyAndHoldStrategy,
+    "donchian": DonchianChannelStrategy,
+    "structure": MarketStructureStrategy,
+    "supertrend": SuperTrendStrategy,
+    "reversal": KeyLevelReversalStrategy,
 }
 
 def get_strategy(name: str) -> type[Strategy]:
@@ -714,7 +753,7 @@ python -c "from src.strategy.registry import get_strategy; G=get_strategy('grid'
 
 **Registry 约定：**
 ```
-- 策略名全部小写、无空格（"grid", "rsi", "ma", "buyhold"）
+- 策略名全部小写、无空格（"grid", "rsi", "ma", "buyhold", "donchian", "structure", "supertrend", "reversal"）
 - get_strategy(name) 对未知名称抛 ValueError
 - 新增策略时只需在 STRATEGY_REGISTRY 中添加一行
 ```
@@ -759,5 +798,5 @@ graph TD
 
 ---
 
-**文档状态：** ✅ 设计完成，待团队审核  
-**下一步：** 交由交易代码专家按 T01→T02→T03/T04→T05 顺序执行
+**文档状态：** ✅ 设计完成，已全部实现  
+**下一步：** ✅ 全部已完成（T01→T02→T03/T04→T05 已于 2026-06-20 前执行完毕）
