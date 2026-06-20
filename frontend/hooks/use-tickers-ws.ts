@@ -17,6 +17,8 @@ import { api } from "@/lib/api"
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000"
 
+const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN || ""
+
 /** 将 http:// 转为 ws://，https:// 转为 wss:// */
 function toWsUrl(base: string): string {
   return base.replace(/^http/, "ws") + "/ws/tickers"
@@ -70,6 +72,8 @@ export function useTickersWs(): UseTickersWsResult {
       setIsConnected(true)
       setIsFallback(false)
       attemptRef.current = 0
+      // R-05: WebSocket first-message authentication
+      ws.send(JSON.stringify({ type: "auth", token: API_TOKEN }))
     }
 
     ws.onmessage = (event) => {

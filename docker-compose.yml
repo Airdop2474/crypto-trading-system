@@ -1,11 +1,14 @@
 version: '3.8'
 
+# TODO: Use Docker secrets or *_FILE variants for production
+# - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_password
+# - TIMESCALE_PASSWORD_FILE=/run/secrets/timescale_password
 services:
   timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:2.17.0-pg16
     container_name: crypto_trading_db
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-crypto_trading}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
     volumes:
@@ -21,9 +24,11 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     container_name: crypto_trading_redis
-    command: redis-server --appendonly yes
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
     ports:
@@ -36,16 +41,14 @@ services:
       retries: 5
 
   grafana:
-    image: grafana/grafana-oss:latest
+    image: grafana/grafana-oss:10.4.12
     container_name: crypto_trading_grafana
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      # 数据源 provisioning 需要这些变量；Grafana 不支持 ${VAR:-default}
-      # 回退语法，故在此由 compose 解析默认值后注入具体值。
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_DB=${POSTGRES_DB:-crypto_trading}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./config/grafana:/etc/grafana/provisioning
@@ -54,24 +57,35 @@ services:
     depends_on:
       - timescaledb
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--timeout=3", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # 交易系统主服务（开发完成后取消注释）
-  # trading_system:
-  #   build: .
-  #   container_name: crypto_trading_app
-  #   depends_on:
-  #     timescaledb:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
-  #   env_file:
-  #     - .env
-  #   volumes:
-  #     - ./logs:/app/logs
-  #     - ./data:/app/data
-  #     - ./config:/app/config
-  #   restart: unless-stopped
-  #   command: python src/main.py
+  # 交易系统主服务
+  trading_system:
+    build: .
+    container_name: crypto_trading_app
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config:/app/config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    command: python src/main.py
 
 volumes:
   timescaledb_data:
