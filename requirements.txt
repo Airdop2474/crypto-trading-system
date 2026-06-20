@@ -67,6 +67,7 @@ pytest-mock==3.12.0           # Mock 工具
 fastapi==0.133.1              # API 框架
 uvicorn==0.41.0               # ASGI 服务器
 websockets==12.0              # Binance WS 实时行情
+slowapi>=0.1.9               # API 速率限制
 
 # ============================================
 # 监控面板（暂时注释）
