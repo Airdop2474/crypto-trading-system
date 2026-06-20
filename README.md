@@ -95,6 +95,8 @@ python scripts/check_environment.py
 - **[工程开发文档](docs/technical/ENGINEERING.md)** - 环境配置、模块设计、开发规范
 - **[API 文档](docs/reference/API_REFERENCE.md)** - FastAPI 接口说明（18 端点 + WebSocket）
 - **[部署文档](docs/DEPLOYMENT.md)** - 生产环境部署指南
+- **[安全策略](SECURITY.md)** - 安全防线说明与漏洞报告流程
+- **[变更日志](CHANGELOG.md)** - 版本变更记录
 
 ---
 

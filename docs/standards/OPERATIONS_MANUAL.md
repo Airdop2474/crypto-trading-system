@@ -22,12 +22,15 @@
 所有 `python`/`pytest` 命令均假定：
 
 ```bash
-# 1) 已在项目根目录 C:\Github\crypto-trading-system
+# 1) 已在项目根目录（crypto-trading-system）
 # 2) 项目根已加入 PYTHONPATH（脚本内部多已自动插入，手动跑模块时仍建议设）
-export PYTHONPATH=C:\Github\crypto-trading-system
+#    Linux/macOS:
+export PYTHONPATH=$(pwd)
+#    Windows PowerShell: $env:PYTHONPATH = (Get-Location).Path
+#    Windows CMD:        set PYTHONPATH=%cd%
 ```
 
-数据库密码统一用 docker-compose 默认值 `changeme`（生产请改 `.env` 的 `TIMESCALE_PASSWORD` / `POSTGRES_PASSWORD`）。
+数据库密码涉及**两层变量，需设为相同值**：`POSTGRES_PASSWORD` 是 Docker Compose 层变量（TimescaleDB 容器 + Grafana 数据源使用，compose 启动时强制要求，缺失即拒启）；`TIMESCALE_PASSWORD` 是 Python 应用层变量（`src/utils/config.py` 读取）。生产环境两者都必须改掉默认值。详见 `docs/reference/ENV_VARIABLE_REFERENCE.md` 与 `TROUBLESHOOTING.md` 故障 1。
 
 ---
 
@@ -48,7 +51,7 @@ python scripts/check_environment.py
 
 | 变量 | 说明 | 当前阶段取值 |
 |------|------|------|
-| `TIMESCALE_PASSWORD` | 数据库密码 | `changeme`（对齐 compose 默认） |
+| `TIMESCALE_PASSWORD` / `POSTGRES_PASSWORD` | 数据库密码（应用层 / Compose 层，两者设相同值） | `changeme`（对齐 compose 默认） |
 | `BINANCE_API_KEY` / `BINANCE_SECRET` | 交易所 testnet 凭据 | testnet key（只读/现货） |
 | `BINANCE_TESTNET` | 测试网开关 | `true`（实盘前强制） |
 | `LIVE_TRADING_ENABLED` | **实盘总开关** | `false`（实盘前强制） |
@@ -114,7 +117,7 @@ python scripts/run_data_pipeline.py   # 产出 data/reports/quality_*.{json,md}
 
 ```bash
 # 全量单测（必须加 -p no:asyncio，否则 pytest-asyncio 收集器冲突）
-python -m pytest -p no:asyncio -q          # 基线：159 passed
+python -m pytest -p no:asyncio -q          # 基线：481 passed, 3 skipped（484 total）
 
 # Grafana 端到端冒烟（写 12 条指标供面板读取）
 export TIMESCALE_PASSWORD=changeme

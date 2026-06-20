@@ -39,6 +39,35 @@
 
 ---
 
+## 📌 文档定位与现状映射（2026-06-20）
+
+> **本文档是 Phase 0 的"从零构建"设计蓝图，不是当前系统的现状说明。** 下文中以"创建 `xxx`"形式给出的代码块多为设计示意，文件名/结构与实际实现存在出入。**当前系统的权威说明请以代码和以下专题文档为准：**
+>
+> | 主题 | 权威来源 |
+> |------|---------|
+> | API 接口（18 端点 + WebSocket） | `docs/reference/API_REFERENCE.md` |
+> | 数据库 Schema（实际 ORM 模型） | `docs/technical/DATABASE_SCHEMA.md` |
+> | 环境变量（权威清单 + 溯源） | `docs/reference/ENV_VARIABLE_REFERENCE.md` |
+> | 策略目录（8 策略） | `docs/reference/STRATEGY_CATALOG.md` |
+> | 部署 | `docs/DEPLOYMENT.md` |
+> | 前端架构 | `docs/technical/FRONTEND_ARCHITECTURE.md` |
+>
+> **蓝图文件名 → 实际模块对照（下文出现的示意文件并不存在）：**
+>
+> | 本文档中的示意文件 | 实际状态 |
+> |-------------------|---------|
+> | `scripts/init_database.py` | 不存在；初始化由 docker compose 挂载 `config/sql/01_monitor_metrics.sql` 自动完成 |
+> | `scripts/download_data.py` | 不存在；数据管道入口是 `scripts/run_data_pipeline.py` |
+> | `scripts/backup_database.sh` | 不存在；备份策略未落地（设计示意） |
+> | `config/alerts.yaml` | 不存在；告警逻辑硬编码在 `src/monitor/alert_manager.py` |
+> | `src/data/database.py` | 实际为 `src/utils/database.py` |
+> | `src/agent/interface.py` / `src/agent/trigger.py` | 不存在；Agent 分析在 `src/agent/analyzer.py`（纯规则、只分析不执行） |
+> | `streamlit run src/monitor/dashboard.py` | 已弃用；监控走 FastAPI + Next.js 仪表盘 + Grafana |
+>
+> 依赖列表（§1.3）中的 `streamlit==1.30.0` 等版本号亦为蓝图初值，实际以项目根 `requirements.txt` 为准。
+
+---
+
 ## 一、开发环境配置
 
 ### 1.1 系统要求
