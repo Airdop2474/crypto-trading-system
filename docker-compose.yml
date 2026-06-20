@@ -78,6 +78,8 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
       - ./config:/app/config
+    ports:
+      - "8000:8000"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -85,7 +87,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    command: python src/main.py
+    command: python -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000
 
 volumes:
   timescaledb_data:
