@@ -21,10 +21,16 @@ import pandas as pd
 from src.execution import PaperBroker, PaperTradingRunner
 from src.execution.multi_runner import MultiStrategyRunner, StrategyConfig
 from src.execution.paper_report import PaperTradingReportGenerator
+from src.execution.risk_manager import RiskManager
 from src.monitor import MetricsCollector
 from src.strategy.grid_trading import GridTradingStrategy
 from src.strategy.rsi_momentum import RSIMomentumStrategy
 from src.strategy.simple_ma import SimpleMAStrategy
+from src.strategy.donchian_channel import DonchianChannelStrategy
+from src.strategy.market_structure import MarketStructureStrategy
+from src.strategy.super_trend import SuperTrendStrategy
+from src.strategy.key_level_reversal import KeyLevelReversalStrategy
+from src.strategy.buy_and_hold import BuyAndHoldStrategy
 from src.utils.logger import logger
 from src.utils.cache import cache, CacheKeys
 
@@ -112,10 +118,15 @@ def _build_multi_results(
 ) -> tuple:
     """用 MultiStrategyRunner 跑多个策略，返回 (results_dict, aggregate)。
 
-    当前注册 3 个策略：
-    1. Grid BTC/USDT（与单策略路径相同参数）
-    2. RSI Momentum BTC/USDT
-    3. SimpleMA BTC/USDT
+    当前注册 8 个策略（覆盖系统全部策略）：
+    1. Grid BTC/USDT — 震荡市网格低买高卖
+    2. RSI Momentum — 趋势回调/超买卖出
+    3. Simple MA — 金叉买入/死叉卖出
+    4. Donchian Channel — N周期高低点突破
+    5. Market Structure — 波动结构突破
+    6. SuperTrend — ATR 自适应跟踪止损
+    7. Key Level Reversal — 支撑阻力位 pin bar 反转
+    8. Buy & Hold — 买入持有基准
 
     所有策略共享同一个 broker（资金池 10000 USDT）。
     """
@@ -128,12 +139,15 @@ def _build_multi_results(
     )
     shared_collector = MetricsCollector()
 
+    risk_manager = RiskManager(capital_base=INITIAL_CAPITAL)
+
     multi_runner = MultiStrategyRunner(
         broker=shared_broker,
+        risk_manager=risk_manager,
         metrics_collector=shared_collector,
     )
 
-    # 注册策略
+    # 注册全部 8 个策略
     configs = [
         StrategyConfig(
             strategy_id="grid-btc-usdt",
@@ -155,6 +169,36 @@ def _build_multi_results(
             strategy=SimpleMAStrategy(),
             symbol=SYMBOL,
             description="均线策略：金叉买入/死叉卖出",
+        ),
+        StrategyConfig(
+            strategy_id="donchian-btc-usdt",
+            strategy=DonchianChannelStrategy(period=20),
+            symbol=SYMBOL,
+            description="唐奇安通道：N周期高低点突破",
+        ),
+        StrategyConfig(
+            strategy_id="structure-btc-usdt",
+            strategy=MarketStructureStrategy(lookback=10),
+            symbol=SYMBOL,
+            description="市场结构：波动结构突破",
+        ),
+        StrategyConfig(
+            strategy_id="supertrend-btc-usdt",
+            strategy=SuperTrendStrategy(period=10, multiplier=3.0),
+            symbol=SYMBOL,
+            description="SuperTrend：ATR自适应跟踪止损",
+        ),
+        StrategyConfig(
+            strategy_id="reversal-btc-usdt",
+            strategy=KeyLevelReversalStrategy(lookback=50),
+            symbol=SYMBOL,
+            description="关键位反转：支撑阻力+pin bar确认",
+        ),
+        StrategyConfig(
+            strategy_id="buyhold-btc-usdt",
+            strategy=BuyAndHoldStrategy(),
+            symbol=SYMBOL,
+            description="买入持有：基准策略",
         ),
     ]
     multi_runner.register_many(configs)

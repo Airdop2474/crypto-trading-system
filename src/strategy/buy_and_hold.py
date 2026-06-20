@@ -8,18 +8,21 @@ from typing import Optional
 from datetime import datetime
 import pandas as pd
 
-from src.strategy.base import Strategy
+from src.strategy.risk_aware import RiskAwareStrategy
 
 
-class BuyAndHoldStrategy(Strategy):
+class BuyAndHoldStrategy(RiskAwareStrategy):
     """
     买入持有策略
 
     在第一根 K 线买入，在最后一根 K 线卖出
     """
 
+    PARAM_SCHEMA = {}
+
     def __init__(self):
         super().__init__(name="BuyAndHold")
+        self._init_risk_state()
         self.has_bought = False
         self.bar_count = 0
 

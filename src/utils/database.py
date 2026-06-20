@@ -4,6 +4,8 @@
 支持 PostgreSQL/TimescaleDB 和 Redis
 """
 
+import os
+import threading
 from typing import Optional
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -25,6 +27,7 @@ class DatabaseManager:
         self._session_factory = None
         self._redis_client = None
         self._pg_connection = None
+        self._pg_lock = threading.Lock()
 
     def init_postgres(self) -> None:
         """初始化 PostgreSQL 连接"""
@@ -35,7 +38,7 @@ class DatabaseManager:
                 pool_size=5,
                 max_overflow=10,
                 pool_pre_ping=True,  # 连接前检查
-                echo=config.DEBUG,
+                echo=os.getenv("SQL_ECHO", "false").lower() == "true",
             )
             self._session_factory = sessionmaker(bind=self._engine)
             logger.info("PostgreSQL engine initialized")
@@ -114,25 +117,28 @@ class DatabaseManager:
             with db.get_cursor() as cursor:
                 cursor.execute("SELECT * FROM table")
                 results = cursor.fetchall()
+
+        线程安全：通过 _pg_lock 保护裸 psycopg2 连接的并发访问。
         """
-        self._ensure_pg_connection()
+        with self._pg_lock:
+            self._ensure_pg_connection()
 
-        cursor_factory = RealDictCursor if dict_cursor else None
-        cursor = self._pg_connection.cursor(cursor_factory=cursor_factory)
+            cursor_factory = RealDictCursor if dict_cursor else None
+            cursor = self._pg_connection.cursor(cursor_factory=cursor_factory)
 
-        try:
-            yield cursor
-            self._pg_connection.commit()
-        except (psycopg2.OperationalError, psycopg2.InterfaceError):
-            # 连接级故障：标记关闭，下次调用触发重连
-            self._safe_close_pg()
-            raise
-        except Exception:
-            self._pg_connection.rollback()
-            raise
-        finally:
-            if self._pg_connection is not None and self._pg_connection.closed == 0:
-                cursor.close()
+            try:
+                yield cursor
+                self._pg_connection.commit()
+            except (psycopg2.OperationalError, psycopg2.InterfaceError):
+                # 连接级故障：标记关闭，下次调用触发重连
+                self._safe_close_pg()
+                raise
+            except Exception:
+                self._pg_connection.rollback()
+                raise
+            finally:
+                if self._pg_connection is not None and self._pg_connection.closed == 0:
+                    cursor.close()
 
     def _safe_close_pg(self) -> None:
         """安全关闭裸连接，置空以触发下次重连。"""
