@@ -11,6 +11,7 @@ import pandas as pd
 from src.backtest.metrics import PerformanceMetrics
 from src.strategy.base import Order
 from src.utils.logger import logger
+from src.utils.trading import apply_slippage
 
 
 class BacktestEngine:
@@ -75,6 +76,51 @@ class BacktestEngine:
         return sum(lot["qty"] for lot in self.lots.values())
 
 
+    def _validate_data(self, data: pd.DataFrame) -> None:
+        """验证输入数据的合法性。
+
+        参数：
+            data: OHLCV 数据
+
+        抛出：
+            ValueError: 数据格式或内容不合法
+        """
+        if not isinstance(data, pd.DataFrame):
+            raise ValueError(f"data must be a pandas DataFrame, got {type(data)}")
+        if data.empty:
+            raise ValueError("data is empty")
+
+        required_cols = {"timestamp", "open", "high", "low", "close"}
+        missing = required_cols - set(data.columns)
+        if missing:
+            raise ValueError(f"Missing required columns: {missing}")
+
+        ohlc_cols = ["open", "high", "low", "close"]
+        nan_mask = data[ohlc_cols].isnull()
+        if nan_mask.any().any():
+            nan_rows = nan_mask.any(axis=1)
+            nan_indices = data.index[nan_rows].tolist()[:10]
+            logger.warning(
+                f"NaN values found in OHLC columns at indices: {nan_indices}"
+            )
+
+        # 基本 OHLC 合理性：high 必须 >= low（硬约束）
+        invalid_hl = data["high"] < data["low"]
+        if invalid_hl.any():
+            bad_rows = data.index[invalid_hl].tolist()[:10]
+            raise ValueError(f"OHLC sanity check failed: high < low at indices: {bad_rows}")
+
+        # high >= open/close 在真实数据中可能因跳空而违反，仅警告
+        invalid_ho = data["high"] < data["open"]
+        invalid_hc = data["high"] < data["close"]
+        soft_mask = invalid_ho | invalid_hc
+        if soft_mask.any():
+            soft_rows = data.index[soft_mask].tolist()[:10]
+            logger.warning(
+                f"OHLC soft violation (high < open or close, possible gap) "
+                f"at indices: {soft_rows}"
+            )
+
     def run(
         self,
         data: pd.DataFrame,
@@ -90,6 +136,8 @@ class BacktestEngine:
         返回：
             回测结果字典
         """
+        self._validate_data(data)
+
         logger.info(f"Starting backtest with {len(data)} bars")
 
         # 重置状态
@@ -104,9 +152,9 @@ class BacktestEngine:
             self.current_bar = data.iloc[i]
             self.current_time = self.current_bar["timestamp"]
 
-            # 策略可以使用到 i 为止的所有数据（不包括未来）
-            # 传 view 而非 copy，避免 O(n²) 内存分配；策略只读不写，安全
-            historical_data = data.iloc[: i + 1]
+            # 策略接收完整 DataFrame 引用，通过索引感知当前位置；
+            # 由策略内部自行切片 (data.iloc[:current_idx])，避免 O(n²) 内存分配
+            historical_data = data
 
             # 调用策略的 on_bar
             signal = strategy.on_bar(historical_data, self.current_time)
@@ -147,12 +195,15 @@ class BacktestEngine:
         分发信号到对应的成交路径
 
         - 'BUY'/'SELL'：单仓位（全仓买入/清仓卖出）
+        - 'LIQUIDATE'：紧急清仓（平掉所有分仓，含 _all + 所有 tagged lots）
         - List[Order]：多仓位（按标签建仓/平仓）
         """
         if signal == "BUY":
             self._execute_buy(price, time, strategy)
         elif signal == "SELL":
             self._execute_sell(price, time, strategy)
+        elif signal == "LIQUIDATE":
+            self._execute_liquidate(price, time, strategy)
         elif isinstance(signal, list):
             for order in signal:
                 self._execute_order(order, price, time, strategy)
@@ -163,7 +214,7 @@ class BacktestEngine:
             return
 
         # 计算滑点后的价格（买入时价格更高）
-        execution_price = price * (1 + self.slippage)
+        execution_price = apply_slippage(price, self.slippage, "BUY")
 
         # 计算可买数量（扣除手续费）
         cost_per_unit = execution_price * (1 + self.commission)
@@ -210,7 +261,7 @@ class BacktestEngine:
         cost_price = lot["cost_price"]
 
         # 计算滑点后的价格（卖出时价格更低）
-        execution_price = price * (1 - self.slippage)
+        execution_price = apply_slippage(price, self.slippage, "SELL")
 
         # 计算收益
         proceeds = qty * execution_price * (1 - self.commission)
@@ -266,7 +317,7 @@ class BacktestEngine:
         if budget <= 0:
             return
 
-        execution_price = price * (1 + self.slippage)
+        execution_price = apply_slippage(price, self.slippage, "BUY")
         cost_per_unit = execution_price * (1 + self.commission)
         quantity = budget / cost_per_unit
         if quantity <= 0:
@@ -323,7 +374,7 @@ class BacktestEngine:
         qty = lot["qty"]
         cost_price = lot["cost_price"]
 
-        execution_price = price * (1 - self.slippage)
+        execution_price = apply_slippage(price, self.slippage, "SELL")
         proceeds = qty * execution_price * (1 - self.commission)
         self.cash += proceeds
 
@@ -347,6 +398,44 @@ class BacktestEngine:
             f"SELL[{order.tag}]: {qty:.4f} @ {execution_price:.2f}, "
             f"proceeds={proceeds:.2f}, profit={trade['profit']:.2f}"
         )
+
+    def _execute_liquidate(self, price: float, time: datetime, strategy=None) -> None:
+        """紧急清仓：平掉所有分仓（含 _all + 全部 tagged lots）。
+
+        遍历所有 lots 逐一平仓，逐一通知策略的 on_fill 以便熔断追踪。
+        """
+        # 先收集所有 tag（遍历过程中会 mutate self.lots）
+        all_tags = list(self.lots.keys())
+        for tag in all_tags:
+            lot = self.lots.get(tag)
+            if lot is None or lot["qty"] <= 0:
+                continue
+
+            qty = lot["qty"]
+            cost_price = lot["cost_price"]
+            execution_price = apply_slippage(price, self.slippage, "SELL")
+            proceeds = qty * execution_price * (1 - self.commission)
+            self.cash += proceeds
+
+            trade = {
+                "time": time,
+                "type": "LIQUIDATE",
+                "tag": tag,
+                "price": execution_price,
+                "quantity": qty,
+                "proceeds": proceeds,
+                "commission": qty * execution_price * self.commission,
+                "slippage": qty * price * self.slippage,
+                "profit": proceeds - (qty * cost_price * (1 + self.commission)),
+            }
+            self.trades.append(trade)
+            self._notify_fill(strategy, trade)
+
+            del self.lots[tag]
+            logger.warning(
+                f"LIQUIDATE[{tag}]: {qty:.4f} @ {execution_price:.2f}, "
+                f"proceeds={proceeds:.2f}, profit={trade['profit']:.2f}"
+            )
 
     @staticmethod
     def _notify_fill(strategy, trade: Dict[str, Any]) -> None:

@@ -14,7 +14,7 @@ from typing import Optional
 
 import secrets
 from loguru import logger
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Security, HTTPException, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Security, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -324,7 +324,7 @@ class AnalyzeRequest(BaseModel):
 
 @app.post("/agent/analyze")
 @limiter.limit("10/minute")
-def agent_analyze(body: AnalyzeRequest, _=Security(verify_api_token)):
+def agent_analyze(request: Request, body: AnalyzeRequest, _=Security(verify_api_token)):
     """触发 AI 分析（只分析，不执行任何交易决策）"""
     state = service.get_state()
 
@@ -376,14 +376,14 @@ def agent_analyze(body: AnalyzeRequest, _=Security(verify_api_token)):
 
 @app.get("/agent/audit-logs")
 @limiter.limit("10/minute")
-def agent_audit_logs(task: Optional[str] = None, limit: int = 50, _=Security(verify_api_token)):
+def agent_audit_logs(request: Request, task: Optional[str] = None, limit: int = 50, _=Security(verify_api_token)):
     """获取 AI 分析审计日志"""
     return _audit_log.get_logs(task=task, limit=limit)
 
 
 @app.get("/agent/adoption-rate")
 @limiter.limit("10/minute")
-def agent_adoption_rate(task: Optional[str] = None, _=Security(verify_api_token)):
+def agent_adoption_rate(request: Request, task: Optional[str] = None, _=Security(verify_api_token)):
     """获取 AI 建议采纳率统计"""
     return _audit_log.get_adoption_rate(task=task)
 

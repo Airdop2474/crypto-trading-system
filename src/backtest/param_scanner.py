@@ -40,8 +40,11 @@ def _run_single_backtest(args: Tuple) -> Optional[Dict]:
                 "win_rate": metrics.get("win_rate", 0),
                 "total_trades": result["total_trades"],
             }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(
+            f"Param scan failed for params={params}, data_hash={data_hash}: "
+            f"{type(e).__name__}: {e}"
+        )
     return None
 
 

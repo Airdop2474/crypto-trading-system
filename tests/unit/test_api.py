@@ -6,6 +6,7 @@ frontend/lib/types.ts 的字段约定。
 复用，避免重复运行。
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -23,6 +24,9 @@ from fastapi.testclient import TestClient
 from src.api.app import app
 
 
+_TOKEN_HEADER = {"X-API-Token": "test-token"}
+
+
 @pytest.fixture(scope="module")
 def client():
     return TestClient(app)
@@ -31,16 +35,30 @@ def client():
 def test_health(client):
     d = client.get("/health").json()
     assert d["status"] == "ok"
-    # WebSocket 状态字段
+    # R-10: /health 仅返回 status，详细信息移至 /health/detailed（需认证）
+    assert len(d) == 1
+
+
+def test_health_detailed_requires_auth(client):
+    """R-10: /health/detailed 需认证"""
+    resp = client.get("/health/detailed")
+    assert resp.status_code in (403, 401)
+
+
+def test_health_detailed_with_auth(client):
+    """R-10: /health/detailed 认证后返回完整信息"""
+    resp = client.get("/health/detailed", headers=_TOKEN_HEADER)
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["status"] == "ok"
     assert "ws_connected" in d
     assert "ws_clients" in d
-    # 缓存状态字段
     assert "cache_backend" in d
     assert "cache_available" in d
 
 
 def test_account_summary_shape(client):
-    d = client.get("/account/summary").json()
+    d = client.get("/account/summary", headers=_TOKEN_HEADER).json()
     for k in [
         "totalEquity", "availableBalance", "positionValue", "unrealizedPnl",
         "todayPnl", "todayPnlPct", "totalPnl", "totalPnlPct",
@@ -53,7 +71,7 @@ def test_account_summary_shape(client):
 
 
 def test_strategies_shape(client):
-    rows = client.get("/strategies").json()
+    rows = client.get("/strategies", headers=_TOKEN_HEADER).json()
     assert len(rows) == 1
     s = rows[0]
     assert s["type"] == "grid"
@@ -62,7 +80,7 @@ def test_strategies_shape(client):
 
 
 def test_orders_shape(client):
-    rows = client.get("/orders").json()
+    rows = client.get("/orders", headers=_TOKEN_HEADER).json()
     assert rows, "应有成交记录"
     o = rows[0]
     for k in ["id", "time", "symbol", "side", "price", "amount", "status", "fee"]:
@@ -71,7 +89,7 @@ def test_orders_shape(client):
 
 
 def test_pnl_history_monotonic_dates(client):
-    rows = client.get("/analytics/pnl-history").json()
+    rows = client.get("/analytics/pnl-history", headers=_TOKEN_HEADER).json()
     assert len(rows) > 1
     assert rows[0]["cumulativePnl"] == pytest.approx(0.0)
     for r in rows:
@@ -79,13 +97,13 @@ def test_pnl_history_monotonic_dates(client):
 
 
 def test_strategy_performance_winrate_range(client):
-    perf = client.get("/analytics/strategy-performance").json()[0]
+    perf = client.get("/analytics/strategy-performance", headers=_TOKEN_HEADER).json()[0]
     assert 0.0 <= perf["winRate"] <= 100.0
     assert perf["trades"] >= 0
 
 
 def test_patch_status_echo(client):
-    r = client.patch("/strategies/grid-btc-usdt/status", json={"status": "paused"})
+    r = client.patch("/strategies/grid-btc-usdt/status", json={"status": "paused"}, headers=_TOKEN_HEADER)
     assert r.json() == {"id": "grid-btc-usdt", "status": "paused"}
 
 

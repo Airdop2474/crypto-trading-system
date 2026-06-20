@@ -1,0 +1,53 @@
+sequenceDiagram
+    participant Engine as BacktestEngine
+    participant Strategy as GridTradingStrategy<br/>(RiskAwareStrategy)
+    participant Utils as TradingUtils
+
+    Engine->>Engine: _reset()
+    Engine->>Strategy: reset()
+    Strategy->>Strategy: super().reset() → _reset_risk_state()
+
+    loop 每根 K 线 (bar i)
+        Engine->>Engine: historical = data[:i+1]
+        Engine->>Strategy: on_bar(historical, time)
+        
+        alt self.paused
+            Strategy-->>Engine: return []
+        else 正常
+            Strategy->>Strategy: _no_trade_reason(data, price)
+            alt NO_TRADE
+                Strategy-->>Engine: return []
+            else 有信号
+                Strategy->>Strategy: _grid_orders(price)
+                Strategy-->>Engine: return List[Order]
+            end
+        end
+
+        alt i < len(data)-1
+            Engine->>Engine: next_bar = data.iloc[i+1]
+            
+            loop 每个 Order
+                alt BUY
+                    Engine->>Utils: apply_slippage(price, slippage, "BUY")
+                    Utils-->>Engine: execution_price
+                    Engine->>Utils: apply_commission(capital, rate)
+                    Utils-->>Engine: cost_per_unit
+                    Engine->>Engine: _open_lot() → 记录 trade
+                else SELL
+                    Engine->>Utils: apply_slippage(price, slippage, "SELL")
+                    Utils-->>Engine: execution_price
+                    Engine->>Engine: _close_lot() → 记录 trade
+                end
+                Engine->>Strategy: on_fill(trade)
+                Strategy->>Strategy: 连亏/日亏/累计回撤检测
+                alt 触发熔断
+                    Strategy->>Strategy: self.paused = True
+                end
+            end
+        end
+
+        Engine->>Engine: _update_equity(close)
+    end
+
+    Engine->>Engine: _generate_results()
+    Engine-->>Engine: return {success, metrics, trades, equity_curve}

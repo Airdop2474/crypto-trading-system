@@ -502,12 +502,12 @@ class TradingAnalyzer:
         if not trades:
             return {"source": "无交易", "details": "无交易记录"}
 
-        wins = [t for t in trades if t.get("pnl", 0) > 0]
-        losses = [t for t in trades if t.get("pnl", 0) < 0]
+        wins = [t for t in trades if t.get("profit", t.get("pnl", 0)) > 0]
+        losses = [t for t in trades if t.get("profit", t.get("pnl", 0)) < 0]
 
         win_rate = len(wins) / len(trades) if trades else 0
-        avg_win = np.mean([t["pnl"] for t in wins]) if wins else 0
-        avg_loss = np.mean([t["pnl"] for t in losses]) if losses else 0
+        avg_win = np.mean([t.get("profit", t.get("pnl", 0)) for t in wins]) if wins else 0
+        avg_loss = np.mean([t.get("profit", t.get("pnl", 0)) for t in losses]) if losses else 0
 
         # 震荡特征：高胜率 + 小盈亏比
         # 趋势特征：低胜率 + 大盈亏比
@@ -622,8 +622,8 @@ class TradingAnalyzer:
         self, losers: List[Dict], all_trades: List[Dict]
     ) -> Dict[str, Any]:
         """分析亏损模式"""
-        loss_pnls = [t["pnl"] for t in losers if "pnl" in t]
-        win_pnls = [t["pnl"] for t in all_trades if t.get("pnl", 0) > 0]
+        loss_pnls = [t.get("profit", t.get("pnl", 0)) for t in losers if "profit" in t or "pnl" in t]
+        win_pnls = [t.get("profit", t.get("pnl", 0)) for t in all_trades if t.get("profit", t.get("pnl", 0)) > 0]
 
         avg_loss = float(np.mean(loss_pnls)) if loss_pnls else 0
         avg_win = float(np.mean(win_pnls)) if win_pnls else 0
@@ -659,7 +659,7 @@ class TradingAnalyzer:
         max_consec = 0
         current = 0
         for t in trades:
-            if t.get("pnl", 0) < 0:
+            if t.get("profit", t.get("pnl", 0)) < 0:
                 current += 1
                 max_consec = max(max_consec, current)
             else:

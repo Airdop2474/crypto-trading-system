@@ -92,11 +92,32 @@ class ExchangeRunnerBroker:
             )
         self._errors += 1
         if res.status == "timeout":
-            # 下单成功但未确认成交：记为待确认，runner 跳过，对账会发现漂移→熔断
+            # 下单成功但未确认成交：尝试取消订单，避免未确认订单累积导致对账漂移
             if res.order_id is not None:
-                self._unconfirmed.append(res.order_id)
-            logger.warning(f"下单未确认成交（待对账）：{order.symbol} {order.side} "
-                           f"{order.amount} -> {res.order_id}")
+                try:
+                    cancelled = self.cancel_order(res.order_id)
+                    if cancelled:
+                        logger.warning(
+                            f"timeout 订单 {res.order_id} 已取消 "
+                            f"({order.symbol} {order.side} {order.amount})"
+                        )
+                    else:
+                        # 取消失败（可能已部分成交）→ 入待确认列表，对账兜底
+                        self._unconfirmed.append(res.order_id)
+                        logger.warning(
+                            f"timeout 订单 {res.order_id} 取消失败，待对账: "
+                            f"{order.symbol} {order.side} {order.amount}"
+                        )
+                except Exception:
+                    self._unconfirmed.append(res.order_id)
+                    logger.warning(
+                        f"timeout 订单 {res.order_id} 取消异常，待对账: "
+                        f"{order.symbol} {order.side} {order.amount}"
+                    )
+            else:
+                logger.warning(
+                    f"下单未确认成交（无order_id）：{order.symbol} {order.side} {order.amount}"
+                )
         return res  # timeout / rejected：原样返回，runner 不记账
 
     def _record_fill(self, res: OrderResult, side: str, timestamp) -> None:

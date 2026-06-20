@@ -13,6 +13,7 @@ AI Agent 审计日志
 """
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -27,6 +28,7 @@ class AuditLog:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self._log_file = self.log_dir / "audit_log.json"
+        self._lock = threading.Lock()
 
     def record(
         self,
@@ -66,9 +68,10 @@ class AuditLog:
             "action_taken": None,
         }
 
-        logs = self._load_logs()
-        logs.append(entry)
-        self._save_logs(logs)
+        with self._lock:
+            logs = self._load_logs()
+            logs.append(entry)
+            self._save_logs(logs)
 
         logger.info(f"Agent audit log recorded: {entry_id}")
         return entry_id
@@ -85,14 +88,15 @@ class AuditLog:
         返回：
             是否成功更新
         """
-        logs = self._load_logs()
-        for entry in logs:
-            if entry["id"] == entry_id:
-                entry["human_approved"] = approved
-                entry["action_taken"] = action
-                self._save_logs(logs)
-                logger.info(f"Agent audit log updated: {entry_id}, approved={approved}")
-                return True
+        with self._lock:
+            logs = self._load_logs()
+            for entry in logs:
+                if entry["id"] == entry_id:
+                    entry["human_approved"] = approved
+                    entry["action_taken"] = action
+                    self._save_logs(logs)
+                    logger.info(f"Agent audit log updated: {entry_id}, approved={approved}")
+                    return True
 
         logger.warning(f"Agent audit log entry not found: {entry_id}")
         return False

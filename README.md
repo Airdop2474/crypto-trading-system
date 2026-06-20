@@ -1,25 +1,38 @@
-# Crypto Trading System with AI Optimization
+# Crypto Trading System
 
-> 基于 AI Agent 优化的加密货币自动交易系统
+> 加密货币自动化量化交易系统 — 8 策略引擎 + Next.js 仪表盘 + Paper Trading
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/Status-Development-yellow.svg)]()
+[![Next.js](https://img.shields.io/badge/Next.js-16-black.svg)](https://nextjs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
+[![Tests](https://img.shields.io/badge/Tests-475%20passed-green.svg)]()
+[![Status](https://img.shields.io/badge/Status-Paper%20Trading-yellow.svg)]()
 
 ---
 
 ## 📋 项目简介
 
-这是一个集成 AI Agent 智能优化的加密货币量化交易系统，支持策略回测、模拟交易和实盘交易。系统通过 Hermes/OpenClaw 等 AI Agent 自动分析交易结果并提出优化建议，形成完整的开发-测试-优化闭环。
+集成 8 交易策略的量化交易系统，支持回测、Paper Trading（模拟交易）和实盘交易。前端基于 Next.js 16 + React 19 仪表盘提供实时策略跑分、持仓管理和盈亏分析。
 
 ### 核心特性
 
-- ✅ **完整回测框架** - 使用历史数据验证策略有效性
-- ✅ **多策略支持** - 网格交易、趋势跟踪等多种策略
-- ✅ **AI 智能优化** - Agent 自动分析并优化策略参数
-- ✅ **实时监控** - Grafana 仪表盘 + Streamlit 控制台
-- ✅ **风险控制** - 止损、仓位管理、异常熔断
-- ✅ **时序数据库** - TimescaleDB 高效存储海量行情数据
+- ✅ **完整回测框架** — 事件驱动 bar-by-bar，无前视偏差
+- ✅ **8 策略引擎** — Grid/RSI/MA/BuyHold/Donchian/Structure/SuperTrend/Reversal
+- ✅ **熔断风控** — 策略级 + 账户级双重熔断（连亏/日亏/回撤）
+- ✅ **Paper Trading** — 60 天模拟交易流程，实盘前硬门禁
+- ✅ **实时仪表盘** — Next.js 16 + SWR + shadcn/ui，策略跑分/持仓/盈亏
+- ✅ **时序数据库** — TimescaleDB 高效存储交易数据
+- ✅ **Docker 部署** — docker compose up 一键启动基础设施
+
+### 技术栈
+
+| 层 | 技术 |
+|----|------|
+| 后端 | Python 3.11, FastAPI, pandas, numpy, ccxt |
+| 前端 | Next.js 16, React 19, TypeScript, Tailwind 4, SWR, shadcn/ui |
+| 数据 | TimescaleDB, Redis |
+| 监控 | Grafana |
+| 部署 | Docker Compose
 
 ---
 
@@ -28,9 +41,9 @@
 ### 前置要求
 
 - Python 3.11+
-- PostgreSQL + TimescaleDB
-- Redis
+- Node.js 18+
 - Docker (推荐)
+- TimescaleDB + Redis (Docker 方式自动包含)
 
 ### 安装步骤
 
@@ -39,25 +52,26 @@
 git clone <your-repo-url>
 cd crypto-trading-system
 
-# 2. 创建虚拟环境
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+# 2. 配置环境变量
+cp .env.example .env
+# 编辑 .env，填入你的配置（GRAFANA_ADMIN_PASSWORD 等必填）
 
 # 3. 安装依赖
 pip install -r requirements.txt
+cd frontend && npm install --legacy-peer-deps && cd ..
 
-# 4. 启动数据库（Docker）
-docker-compose up -d
+# 4. 启动基础设施（Docker）
+docker compose up -d
 
-# 5. 配置环境变量
-cp .env.example .env
-# 编辑 .env，填入你的配置
+# 5. 启动后端 API
+python -m uvicorn src.api.app:app --port 8000
 
-# 6. 初始化数据库
-python scripts/init_database.py
+# 6. 启动前端仪表盘（另一个终端）
+cd frontend && npm run dev -- --port 3001
 
-# 7. 下载测试数据
-python scripts/download_data.py --symbol BTC/USDT --days 365
+# 7. 打开浏览器
+# http://localhost:3001  (前端仪表盘)
+# http://localhost:8000/docs  (API 文档)
 
 # 8. 运行第一次回测
 python scripts/run_backtest.py --strategy grid
@@ -77,8 +91,8 @@ streamlit run src/monitor/dashboard.py
 
 ## 📚 文档
 
-- **[项目策划文档](PROJECT_PLAN.md)** - 需求分析、技术方案、开发计划
-- **[工程开发文档](ENGINEERING.md)** - 环境配置、模块设计、开发规范
+- **[项目策划文档](docs/planning/PROJECT_PLAN.md)** - 需求分析、技术方案、开发计划
+- **[工程开发文档](docs/technical/ENGINEERING.md)** - 环境配置、模块设计、开发规范
 - **[API 文档](docs/API.md)** - 接口说明（待完善）
 - **[部署文档](docs/DEPLOYMENT.md)** - 生产环境部署指南（待完善）
 

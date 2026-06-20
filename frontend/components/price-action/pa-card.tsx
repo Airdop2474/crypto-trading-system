@@ -1,9 +1,8 @@
 "use client"
 
-import { Clock, Target, ShieldAlert } from "lucide-react"
+import { Clock, BarChart3 } from "lucide-react"
 import type { Strategy, StrategyStatus } from "@/lib/types"
-import { cn } from "@/lib/utils"
-import { fmtNum, fmtPct, fmtSigned, fmtUsd, pnlColor } from "@/lib/format"
+import { fmtPct, fmtSigned, fmtUsd, pnlColor } from "@/lib/format"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { StrategyStatusBadge } from "@/components/status-badge"
 import { StrategyControls } from "@/components/strategy-controls"
@@ -13,14 +12,19 @@ interface Props {
   onSetStatus: (id: string, status: StrategyStatus) => void
 }
 
-function strengthColor(v: number) {
-  if (v >= 70) return "text-success"
-  if (v >= 50) return "text-primary"
-  return "text-muted-foreground"
+// 策略类型展示映射
+const TYPE_LABELS: Record<string, string> = {
+  donchian: "唐奇安通道 · 趋势突破", structure: "市场结构 · 波动突破",
+  supertrend: "SuperTrend · ATR跟踪止损", reversal: "关键位反转 · Pin Bar确认",
+}
+const TYPE_TIMEFRAMES: Record<string, string> = {
+  donchian: "period=20", structure: "lookback=10",
+  supertrend: "period=10, mult=3×", reversal: "lookback=50",
 }
 
 export function PaCard({ strategy, onSetStatus }: Props) {
-  const pa = strategy.priceAction!
+  const meta = TYPE_LABELS[strategy.type] ?? strategy.type
+  const params = TYPE_TIMEFRAMES[strategy.type] ?? ""
 
   return (
     <Card>
@@ -31,7 +35,7 @@ export function PaCard({ strategy, onSetStatus }: Props) {
             <StrategyStatusBadge status={strategy.status} />
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {strategy.symbol} · {pa.timeframe} 周期 · {strategy.runningDays} 天
+            {strategy.symbol} · {meta} · {strategy.runningDays} 天
           </p>
         </div>
         <div className="text-right">
@@ -46,32 +50,21 @@ export function PaCard({ strategy, onSetStatus }: Props) {
       <CardContent className="flex flex-col gap-4">
         <div className="flex items-center justify-between rounded-md border border-border/60 bg-secondary/30 px-3 py-2.5">
           <div>
-            <p className="text-[11px] text-muted-foreground">当前识别形态</p>
-            <p className="text-sm font-medium">{pa.pattern}</p>
+            <p className="text-[11px] text-muted-foreground">策略类型</p>
+            <p className="text-sm font-medium">{meta}</p>
           </div>
           <div className="text-right">
-            <p className="text-[11px] text-muted-foreground">信号强度</p>
-            <p className={cn("font-mono text-sm font-semibold tabular-nums", strengthColor(pa.signalStrength))}>
-              {pa.signalStrength}
+            <p className="text-[11px] text-muted-foreground">参数</p>
+            <p className="font-mono text-sm font-semibold tabular-nums text-muted-foreground">
+              {params}
             </p>
           </div>
         </div>
 
-        {/* 信号强度条 */}
-        <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
-          <div
-            className={cn(
-              "h-full rounded-full",
-              pa.signalStrength >= 70 ? "bg-success" : pa.signalStrength >= 50 ? "bg-primary" : "bg-muted-foreground",
-            )}
-            style={{ width: `${pa.signalStrength}%` }}
-          />
-        </div>
-
         <div className="grid grid-cols-2 gap-3">
-          <InfoRow icon={ShieldAlert} label="止损价" value={fmtNum(pa.stopLoss, pa.stopLoss < 10 ? 3 : 0)} valueClass="text-destructive" />
-          <InfoRow icon={Target} label="止盈价" value={fmtNum(pa.takeProfit, pa.takeProfit < 10 ? 3 : 0)} valueClass="text-success" />
-          <InfoRow icon={Clock} label="最近信号" value={pa.lastSignalAt.split(" ")[1]} />
+          <InfoRow icon={BarChart3} label="类型" value={strategy.type} />
+          <InfoRow icon={Clock} label="运行天数" value={`${strategy.runningDays} 天`} />
+          <InfoRow label="交易对" value={strategy.symbol} />
           <InfoRow label="投入本金" value={fmtUsd(strategy.investment, 0)} />
         </div>
 
@@ -87,18 +80,16 @@ function InfoRow({
   icon: Icon,
   label,
   value,
-  valueClass,
 }: {
   icon?: typeof Clock
   label: string
   value: string
-  valueClass?: string
 }) {
   return (
     <div className="flex items-center gap-2">
       {Icon ? <Icon className="size-3.5 text-muted-foreground" /> : <span className="size-3.5" />}
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className={cn("ml-auto font-mono text-xs tabular-nums", valueClass)}>{value}</span>
+      <span className="ml-auto font-mono text-xs tabular-nums">{value}</span>
     </div>
   )
 }

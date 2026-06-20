@@ -43,7 +43,7 @@ class ExchangeClient:
         }
 
         # 如果提供了 API Key
-        if api_key and secret:
+        if api_key is not None and api_key != "" and secret is not None and secret != "":
             params["apiKey"] = api_key
             params["secret"] = secret
 
@@ -56,7 +56,7 @@ class ExchangeClient:
         self.exchange = exchange_class(params)
 
         # 有凭据的 testnet 必须切换 sandbox 端点，防止测试网 Key 发往主网
-        if testnet and api_key and secret:
+        if testnet and api_key is not None and api_key != "" and secret is not None and secret != "":
             self.exchange.set_sandbox_mode(True)
 
         logger.info(

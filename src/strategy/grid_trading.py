@@ -13,7 +13,8 @@ from collections import deque
 from datetime import datetime
 import pandas as pd
 
-from src.strategy.base import Strategy, Order
+from src.strategy.risk_aware import RiskAwareStrategy
+from src.strategy.base import Order
 from src.utils.logger import logger
 
 
@@ -22,7 +23,7 @@ GRID_COUNT_MIN, GRID_COUNT_MAX = 5, 30
 POSITION_PER_GRID_MIN, POSITION_PER_GRID_MAX = 0.02, 0.15
 
 
-class GridTradingStrategy(Strategy):
+class GridTradingStrategy(RiskAwareStrategy):
     """
     网格交易策略（多仓位）
 
@@ -35,6 +36,19 @@ class GridTradingStrategy(Strategy):
     适用环境：横盘震荡、波动率适中、流动性好。
     不适用环境（主动 NO_TRADE / PAUSE）见 on_bar 与过滤器。
     """
+
+    PRICE_RANGE_BUFFER = 0.05  # 网格边界缓冲区 (+/-5%)
+    PAUSE_COOLDOWN = 3600  # 数据异常暂停冷却时间（秒），1 小时
+
+    PARAM_SCHEMA = {
+        "lower_price": {"type": float, "min": 0},
+        "upper_price": {"type": float, "min": 0},
+        "grid_count": {"type": int, "min": 5, "max": 30},
+        "position_per_grid": {"type": float, "min": 0.02, "max": 0.15},
+        "enable_filters": {"type": bool},
+        "max_consecutive_losses": {"type": int, "min": 1},
+        "max_daily_loss": {"type": float, "min": 0, "max": 0.1},
+    }
 
     def __init__(
         self,
@@ -60,7 +74,12 @@ class GridTradingStrategy(Strategy):
             max_daily_loss: 当日亏损熔断阈值（占初始资金比例）
             initial_capital: 初始资金（用于当日亏损熔断的资金基准，应与引擎一致）
         """
-        super().__init__(name="GridTrading")
+        super().__init__(
+            name="GridTrading",
+            max_consecutive_losses=max_consecutive_losses,
+            max_daily_loss=max_daily_loss,
+            initial_capital=initial_capital,
+        )
 
         if lower_price >= upper_price:
             raise ValueError("lower_price must be less than upper_price")
@@ -87,9 +106,6 @@ class GridTradingStrategy(Strategy):
         self.grid_count = grid_count
         self.position_per_grid = position_per_grid
         self.enable_filters = enable_filters
-        self.max_consecutive_losses = max_consecutive_losses
-        self.max_daily_loss = max_daily_loss
-        self.initial_capital = initial_capital
 
         # 计算网格间距与网格线
         self.grid_spacing = (upper_price - lower_price) / grid_count
@@ -97,7 +113,7 @@ class GridTradingStrategy(Strategy):
             lower_price + i * self.grid_spacing for i in range(grid_count + 1)
         ]
 
-        self._init_state()
+        self._init_grid_state()
 
         self.set_parameters(
             lower_price=lower_price,
@@ -113,17 +129,14 @@ class GridTradingStrategy(Strategy):
             f"pos/grid={position_per_grid:.2%}"
         )
 
-    def _init_state(self) -> None:
-        """初始化/重置运行状态"""
+    def _init_grid_state(self) -> None:
+        """初始化/重置网格专属运行状态（熔断状态由 RiskAwareStrategy 管理）"""
         # 每个网格档位是否已持仓
         self.grid_filled = [False] * (self.grid_count + 1)
         # 上一根 K 线价格（用于判断穿越）
         self.last_price: Optional[float] = None
-        # 熔断状态
-        self.consecutive_losses = 0
-        self.paused = False
-        self.current_day = None
-        self.daily_pnl = 0.0
+        # 数据异常暂停时间戳（用于自动恢复）
+        self._anomaly_paused_at: Optional[pd.Timestamp] = None
         # EMA 增量缓存（避免每根 bar 全量重算 O(n²)）
         self._ema20: Optional[float] = None
         self._ema50: Optional[float] = None
@@ -133,14 +146,32 @@ class GridTradingStrategy(Strategy):
         self._tr_sum: float = 0.0
         self._prev_close_atr: Optional[float] = None
 
+    def _check_boundary_breach(self, current_price: float) -> tuple:
+        """检查价格是否突破网格边界。
+
+        参数：
+            current_price: 当前价格
+
+        返回：
+            ("CONTINUE", None)     — 正常范围内
+            ("PAUSE", reason)      — 突破上沿 5%，暂停交易
+            ("LIQUIDATE", reason)  — 突破下沿 5%，建议清仓
+        """
+        if current_price > self.upper_price * (1 + self.PRICE_RANGE_BUFFER):
+            return ("PAUSE", f"价格突破网格上沿{self.PRICE_RANGE_BUFFER:.0%}，暂停交易")
+        if current_price < self.lower_price * (1 - self.PRICE_RANGE_BUFFER):
+            return ("LIQUIDATE", f"价格突破网格下沿{self.PRICE_RANGE_BUFFER:.0%}，建议清仓")
+        return ("CONTINUE", None)
+
     def on_bar(self, data: pd.DataFrame, current_time: datetime):
         """
         处理每根 K 线，返回订单列表（可能为空）
 
         决策顺序：
-        1. PAUSE 熔断（连亏/当日亏损）→ 停止交易
-        2. NO_TRADE 过滤（价格越界/趋势/波动率/数据异常）→ 本根不交易
-        3. 网格穿越 → 生成多档买卖订单
+        1. _is_paused() 熔断 → 停止交易
+        2. _check_boundary_breach() 边界检测 → PAUSE/LIQUIDATE
+        3. NO_TRADE 过滤（价格越界/趋势/波动率/数据异常）→ 本根不交易
+        4. 网格穿越 → 生成多档买卖订单
         """
         if len(data) < 2:
             self.last_price = data.iloc[-1]["close"] if len(data) else None
@@ -148,14 +179,36 @@ class GridTradingStrategy(Strategy):
 
         current_price = data.iloc[-1]["close"]
 
-        # --- PAUSE 熔断：触发后不再交易 ---
-        if self.paused:
-            return []
+        # --- 熔断暂停检查（RiskAwareStrategy 统一管理）---
+        if self._is_paused():
+            self._try_recover(data)
+            if self._is_paused():
+                return []
 
-        # 数据异常（PAUSE）：最近窗口存在 NaN
+        # --- 网格边界击穿检测 ---
+        breach_status, breach_reason = self._check_boundary_breach(current_price)
+        if breach_status == "PAUSE":
+            logger.warning(breach_reason)
+            self._paused = True
+            self.last_price = current_price
+            return []
+        elif breach_status == "LIQUIDATE":
+            logger.warning(breach_reason)
+            # 生成清仓订单：卖出所有已持仓的网格档位
+            liquidate_orders = []
+            for i, filled in enumerate(self.grid_filled):
+                if filled:
+                    liquidate_orders.append(Order(side="SELL", tag=i))
+                    self.grid_filled[i] = False
+            self._paused = True
+            self.last_price = current_price
+            return liquidate_orders if liquidate_orders else []
+
+        # 数据异常（PAUSE）：最近窗口存在 NaN，记录时间戳以便自动恢复
         if self._has_data_anomaly(data):
             logger.warning("Data anomaly detected, pausing")
-            self.paused = True
+            self._paused = True
+            self._anomaly_paused_at = data["timestamp"].iloc[-1]
             return []
 
         # --- NO_TRADE 过滤：条件恢复后自动继续 ---
@@ -313,44 +366,37 @@ class GridTradingStrategy(Strategy):
             return "downtrend"
         return "sideways"
 
+    def _try_recover(self, data: pd.DataFrame) -> bool:
+        """尝试从数据异常暂停中恢复。
+
+        在冷却时间过后检查数据质量是否改善，若改善则自动恢复。
+
+        返回：
+            True: 已成功恢复
+            False: 仍需暂停
+        """
+        if self._anomaly_paused_at is None:
+            return False
+
+        current_time = data["timestamp"].iloc[-1]
+        elapsed = (current_time - self._anomaly_paused_at).total_seconds()
+
+        if elapsed >= self.PAUSE_COOLDOWN:
+            if not self._has_data_anomaly(data):
+                logger.info(
+                    f"Data quality recovered after {elapsed:.0f}s, resuming strategy"
+                )
+                self._paused = False
+                self._anomaly_paused_at = None
+                return True
+
+        return False
+
     @staticmethod
     def _has_data_anomaly(data: pd.DataFrame, window: int = 5) -> bool:
         """最近 window 根 K 线是否存在 NaN"""
         recent = data.iloc[-window:][["open", "high", "low", "close"]]
         return bool(recent.isnull().values.any())
-
-    def on_fill(self, trade: dict) -> None:
-        """成交回报：跟踪盈亏，触发连亏/当日亏损熔断"""
-        profit = trade.get("profit")
-        if profit is None:
-            return  # 买入无已实现盈亏，不计入
-
-        # 当日亏损熔断：按成交日重置当日累计盈亏
-        trade_day = pd.Timestamp(trade["time"]).date()
-        if self.current_day != trade_day:
-            self.current_day = trade_day
-            self.daily_pnl = 0.0
-
-        self.daily_pnl += profit
-
-        # 连亏计数
-        if profit < 0:
-            self.consecutive_losses += 1
-        elif profit > 0:
-            self.consecutive_losses = 0
-
-        if self.consecutive_losses >= self.max_consecutive_losses:
-            logger.warning(
-                f"PAUSE: {self.consecutive_losses} consecutive losses"
-            )
-            self.paused = True
-
-        # 当日亏损熔断：当日已实现亏损占初始资金比例 >= 阈值
-        if self.daily_pnl < 0 and self.initial_capital > 0:
-            loss_ratio = abs(self.daily_pnl) / self.initial_capital
-            if loss_ratio >= self.max_daily_loss:
-                logger.warning(f"PAUSE: daily loss {loss_ratio:.2%}")
-                self.paused = True
 
     def _find_grid_index(self, price: float) -> int:
         """找到价格所在的网格索引（0 到 grid_count）"""
@@ -364,7 +410,7 @@ class GridTradingStrategy(Strategy):
     def reset(self):
         """重置策略状态"""
         super().reset()
-        self._init_state()
+        self._init_grid_state()
         logger.debug("GridTrading strategy reset")
 
     def get_grid_status(self) -> dict:
@@ -373,8 +419,8 @@ class GridTradingStrategy(Strategy):
             "grids": self.grids,
             "grid_filled": self.grid_filled,
             "last_price": self.last_price,
-            "paused": self.paused,
-            "consecutive_losses": self.consecutive_losses,
+            "paused": self._paused,
+            "consecutive_losses": self._consecutive_losses,
         }
 
 

@@ -54,9 +54,7 @@ export function PositionsTable({ positions, loading }: { positions: Position[]; 
                       <TableCell className="text-right font-mono tabular-nums">{fmtNum(p.size, 4)}</TableCell>
                       <TableCell className="text-right font-mono tabular-nums">{fmtNum(p.entryPrice, p.entryPrice < 10 ? 3 : 2)}</TableCell>
                       <TableCell className="text-right font-mono tabular-nums">{fmtNum(p.markPrice, p.markPrice < 10 ? 3 : 2)}</TableCell>
-                      <TableCell className="text-right font-mono tabular-nums">{p.leverage}x</TableCell>
                       <TableCell className="text-right font-mono tabular-nums">{fmtUsd(p.margin, 0)}</TableCell>
-                      <TableCell className="text-right font-mono tabular-nums text-destructive">{fmtNum(p.liquidationPrice, p.liquidationPrice < 10 ? 3 : 0)}</TableCell>
                       <TableCell className={`text-right font-mono tabular-nums ${pnlColor(p.unrealizedPnl)}`}>
                         <div>{fmtSigned(p.unrealizedPnl)}</div>
                         <div className="text-xs">{fmtPct(p.unrealizedPnlPct)}</div>

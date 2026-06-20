@@ -26,7 +26,7 @@ def extract_fill(place_result, order_status=None):
     """
     p = getattr(place_result, "filled_price", None)
     a = getattr(place_result, "filled_amount", None)
-    if p and a:
+    if p is not None and a is not None:
         return float(p), float(a), "place"
     if order_status:
         sp = order_status.get("average") or order_status.get("price")
@@ -66,6 +66,10 @@ class ExchangeExecutor:
         try:
             amount_r = float(self.exchange.amount_to_precision(symbol, amount))
         except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"amount_to_precision failed for {symbol} {amount}: {type(e).__name__}: {e}"
+            )
             return 0.0, False, f"数量低于交易所精度：{type(e).__name__}"
         if amount_r <= 0:
             return 0.0, False, "数量取整后为 0"
@@ -109,7 +113,7 @@ class ExchangeExecutor:
                                reason=f"{self.timeout}s 内未确认成交")
         status = "filled" if filled >= amount_r * self.FULL_FILL_TOL else "partial"
         return OrderResult(order_id=res.order_id, status=status,
-                           filled_price=price, filled_amount=filled)
+                           filled_price=float(price), filled_amount=float(filled))
 
     def _confirm(self, place_result):
         """取成交价量：先用下单返回（市价单同步即有），缺则轮询查单到超时。

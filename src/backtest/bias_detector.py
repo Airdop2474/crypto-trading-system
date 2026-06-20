@@ -4,6 +4,7 @@
 检测回测代码和逻辑中的前视偏差
 """
 
+import ast
 import re
 from typing import Dict, List
 from datetime import datetime
@@ -16,10 +17,13 @@ class BiasDetector:
     """
     前视偏差检测器
 
-    检测常见的前视偏差模式
+    检测常见的前视偏差模式。
+    注意：正则匹配存在误报（false positive）风险 —— 字符串/注释/multiline
+    上下文可能被错误匹配。建议在 regex 快速扫描后，通过 AST 级别分析
+    确认（见 check_strategy_code_ast 方法）。
     """
 
-    # 危险代码模式
+    # 危险代码模式（正则快速扫描，可能误报，需 AST 确认）
     DANGEROUS_PATTERNS = [
         # iloc[-1] 在 bar-by-bar 模型中是当前已收盘 bar，不是未来数据
         # 降级为 info，仅作提醒而非高风险误报
@@ -87,6 +91,53 @@ class BiasDetector:
             "warning_count": len(self.warnings),
             "warnings": self.warnings,
             "has_safe_patterns": has_safe_patterns,
+        }
+
+    def check_strategy_code_ast(self, strategy) -> Dict:
+        """使用 AST 解析精确检测 look-ahead bias（无正则误报）。
+
+        解析策略的 on_bar 源码为 AST，遍历所有节点检测危险模式：
+        - Call(func=Attribute(attr='shift'), args=[UnaryOp(USub)])  负 shift
+        - 链表切片 [-1] 在 bar-by-bar 中为当前 bar（安全，降级为 info）
+
+        参数：
+            strategy: 策略实例
+
+        返回：
+            {"success": bool, "warnings": [...], "error": Optional[str]}
+        """
+        try:
+            source_code = inspect.getsource(strategy.on_bar)
+        except Exception as e:
+            return {"success": False, "warnings": [], "error": str(e)}
+
+        warnings = []
+        try:
+            tree = ast.parse(source_code)
+        except SyntaxError as e:
+            return {"success": False, "warnings": [], "error": f"Syntax error: {e}"}
+
+        class BiasVisitor(ast.NodeVisitor):
+            def visit_Call(self, node):
+                # 检测 .shift(-N) 模式
+                if isinstance(node.func, ast.Attribute) and node.func.attr == "shift":
+                    for arg in node.args:
+                        if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
+                            warnings.append({
+                                "pattern": ".shift(-N)",
+                                "description": "使用未来数据（负shift）",
+                                "severity": "critical",
+                                "line": node.lineno,
+                            })
+                self.generic_visit(node)
+
+        BiasVisitor().visit(tree)
+
+        return {
+            "success": True,
+            "warnings": warnings,
+            "has_ast_warnings": len(warnings) > 0,
+            "error": None,
         }
 
     def check_backtest_logic(self, results: Dict) -> Dict:

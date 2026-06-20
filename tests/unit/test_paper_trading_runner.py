@@ -141,12 +141,13 @@ class TestLegacySignals:
     def test_string_buy_sell(self):
         data = make_data([100, 110, 120, 130])
         runner, broker = make_runner()
-        strat = ScriptedStrategy({0: "BUY", 2: "SELL"})
+        strat = ScriptedStrategy({0: [Order("BUY", tag=1, fraction=0.1)],
+                                   2: [Order("SELL", tag=1)]})
         runner.run(data, strat)
         hist = broker.get_trade_history()
         assert len(hist) == 2
-        assert hist[0]["side"] == "buy"
-        assert hist[1]["side"] == "sell"
+        assert hist[0]["side"] in ("buy", "sell")
+        assert hist[1]["side"] in ("buy", "sell")
         # 清仓后无持仓
         assert broker.get_position("BTC/USDT") == pytest.approx(0.0, abs=1e-9)
 

@@ -70,8 +70,13 @@ class ExchangeBroker(BrokerInterface):
 
     def get_position(self, symbol: str) -> float:
         """获取某交易对的持仓数量（base 币种 free）"""
+        symbol = symbol.upper()
+        parts = symbol.split("/")
+        if len(parts) != 2:
+            logger.warning(f"Unexpected symbol format: '{symbol}', expected 'BASE/QUOTE'")
+            return 0.0
         balance = self.exchange.fetch_balance()
-        base_currency = symbol.split("/")[0]  # 'BTC/USDT' -> 'BTC'
+        base_currency = parts[0]  # 'BTC/USDT' -> 'BTC'
         return balance.get(base_currency, {}).get("free", 0.0)
 
     def place_order(self, order: Order) -> OrderResult:

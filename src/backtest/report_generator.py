@@ -8,7 +8,6 @@
 """
 
 import json
-import hashlib
 import uuid
 from pathlib import Path
 from typing import Dict, Optional
@@ -78,9 +77,7 @@ class BacktestReportGenerator:
 
         data_version = "N/A"
         if data is not None and not data.empty:
-            data_version = hashlib.sha256(
-                data.to_csv(index=False).encode()
-            ).hexdigest()
+            data_version = hex(pd.util.hash_pandas_object(data).sum())
 
         return {
             "run_time": datetime.now().isoformat(),

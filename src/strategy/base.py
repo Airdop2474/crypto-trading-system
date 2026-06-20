@@ -90,6 +90,39 @@ class Strategy(ABC):
         self.parameters.update(kwargs)
         logger.info(f"Strategy {self.name} parameters updated: {self.parameters}")
 
+    @staticmethod
+    def validate_params(kwargs: dict, schema: dict) -> dict:
+        """校验参数，越界时抛出 TypeError 或 ValueError。
+
+        参数：
+            kwargs: 待校验的关键字参数字典
+            schema: 参数规格，形如 {"key": {"type": float, "min": 0, "max": 1}}
+
+        返回：
+            校验通过的原 kwargs（允许调用方链式使用）
+
+        异常：
+            TypeError: 参数类型不匹配
+            ValueError: 参数值越界
+        """
+        for key, spec in schema.items():
+            if key in kwargs:
+                val = kwargs[key]
+                if "type" in spec and not isinstance(val, spec["type"]):
+                    raise TypeError(
+                        f"{key}: expected {spec['type'].__name__}, "
+                        f"got {type(val).__name__}"
+                    )
+                if "min" in spec and val < spec["min"]:
+                    raise ValueError(
+                        f"{key}={val} < min={spec['min']}"
+                    )
+                if "max" in spec and val > spec["max"]:
+                    raise ValueError(
+                        f"{key}={val} > max={spec['max']}"
+                    )
+        return kwargs
+
     def __repr__(self):
         return f"{self.__class__.__name__}(name={self.name})"
 

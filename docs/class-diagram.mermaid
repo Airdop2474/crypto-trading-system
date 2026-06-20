@@ -1,0 +1,150 @@
+classDiagram
+    class Strategy {
+        <<abstract>>
+        +str name
+        +dict parameters
+        +on_bar(data, current_time)* Order|str|None
+        +on_fill(trade) None
+        +reset() None
+        +set_parameters(**kwargs) None
+    }
+
+    class Order {
+        +str side
+        +object tag
+        +float fraction
+        +float? limit_price
+    }
+
+    class RiskAwareStrategy {
+        +int _max_consecutive_losses
+        +float _max_daily_loss_pct
+        +float _initial_capital
+        +int consecutive_losses
+        +bool paused
+        +object current_day
+        +float daily_pnl
+        +on_fill(trade) None
+        +_reset_risk_state() None
+        +_is_paused() bool
+    }
+
+    class GridTradingStrategy {
+        +float lower_price
+        +float upper_price
+        +int grid_count
+        +float position_per_grid
+        +bool enable_filters
+        +Dict PARAM_SCHEMA$
+        +on_bar(data, current_time) List~Order~
+        +_check_boundary_breach(current_price) Tuple
+        +_grid_orders(current_price) List~Order~
+        +_no_trade_reason(data, price) str?
+        +reset() None
+        +get_grid_status() dict
+    }
+
+    class RSIMomentumStrategy {
+        +int rsi_period
+        +float oversold
+        +float overbought
+        +int ema_period
+        +bool enable_trend_filter
+        +Dict PARAM_SCHEMA$
+        +on_bar(data, current_time) str?
+        +reset() None
+    }
+
+    class SimpleMAStrategy {
+        +int short_window
+        +int long_window
+        +Dict PARAM_SCHEMA$
+        +on_bar(data, current_time) str?
+        +reset() None
+    }
+
+    class BuyAndHoldStrategy {
+        +bool has_bought
+        +int bar_count
+        +on_bar(data, current_time) str?
+        +reset() None
+    }
+
+    class StrategyRegistry {
+        +dict STRATEGY_REGISTRY$
+        +get_strategy(name) type
+        +list_strategies() list
+    }
+
+    class TradingUtils {
+        +apply_slippage(price, slippage_pct, side) float$
+        +apply_commission(capital, rate) float$
+    }
+
+    class BacktestEngine {
+        +float initial_capital
+        +float commission
+        +float slippage
+        +dict lots
+        +list trades
+        +list equity_curve
+        +run(data, strategy) dict
+        +_execute_buy(price, time, strategy) None
+        +_execute_sell(price, time, strategy) None
+        +_open_lot(order, price, time, strategy) None
+        +_close_lot(order, price, time, strategy) None
+    }
+
+    class PaperBroker {
+        +float balance
+        +float commission
+        +dict slippage
+        +dict positions
+        +place_order(order, timestamp) OrderResult
+        +_fill_order(order, exec_price, timestamp) OrderResult
+        +check_pending_orders(bar_high, bar_low, timestamp) List
+    }
+
+    class MultiStrategyRunner {
+        +RunnerBroker broker
+        +RiskManager risk_manager
+        +register(config) None
+        +run(data_map) dict
+        +aggregate_results() dict
+        +compare_results() DataFrame
+        +correlation_matrix() DataFrame
+    }
+
+    class RiskManager {
+        +str state
+        +float capital_base
+        +can_trade() bool
+        +record_fill(trade) None
+        +emergency_stop(reason) None
+        +resume() bool
+    }
+
+    class MarketClassifier {
+        +classify_market(df) str$
+        +get_market_regime(df) dict$
+    }
+
+    class ParameterScanner {
+        +grid_search(data, strategy_class, param_grid) DataFrame
+        +sensitivity_analysis(data, strategy_class, base_params, test_param, variations) DataFrame
+        +walk_forward(data, strategy_class, param_grid, n_windows, in_sample_ratio) DataFrame
+    }
+
+    Strategy <|-- RiskAwareStrategy : inherits
+    RiskAwareStrategy <|-- GridTradingStrategy : inherits
+    RiskAwareStrategy <|-- RSIMomentumStrategy : inherits
+    RiskAwareStrategy <|-- SimpleMAStrategy : inherits
+    Strategy <|-- BuyAndHoldStrategy : inherits (no risk)
+    
+    BacktestEngine ..> TradingUtils : uses
+    PaperBroker ..> TradingUtils : uses
+    BacktestEngine --> RiskAwareStrategy : calls on_fill
+    MultiStrategyRunner --> RiskManager : uses
+    MultiStrategyRunner --> PaperBroker : uses
+    StrategyRegistry --> Strategy : maps
+    GridTradingStrategy ..> Order : creates

@@ -20,6 +20,7 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from src.execution.paper_trading_runner import (
@@ -195,7 +196,7 @@ class MultiStrategyRunner:
                     continue
 
                 bar = df.iloc[bar_idx]
-                historical = df.iloc[: bar_idx + 1]
+                historical = df.iloc[max(0, bar_idx - 500): bar_idx + 1]
                 pending = pending_map[slot.config.strategy_id]
 
                 new_pending = slot.runner.process_bar(
@@ -291,6 +292,134 @@ class MultiStrategyRunner:
             "strategies": strategy_summaries,
         }
 
+    # ---- 结果分析工具 ----
 
-# 导出
-__all__ = ["MultiStrategyRunner", "StrategyConfig", "StrategySlot"]
+    @staticmethod
+    def comparison_table(
+        results: Dict[str, dict],
+        title: str = "Strategy Comparison",
+    ) -> str:
+        """生成多策略对比表。
+
+        参数：
+            results: {strategy_id: result_dict}，每个 result 需包含
+                     total_return, metrics(含 sharpe_ratio, max_drawdown, win_rate)
+
+        返回：
+            格式化的对比表字符串。
+        """
+        if not results:
+            return "No results to compare."
+
+        rows = []
+        for sid, res in results.items():
+            metrics = res.get("metrics", {})
+            rows.append({
+                "Strategy": sid,
+                "Return": res.get("total_return", 0.0),
+                "Sharpe": metrics.get("sharpe_ratio", 0.0),
+                "MaxDD": metrics.get("max_drawdown", 0.0),
+                "WinRate": metrics.get("win_rate", 0.0),
+                "Trades": res.get("total_trades", 0),
+            })
+
+        df = pd.DataFrame(rows)
+        df = df.sort_values("Return", ascending=False)
+
+        lines = [f"\n{'=' * 80}",
+                 f"  {title}",
+                 f"{'=' * 80}",
+                 f"  {'Strategy':<12} {'Return':>10} {'Sharpe':>8} {'MaxDD':>10} {'WinRate':>8} {'Trades':>7}",
+                 f"  {'-' * 58}"]
+
+        for _, row in df.iterrows():
+            lines.append(
+                f"  {row['Strategy']:<12} "
+                f"{row['Return']:>10.2%} "
+                f"{row['Sharpe']:>8.2f} "
+                f"{row['MaxDD']:>10.2%} "
+                f"{row['WinRate']:>8.2%} "
+                f"{int(row['Trades']):>7}"
+            )
+
+        lines.append(f"  {'=' * 58}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def correlation_matrix(equity_curves: Dict[str, pd.Series]) -> str:
+        """计算策略权益曲线之间的相关性矩阵。
+
+        参数：
+            equity_curves: {strategy_id: equity_series}，每个 series 为
+                           策略在各 bar 的权益值。
+
+        返回：
+            格式化的相关性矩阵字符串。
+        """
+        if len(equity_curves) < 2:
+            return "Need at least 2 strategies to compute correlation."
+
+        ids = sorted(equity_curves.keys())
+        df_equity = pd.DataFrame({sid: equity_curves[sid] for sid in ids})
+
+        # 计算日收益率相关性
+        returns = df_equity.pct_change().dropna()
+        corr = returns.corr()
+
+        lines = [f"\n  Strategy Correlation Matrix",
+                 f"  {'-' * 40}"]
+        header = "  " + "".join(f"{sid:>8}" for sid in ids)
+        lines.append(header)
+
+        for sid_i in ids:
+            row_vals = "".join(f"{corr.loc[sid_i, sid_j]:>8.3f}" for sid_j in ids)
+            lines.append(f"  {sid_i:<8}{row_vals}")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def comparison_table_backtest(
+        results: Dict[str, dict],
+        title: str = "Strategy Comparison",
+    ) -> str:
+        """BacktestEngine 结果对比表（兼容 BacktestEngine.run 输出格式）。
+
+        与 comparison_table 的区别：result 是 BacktestEngine 的直接返回，
+        不含 metrics 包装层。
+        """
+        if not results:
+            return "No results to compare."
+
+        rows = []
+        for sid, res in results.items():
+            metrics = res.get("metrics", {})
+            rows.append({
+                "Strategy": sid,
+                "Return": res.get("total_return", 0.0),
+                "Sharpe": metrics.get("sharpe_ratio", 0.0),
+                "MaxDD": metrics.get("max_drawdown", 0.0),
+                "WinRate": metrics.get("win_rate", 0.0),
+                "Trades": res.get("total_trades", 0),
+            })
+
+        df = pd.DataFrame(rows)
+        df = df.sort_values("Return", ascending=False)
+
+        lines = [f"\n{'=' * 80}",
+                 f"  {title}",
+                 f"{'=' * 80}",
+                 f"  {'Strategy':<12} {'Return':>10} {'Sharpe':>8} {'MaxDD':>10} {'WinRate':>8} {'Trades':>7}",
+                 f"  {'-' * 58}"]
+
+        for _, row in df.iterrows():
+            lines.append(
+                f"  {row['Strategy']:<12} "
+                f"{row['Return']:>10.2%} "
+                f"{row['Sharpe']:>8.2f} "
+                f"{row['MaxDD']:>10.2%} "
+                f"{row['WinRate']:>8.2%} "
+                f"{int(row['Trades']):>7}"
+            )
+
+        lines.append(f"  {'=' * 58}")
+        return "\n".join(lines)

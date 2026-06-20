@@ -4,6 +4,7 @@ Redis 缓存层
 统一的缓存接口，支持 Redis 和内存回退：
 - Redis 可用时使用 Redis（持久化、跨进程共享）
 - Redis 不可用时自动回退到内存缓存（开发友好）
+- Redis 恢复后自动重连（指数退避 + 定期健康检查）
 - JSON 序列化支持复杂对象
 - 命名空间隔离不同缓存域
 - TTL 过期自动清理
@@ -23,6 +24,8 @@ Redis 缓存层
 """
 
 import json
+import re
+import threading
 import time
 from typing import Any, Dict, Optional, List
 
@@ -35,35 +38,40 @@ class MemoryCache:
 
     def __init__(self):
         self._store: Dict[str, tuple] = {}  # key -> (value, expire_time)
+        self._lock = threading.Lock()
 
     def get(self, key: str) -> Optional[str]:
         """获取值，过期则删除"""
-        if key not in self._store:
-            return None
+        with self._lock:
+            if key not in self._store:
+                return None
 
-        value, expire_time = self._store[key]
-        if expire_time and time.time() > expire_time:
-            del self._store[key]
-            return None
+            value, expire_time = self._store[key]
+            if expire_time and time.time() > expire_time:
+                del self._store[key]
+                return None
 
-        return value
+            return value
 
     def set(self, key: str, value: str, ttl: Optional[int] = None) -> None:
         """设置值"""
-        expire_time = time.time() + ttl if ttl else None
-        self._store[key] = (value, expire_time)
+        with self._lock:
+            expire_time = time.time() + ttl if ttl else None
+            self._store[key] = (value, expire_time)
 
     def delete(self, key: str) -> None:
         """删除值"""
-        self._store.pop(key, None)
+        with self._lock:
+            self._store.pop(key, None)
 
     def keys(self, pattern: str = "*") -> List[str]:
         """获取匹配的键（简单前缀匹配）"""
-        if pattern == "*":
-            return list(self._store.keys())
+        with self._lock:
+            if pattern == "*":
+                return list(self._store.keys())
 
-        prefix = pattern.rstrip("*")
-        return [k for k in self._store.keys() if k.startswith(prefix)]
+            prefix = pattern.rstrip("*")
+            return [k for k in self._store.keys() if k.startswith(prefix)]
 
     def ping(self) -> bool:
         """内存缓存总是可用"""
@@ -78,6 +86,15 @@ class CacheLayer:
         self._redis = None
         self._memory = MemoryCache()
         self._use_redis = False
+        # Redis 自动恢复：指数退避重连
+        self._reconnect_lock = threading.Lock()
+        self._reconnect_backoff = 5       # 初始退避秒数
+        self._reconnect_max_backoff = 300  # 最大退避（5分钟）
+        self._next_reconnect = 0.0         # 下次允许重连的时间戳
+        self._reconnect_timer: Optional[threading.Timer] = None
+        # 熔断：连续失败 N 次才禁用 Redis，避免单次抖动就回退内存
+        self._redis_failures = 0
+        self._max_redis_failures = 3
 
         # 尝试连接 Redis
         self._init_redis()
@@ -95,11 +112,48 @@ class CacheLayer:
             )
             self._redis.ping()
             self._use_redis = True
-            logger.info(f"CacheLayer: Redis connected at {config.REDIS_URL}")
+            # 掩码密码后再记录日志
+            masked_url = re.sub(r'://[^:]*:[^@]*@', '://***:***@', config.REDIS_URL)
+            logger.info(f"CacheLayer: Redis connected at {masked_url}")
         except Exception as e:
             logger.warning(f"CacheLayer: Redis unavailable, using memory cache: {e}")
             self._use_redis = False
             self._redis = None
+            self._schedule_reconnect()
+
+    def _schedule_reconnect(self) -> None:
+        """安排 Redis 重连（指数退避），使用独立线程避免阻塞主流程。"""
+        with self._reconnect_lock:
+            now = time.time()
+            if now < self._next_reconnect:
+                return  # 还在退避期内
+
+            self._next_reconnect = now + self._reconnect_backoff
+            # 指数退避翻倍，上限 5 分钟
+            self._reconnect_backoff = min(self._reconnect_backoff * 2, self._reconnect_max_backoff)
+
+        def _try_reconnect():
+            try:
+                from redis import Redis
+                test_redis = Redis.from_url(
+                    config.REDIS_URL,
+                    decode_responses=True,
+                    socket_connect_timeout=1,
+                    socket_timeout=3,
+                )
+                test_redis.ping()
+                with self._reconnect_lock:
+                    self._redis = test_redis
+                    self._use_redis = True
+                    self._reconnect_backoff = 5  # 成功后重置退避
+                masked_url = re.sub(r'://[^:]*:[^@]*@', '://***:***@', config.REDIS_URL)
+                logger.info(f"CacheLayer: Redis reconnected at {masked_url}")
+            except Exception:
+                self._schedule_reconnect()
+
+        self._reconnect_timer = threading.Timer(self._reconnect_backoff, _try_reconnect)
+        self._reconnect_timer.daemon = True
+        self._reconnect_timer.start()
 
     def _make_key(self, key: str) -> str:
         """生成带命名空间的键"""
@@ -136,6 +190,8 @@ class CacheLayer:
             if value is None:
                 return None
 
+            self._redis_failures = 0  # 成功则重置失败计数
+
             # 尝试 JSON 反序列化
             try:
                 return json.loads(value)
@@ -144,9 +200,11 @@ class CacheLayer:
 
         except Exception as e:
             logger.warning(f"CacheLayer get error for {key}: {e}")
-            # Redis 失败时回退到内存
-            if self._use_redis:
+            # Redis 失败：连续失败计数，达到阈值才回退并调度重连
+            self._redis_failures += 1
+            if self._use_redis and self._redis_failures >= self._max_redis_failures:
                 self._use_redis = False
+                self._schedule_reconnect()
             return self._memory.get(full_key)
 
     def get_raw(self, key: str) -> Optional[str]:
@@ -192,6 +250,7 @@ class CacheLayer:
                     self._redis.setex(full_key, ttl, serialized)
                 else:
                     self._redis.set(full_key, serialized)
+                self._redis_failures = 0  # 成功则重置计数
                 return True
             else:
                 self._memory.set(full_key, serialized, ttl)
@@ -199,9 +258,11 @@ class CacheLayer:
 
         except Exception as e:
             logger.warning(f"CacheLayer set error for {key}: {e}")
-            # Redis 失败时回退到内存
-            if self._use_redis:
+            # Redis 失败：连续失败计数，达到阈值才回退并调度重连
+            self._redis_failures += 1
+            if self._use_redis and self._redis_failures >= self._max_redis_failures:
                 self._use_redis = False
+                self._schedule_reconnect()
             self._memory.set(full_key, serialized, ttl)
             return False
 
@@ -255,7 +316,8 @@ class CacheLayer:
 
         try:
             if self._use_redis and self._redis:
-                keys = self._redis.keys(full_pattern)
+                # 生产环境用 scan_iter 替代 O(N) 阻塞 KEYS
+                keys = list(self._redis.scan_iter(full_pattern))
                 prefix = f"{self._namespace}:"
                 return [k[len(prefix):] if k.startswith(prefix) else k for k in keys]
             else:

@@ -6,8 +6,13 @@ Usage:
         ...
 """
 
+import os
 import sys
 from pathlib import Path
+
+# 测试环境：设置 API_TOKEN 避免 auth 阻止测试
+os.environ.setdefault("API_TOKEN", "test-token")
+os.environ.setdefault("ENVIRONMENT", "development")
 
 import numpy as np
 import pandas as pd

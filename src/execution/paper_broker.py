@@ -9,10 +9,12 @@ Exchange/Live Broker 只是接口切换。
 """
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Dict, List, Optional
 
 from src.execution.broker import BrokerInterface, Order, OrderResult
 from src.utils.logger import logger
+from src.utils.trading import apply_slippage
 
 
 class PaperBroker(BrokerInterface):
@@ -73,7 +75,7 @@ class PaperBroker(BrokerInterface):
 
     # ---- 下单 ----
 
-    def place_order(self, order: Order, timestamp=None) -> OrderResult:
+    def place_order(self, order: Order, **kwargs) -> OrderResult:
         """
         下单：支持市价单（立即成交）和限价单（挂单等待撮合）
 
@@ -87,6 +89,7 @@ class PaperBroker(BrokerInterface):
 
         timestamp: 成交时间。回测/纸面运行应传入当根 bar 时间。
         """
+        timestamp = kwargs.get("timestamp")
         if order.amount <= 0:
             return OrderResult(None, "rejected", reason="下单数量必须为正")
 
@@ -126,8 +129,11 @@ class PaperBroker(BrokerInterface):
         is_limit = order.order_type == "limit" and getattr(order, 'limit_price', None) is not None
 
         if order.side == "buy":
-            actual_price = exec_price if is_limit else exec_price * (1 + slippage_pct)
-            cost = order.amount * actual_price * (1 + self.commission)
+            actual_price = exec_price if is_limit else apply_slippage(exec_price, slippage_pct, "buy")
+            cost = float(
+                Decimal(str(order.amount)) * Decimal(str(actual_price))
+                * (Decimal("1") + Decimal(str(self.commission)))
+            )
             if cost > self.balance:
                 return OrderResult(
                     None, "rejected",
@@ -144,13 +150,26 @@ class PaperBroker(BrokerInterface):
                     None, "rejected",
                     reason=f"持仓不足：需要 {order.amount}，持仓 {current}",
                 )
-            actual_price = exec_price if is_limit else exec_price * (1 - slippage_pct)
-            proceeds = order.amount * actual_price * (1 - self.commission)
+            actual_price = exec_price if is_limit else apply_slippage(exec_price, slippage_pct, "sell")
+            proceeds = float(
+                Decimal(str(order.amount)) * Decimal(str(actual_price))
+                * (Decimal("1") - Decimal(str(self.commission)))
+            )
             self.balance += proceeds
             self.positions[order.symbol] = current - order.amount
 
-        commission_paid = order.amount * actual_price * self.commission
-        slippage_paid = 0.0 if is_limit else order.amount * abs(actual_price - exec_price)
+        commission_paid = float(
+            Decimal(str(order.amount)) * Decimal(str(actual_price))
+            * Decimal(str(self.commission))
+        )
+        slippage_paid = (
+            0.0
+            if is_limit
+            else float(
+                Decimal(str(order.amount))
+                * abs(Decimal(str(actual_price)) - Decimal(str(exec_price)))
+            )
+        )
 
         order_id = self._generate_order_id()
         self.orders.append({
@@ -314,6 +333,7 @@ class PaperBroker(BrokerInterface):
         直接相加、价格不可混用）。本项目当前只交易单币种（BTC/USDT），若将来
         扩展多币种需改为按各币种当前价格分别折算。
         """
+        assert len(self.positions) <= 1, "Multi-currency risk calc not validated"
         total_value = self.balance + sum(
             amt * order.price for amt in self.positions.values()
         )

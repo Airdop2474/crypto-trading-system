@@ -8,6 +8,8 @@ from typing import Any, Dict, List
 import numpy as np
 import pandas as pd
 
+from src.utils.logger import logger
+
 
 class PerformanceMetrics:
     """性能指标计算器"""
@@ -206,16 +208,22 @@ class PerformanceMetrics:
             return 365.0
 
         times = pd.to_datetime(equity_curve["time"])
-        median_delta = times.diff().dropna().median()
+        mode_result = times.diff().dropna().mode()
+        mode_delta = mode_result.iloc[0] if len(mode_result) > 0 else pd.NaT
 
-        if pd.isna(median_delta):
+        if pd.isna(mode_delta):
             return 365.0
 
-        seconds = median_delta.total_seconds()
+        seconds = mode_delta.total_seconds()
         if seconds <= 0:
             return 365.0
 
         return float(365.0 * 86400.0 / seconds)
+
+    @staticmethod
+    def _get_closed_trades(trades: List[Dict]) -> List[Dict]:
+        """获取已平仓交易（SELL 或 LIQUIDATE），统一过滤"""
+        return [t for t in trades if t.get("type") in ("SELL", "LIQUIDATE")]
 
     @staticmethod
     def win_rate(trades: List[Dict]) -> float:
@@ -231,8 +239,7 @@ class PerformanceMetrics:
         if not trades:
             return 0.0
 
-        # 只统计有盈亏的交易（SELL）
-        closed_trades = [t for t in trades if t["type"] == "SELL"]
+        closed_trades = PerformanceMetrics._get_closed_trades(trades)
 
         if not closed_trades:
             return 0.0
@@ -255,7 +262,7 @@ class PerformanceMetrics:
         if not trades:
             return 0.0
 
-        closed_trades = [t for t in trades if t["type"] == "SELL"]
+        closed_trades = PerformanceMetrics._get_closed_trades(trades)
 
         if not closed_trades:
             return 0.0
@@ -268,7 +275,7 @@ class PerformanceMetrics:
         )
 
         if total_loss == 0:
-            return float("inf") if total_profit > 0 else 0.0
+            return 999.0 if total_profit > 0 else 0.0  # 999 = 标记"无亏损"
 
         return float(total_profit / total_loss)
 
@@ -286,7 +293,7 @@ class PerformanceMetrics:
         if not trades:
             return 0.0
 
-        closed_trades = [t for t in trades if t["type"] == "SELL"]
+        closed_trades = PerformanceMetrics._get_closed_trades(trades)
 
         if not closed_trades:
             return 0.0
@@ -322,6 +329,7 @@ class PerformanceMetrics:
         # 下行标准差（只计算负收益的标准差）
         downside_returns = returns[returns < 0]
         if len(downside_returns) == 0:
+            logger.info("Sortino: no downside volatility, returning inf")
             return float("inf") if mean_return > 0 else 0.0
 
         downside_std = downside_returns.std()
@@ -384,7 +392,7 @@ class PerformanceMetrics:
         if not trades:
             return 0.0
 
-        closed_trades = [t for t in trades if t["type"] == "SELL"]
+        closed_trades = PerformanceMetrics._get_closed_trades(trades)
         if not closed_trades:
             return 0.0
 
@@ -394,13 +402,13 @@ class PerformanceMetrics:
         if not wins:
             return 0.0
         if not losses:
-            return float("inf")
+            return 999.0
 
         avg_win = sum(wins) / len(wins)
         avg_loss = abs(sum(losses) / len(losses))
 
         if avg_loss == 0:
-            return float("inf")
+            return 999.0
 
         return float(avg_win / avg_loss)
 
@@ -421,7 +429,7 @@ class PerformanceMetrics:
         if not trades:
             return 0.0
 
-        closed_trades = [t for t in trades if t["type"] == "SELL"]
+        closed_trades = PerformanceMetrics._get_closed_trades(trades)
         if not closed_trades:
             return 0.0
 
@@ -435,7 +443,7 @@ class PerformanceMetrics:
         win_rate = wins / total
         avg_win_loss = PerformanceMetrics.avg_win_loss_ratio(trades)
 
-        if avg_win_loss == 0 or avg_win_loss == float("inf"):
+        if avg_win_loss == 0 or avg_win_loss >= 999.0:
             return 0.0
 
         kelly = win_rate - (1 - win_rate) / avg_win_loss

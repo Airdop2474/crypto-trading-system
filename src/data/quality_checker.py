@@ -3,7 +3,6 @@
 实现 7 项强制质量检查
 """
 
-import hashlib
 from datetime import datetime
 from typing import Any, Dict
 
@@ -384,16 +383,15 @@ class DataQualityChecker:
                 'algorithm': str
             }
         """
-        # 将 DataFrame 转换为字符串并计算哈希
-        data_string = df.to_csv(index=False)
-        hash_object = hashlib.sha256(data_string.encode())
-        data_hash = hash_object.hexdigest()
+        # 使用 pandas 内置行级哈希，内存效率远优于 to_csv 字符串哈希
+        hash_value = int(pd.util.hash_pandas_object(df).sum())
+        data_hash = str(hash_value)
 
         return {
             "passed": True,  # 总是通过（只要能计算哈希）
             "hash": data_hash,
-            "algorithm": "SHA256",
-            "data_size": len(data_string),
+            "algorithm": "pandas_hash_object",
+            "data_size": int(df.memory_usage(deep=True).sum()),
         }
 
 

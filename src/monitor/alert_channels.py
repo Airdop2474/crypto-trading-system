@@ -11,12 +11,14 @@
 
 import json
 import smtplib
+import time as _time
 import urllib.request
 from abc import ABC, abstractmethod
 from email.message import EmailMessage
 from typing import Callable, List, Optional
 
 from src.monitor.alert_manager import INFO, WARNING, CRITICAL
+from src.utils.logger import logger
 
 
 # 级别排序：用于 min_level 过滤
@@ -46,14 +48,22 @@ class AlertChannel(ABC):
 
 
 def _default_post(url: str, payload: dict, timeout: float) -> None:
-    """默认 webhook 发送：urllib POST JSON。"""
+    """默认 webhook 发送：urllib POST JSON，含指数退避重试。"""
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    urllib.request.urlopen(req, timeout=timeout)
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(
+                url, data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=timeout)
+            break
+        except Exception as e:
+            if attempt < 2:
+                _time.sleep(2 ** attempt)
+            else:
+                logger.error(f"Webhook failed after 3 attempts: {e}")
 
 
 class WebhookChannel(AlertChannel):

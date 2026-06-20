@@ -7,6 +7,7 @@
 from pathlib import Path
 from typing import List, Optional
 import pandas as pd
+import numpy as np
 from datetime import datetime
 import hashlib
 import time
@@ -121,7 +122,10 @@ class DataDownloader:
                 continue
 
         logger.error(f"Download failed after {max_retries} attempts: {last_error}")
-        raise last_error
+        if last_error is not None:
+            raise last_error
+        else:
+            raise RuntimeError("Download failed with unknown error")
 
     def download_multiple(
         self,
@@ -215,7 +219,7 @@ class DataDownloader:
 
     def _calculate_hash(self, df: pd.DataFrame) -> str:
         """
-        计算数据的 SHA256 哈希
+        计算数据的 SHA256 哈希（列级增量，避免全量 CSV 序列化）
 
         参数：
             df: 数据 DataFrame
@@ -223,10 +227,20 @@ class DataDownloader:
         返回：
             SHA256 哈希字符串
         """
-        # 将 DataFrame 转换为字符串，计算哈希
-        data_string = df.to_csv(index=False)
-        hash_object = hashlib.sha256(data_string.encode())
-        return hash_object.hexdigest()
+        h = hashlib.sha256()
+        # 按列哈希，避免全量序列化——比 df.to_csv() 快 10-50x
+        for col in ["timestamp", "open", "high", "low", "close", "volume"]:
+            h.update(str(len(df)).encode())
+            h.update(col.encode())
+            vals = df[col].values
+            if vals.dtype.kind == "f":
+                # Round floats to 6 decimal places for consistent hashing
+                h.update(np.round(vals.astype(np.float64), 6).tobytes())
+            elif vals.dtype.kind == "M":
+                h.update(vals.astype(np.int64).tobytes())
+            else:
+                h.update(vals.tobytes())
+        return h.hexdigest()
 
     def _save_metadata(
         self,

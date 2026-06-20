@@ -1,18 +1,18 @@
 """
 简单移动平均策略
 
-金叉买入，死叉卖出。配合连亏/日亏损熔断保护。
+金叉买入，死叉卖出。配合连亏/日亏损熔断保护（继承自 RiskAwareStrategy）。
 """
 
 from typing import Optional
 from datetime import datetime
 import pandas as pd
 
-from src.strategy.base import Strategy
+from src.strategy.risk_aware import RiskAwareStrategy
 from src.utils.logger import logger
 
 
-class SimpleMAStrategy(Strategy):
+class SimpleMAStrategy(RiskAwareStrategy):
     """
     简单移动平均策略
 
@@ -20,10 +20,18 @@ class SimpleMAStrategy(Strategy):
     - 短期均线上穿长期均线：买入（金叉）
     - 短期均线下穿长期均线：卖出（死叉）
 
-    风控：
+    风控（继承自 RiskAwareStrategy）：
     - 连亏熔断（默认 5 笔）
     - 当日亏损熔断（默认 2%）
+    - 累计回撤熔断（默认 15%）
     """
+
+    PARAM_SCHEMA = {
+        "short_window": {"type": int, "min": 1},
+        "long_window": {"type": int, "min": 1},
+        "max_consecutive_losses": {"type": int, "min": 1},
+        "max_daily_loss": {"type": float, "min": 0, "max": 0.1},
+    }
 
     def __init__(
         self,
@@ -43,22 +51,20 @@ class SimpleMAStrategy(Strategy):
             max_daily_loss: 当日亏损熔断（占初始资金比例）
             initial_capital: 初始资金（熔断基准）
         """
-        super().__init__(name="SimpleMA")
+        super().__init__(
+            name="SimpleMA",
+            max_consecutive_losses=max_consecutive_losses,
+            max_daily_loss=max_daily_loss,
+            initial_capital=initial_capital,
+        )
         self.short_window = short_window
         self.long_window = long_window
-        self.max_consecutive_losses = max_consecutive_losses
-        self.max_daily_loss = max_daily_loss
-        self.initial_capital = initial_capital
 
-        self._init_state()
+        self._init_ma_state()
         self.set_parameters(short_window=short_window, long_window=long_window)
 
-    def _init_state(self) -> None:
-        """初始化/重置运行状态"""
-        self.consecutive_losses = 0
-        self.paused = False
-        self.current_day = None
-        self.daily_pnl = 0.0
+    def _init_ma_state(self) -> None:
+        """初始化/重置 MA 专属运行状态（熔断状态由 RiskAwareStrategy 管理）"""
         # MA 增量缓存
         self._short_ma: Optional[float] = None
         self._long_ma: Optional[float] = None
@@ -80,7 +86,8 @@ class SimpleMAStrategy(Strategy):
         if len(data) < self.long_window:
             return None
 
-        if self.paused:
+        # --- 熔断暂停检查（RiskAwareStrategy 统一管理）---
+        if self._is_paused():
             return None
 
         close = data["close"]
@@ -135,40 +142,10 @@ class SimpleMAStrategy(Strategy):
 
         return None
 
-    def on_fill(self, trade: dict) -> None:
-        """成交回报：跟踪盈亏，触发连亏/日亏损熔断"""
-        profit = trade.get("profit")
-        if profit is None:
-            return
-
-        trade_day = pd.Timestamp(trade["time"]).date()
-        if self.current_day != trade_day:
-            self.current_day = trade_day
-            self.daily_pnl = 0.0
-
-        self.daily_pnl += profit
-
-        if profit < 0:
-            self.consecutive_losses += 1
-        elif profit > 0:
-            self.consecutive_losses = 0
-
-        if self.consecutive_losses >= self.max_consecutive_losses:
-            logger.warning(
-                f"SimpleMA PAUSE: {self.consecutive_losses} consecutive losses"
-            )
-            self.paused = True
-
-        if self.daily_pnl < 0 and self.initial_capital > 0:
-            loss_ratio = abs(self.daily_pnl) / self.initial_capital
-            if loss_ratio >= self.max_daily_loss:
-                logger.warning(f"SimpleMA PAUSE: daily loss {loss_ratio:.2%}")
-                self.paused = True
-
     def reset(self):
         """重置策略状态"""
         super().reset()
-        self._init_state()
+        self._init_ma_state()
         logger.debug("SimpleMA strategy reset")
 
 

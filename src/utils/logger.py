@@ -13,8 +13,8 @@ from loguru import logger
 def setup_logger(
     log_dir: str = "logs",
     log_level: str = "INFO",
-    rotation: str = "100 MB",
-    retention: str = "30 days",
+    rotation: str = "10 MB",
+    retention: str = "7 days",
 ) -> None:
     """
     配置日志系统
@@ -25,6 +25,11 @@ def setup_logger(
         rotation: 日志轮转大小
         retention: 日志保留时间
     """
+    valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+    if log_level.upper() not in valid_levels:
+        raise ValueError(
+            f"Invalid log_level: '{log_level}'. Must be one of {valid_levels}"
+        )
     # 创建日志目录
     log_path = Path(log_dir)
     log_path.mkdir(parents=True, exist_ok=True)

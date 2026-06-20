@@ -8,9 +8,10 @@ RSI 动量策略
     - RSI > overbought（默认 70）或 价格 < EMA50 → SELL
     - 可选趋势确认（EMA50 方向过滤）
 
-熔断保护（复用 GridTrading 模式）：
+熔断保护（继承自 RiskAwareStrategy）：
     - 连续亏损达到阈值 → PAUSE
     - 当日亏损达到阈值 → PAUSE
+    - 累计回撤达到阈值 → PAUSE
 
 性能：
     RSI 和 EMA 均使用增量计算（O(1) per bar），避免全量 ewm() 重算。
@@ -20,17 +21,27 @@ from typing import Optional
 from datetime import datetime
 import pandas as pd
 
-from src.strategy.base import Strategy
+from src.strategy.risk_aware import RiskAwareStrategy
 from src.utils.logger import logger
 
 
-class RSIMomentumStrategy(Strategy):
+class RSIMomentumStrategy(RiskAwareStrategy):
     """
     RSI 动量策略
 
     适用环境：趋势市场中的回调买入 / 超买卖出。
     与网格策略互补：网格适合震荡市，RSI 适合趋势市。
     """
+
+    PARAM_SCHEMA = {
+        "rsi_period": {"type": int, "min": 2},
+        "oversold": {"type": float, "min": 0, "max": 100},
+        "overbought": {"type": float, "min": 0, "max": 100},
+        "ema_period": {"type": int, "min": 1},
+        "enable_trend_filter": {"type": bool},
+        "max_consecutive_losses": {"type": int, "min": 1},
+        "max_daily_loss": {"type": float, "min": 0, "max": 0.1},
+    }
 
     def __init__(
         self,
@@ -56,7 +67,12 @@ class RSIMomentumStrategy(Strategy):
             max_daily_loss: 当日亏损熔断（占初始资金比例）
             initial_capital: 初始资金（熔断基准）
         """
-        super().__init__(name="RSIMomentum")
+        super().__init__(
+            name="RSIMomentum",
+            max_consecutive_losses=max_consecutive_losses,
+            max_daily_loss=max_daily_loss,
+            initial_capital=initial_capital,
+        )
 
         if rsi_period < 2:
             raise ValueError("rsi_period must be >= 2")
@@ -68,11 +84,8 @@ class RSIMomentumStrategy(Strategy):
         self.overbought = overbought
         self.ema_period = ema_period
         self.enable_trend_filter = enable_trend_filter
-        self.max_consecutive_losses = max_consecutive_losses
-        self.max_daily_loss = max_daily_loss
-        self.initial_capital = initial_capital
 
-        self._init_state()
+        self._init_rsi_state()
 
         self.set_parameters(
             rsi_period=rsi_period,
@@ -86,13 +99,9 @@ class RSIMomentumStrategy(Strategy):
             f"oversold={oversold}, overbought={overbought}"
         )
 
-    def _init_state(self) -> None:
-        """初始化/重置运行状态"""
+    def _init_rsi_state(self) -> None:
+        """初始化/重置 RSI 专属运行状态（熔断状态由 RiskAwareStrategy 管理）"""
         self._in_position = False
-        self.consecutive_losses = 0
-        self.paused = False
-        self.current_day = None
-        self.daily_pnl = 0.0
 
         # RSI 增量状态（复刻 pandas ewm(alpha=1/period, adjust=False)）
         self._avg_gain: Optional[float] = None
@@ -132,7 +141,7 @@ class RSIMomentumStrategy(Strategy):
             self._avg_gain = alpha * gain + (1 - alpha) * self._avg_gain
             self._avg_loss = alpha * loss + (1 - alpha) * self._avg_loss
 
-        if self._avg_loss == 0:
+        if abs(self._avg_loss) < 1e-10:
             return 100.0 if self._avg_gain > 0 else 50.0
 
         rs = self._avg_gain / self._avg_loss
@@ -161,7 +170,8 @@ class RSIMomentumStrategy(Strategy):
         if len(data) < self.rsi_period + 1:
             return None
 
-        if self.paused:
+        # --- 熔断暂停检查（RiskAwareStrategy 统一管理）---
+        if self._is_paused():
             return None
 
         current_price = float(data["close"].iloc[-1])
@@ -191,40 +201,10 @@ class RSIMomentumStrategy(Strategy):
 
         return None
 
-    def on_fill(self, trade: dict) -> None:
-        """成交回报：跟踪盈亏，触发连亏/当日亏损熔断"""
-        profit = trade.get("profit")
-        if profit is None:
-            return
-
-        trade_day = pd.Timestamp(trade["time"]).date()
-        if self.current_day != trade_day:
-            self.current_day = trade_day
-            self.daily_pnl = 0.0
-
-        self.daily_pnl += profit
-
-        if profit < 0:
-            self.consecutive_losses += 1
-        elif profit > 0:
-            self.consecutive_losses = 0
-
-        if self.consecutive_losses >= self.max_consecutive_losses:
-            logger.warning(
-                f"RSI PAUSE: {self.consecutive_losses} consecutive losses"
-            )
-            self.paused = True
-
-        if self.daily_pnl < 0 and self.initial_capital > 0:
-            loss_ratio = abs(self.daily_pnl) / self.initial_capital
-            if loss_ratio >= self.max_daily_loss:
-                logger.warning(f"RSI PAUSE: daily loss {loss_ratio:.2%}")
-                self.paused = True
-
     def reset(self):
         """重置策略状态"""
         super().reset()
-        self._init_state()
+        self._init_rsi_state()
         logger.debug("RSIMomentum strategy reset")
 
 
