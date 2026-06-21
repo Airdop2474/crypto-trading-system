@@ -1,0 +1,88 @@
+sequenceDiagram
+    actor User
+    participant Page as Page Component
+    participant SWR as useSWR hook
+    participant API as lib/api.ts
+    participant Backend as FastAPI (localhost:8000)
+    participant ErrorBoundary
+
+    Note over User,ErrorBoundary: === 正常数据加载流程 ===
+
+    User->>Page: 访问页面 (e.g. /)
+    Page->>SWR: useSWR("strategies", api.getStrategies)
+
+    alt 首次加载 (无缓存)
+        SWR->>API: api.getStrategies()
+        API->>API: get("/strategies")
+        API->>Backend: GET /strategies<br/>headers: { X-API-Token }
+        Backend-->>API: 200 OK [{...Strategy}]
+        API-->>SWR: Strategy[]
+        SWR-->>Page: { data: Strategy[], isLoading: false }
+        Page->>User: 渲染策略列表
+    else 缓存命中 + revalidate
+        SWR-->>Page: { data: Strategy[] (stale), isValidating: true }
+        Page->>User: 渲染缓存数据
+        SWR->>API: api.getStrategies() (background)
+        API->>Backend: GET /strategies
+        Backend-->>API: 200 OK
+        API-->>SWR: 新数据
+        SWR-->>Page: 更新 data
+        Page->>User: 重新渲染
+    end
+
+    Note over User,ErrorBoundary: === 错误处理流程 ===
+
+    Page->>SWR: useSWR("strategies", api.getStrategies)
+    SWR->>API: api.getStrategies()
+    API->>Backend: GET /strategies
+    Backend-->>API: 500 Internal Server Error
+    API->>API: throw Error("GET /strategies failed: 500")
+    API-->>SWR: Error thrown
+
+    Note over SWR: SWRConfig: errorRetryCount=3, errorRetryInterval=5s
+
+    loop 重试 3 次
+        SWR->>API: 重试 api.getStrategies()
+        API->>Backend: GET /strategies
+        Backend-->>API: 500
+    end
+
+    SWR-->>Page: { error: Error("GET /strategies failed: 500"), data: undefined }
+    Page->>User: 渲染 error 状态 (skeleton/fallback)
+
+    Note over User,ErrorBoundary: === ErrorBoundary 降级流程 ===
+
+    Page->>ErrorBoundary: 渲染包裹的子组件
+    ErrorBoundary->>ErrorBoundary: 子组件渲染时 JS Error
+
+    alt componentDidCatch 触发
+        ErrorBoundary->>ErrorBoundary: getDerivedStateFromError(error)
+        ErrorBoundary->>ErrorBoundary: componentDidCatch(error, errorInfo)
+        ErrorBoundary->>User: 渲染 fallback UI<br/>(AlertTriangle + "组件加载失败" + 重试按钮)
+    end
+
+    User->>ErrorBoundary: 点击"重试"
+    ErrorBoundary->>ErrorBoundary: handleReset() → setState({hasError: false})
+    ErrorBoundary->>Page: 重新渲染子组件
+
+    Note over User,ErrorBoundary: === 乐观更新流程 ===
+
+    User->>Page: 点击"暂停"按钮 (策略启停)
+    Page->>SWR: setStatus(id, "paused")
+    SWR->>SWR: mutate(prev => prev.map(s => s.id===id ? {...s, status:"paused"} : s), {revalidate: false})
+    SWR-->>Page: 立即更新 UI (乐观)
+    SWR->>API: api.updateStrategyStatus(id, "paused")
+    API->>Backend: PATCH /strategies/:id/status<br/>body: { status: "paused" }<br/>headers: { X-API-Token }
+    Backend-->>API: 200 OK
+    API-->>SWR: { id, status: "paused" }
+    SWR->>Page: toast.success("策略已暂停")
+
+    Note over User,ErrorBoundary: === 乐观更新失败回滚 ===
+
+    SWR->>API: api.updateStrategyStatus(id, "stopped")
+    API->>Backend: PATCH /strategies/:id/status
+    Backend-->>API: 500 Error
+    API-->>SWR: Error thrown
+    SWR->>SWR: catch → mutate() (无条件 revalidate)
+    SWR->>API: api.getStrategies() (重新拉取真实数据)
+    SWR-->>Page: toast.error("操作失败，请重试") + 数据回滚

@@ -1,0 +1,203 @@
+classDiagram
+    direction TB
+
+    class AccountSummary {
+        +number totalEquity
+        +number availableBalance
+        +number positionValue
+        +number unrealizedPnl
+        +number todayPnl
+        +number todayPnlPct
+        +number totalPnl
+        +number totalPnlPct
+    }
+
+    class Strategy {
+        +string id
+        +string name
+        +StrategyType type
+        +string symbol
+        +StrategyStatus status
+        +number pnl
+        +number pnlPct
+        +number investment
+        +number runningDays
+        +string createdAt
+        +GridParams? grid
+    }
+
+    class GridParams {
+        +number upperPrice
+        +number lowerPrice
+        +number gridCount
+        +number perGridProfit
+        +number filledGrids
+        +number arbitrageCount
+    }
+
+    class Position {
+        +string id
+        +string symbol
+        +Side side
+        +number size
+        +number entryPrice
+        +number markPrice
+        +number margin
+        +number unrealizedPnl
+        +number unrealizedPnlPct
+        +string strategyName
+    }
+
+    class Order {
+        +string id
+        +string time
+        +string symbol
+        +Side side
+        +string type
+        +number price
+        +number amount
+        +number filled
+        +OrderStatus status
+        +string strategyName
+        +number fee
+    }
+
+    class AssetBalance {
+        +string asset
+        +number total
+        +number available
+        +number inOrder
+        +number valueUsdt
+        +number allocationPct
+    }
+
+    class Ticker {
+        +string symbol
+        +number price
+        +number changePct
+        +number volume
+        +number high
+        +number low
+    }
+
+    class PnlPoint {
+        +string date
+        +number equity
+        +number pnl
+        +number cumulativePnl
+    }
+
+    class StrategyPerformance {
+        +string name
+        +number pnl
+        +number trades
+        +number winRate
+    }
+
+    class MultiStrategySummary {
+        +number totalRealizedPnl
+        +number totalClosedTrades
+        +number strategiesCount
+        +MultiStrategySlot[] strategies
+    }
+
+    class MultiStrategySlot {
+        +string strategy_id
+        +string symbol
+        +string strategy_name
+        +number realized_pnl
+        +number open_lots
+        +number open_position
+        +number closed_trades
+        +number bars_processed
+    }
+
+    class MultiStrategyDetail {
+        +string strategyId
+        +string symbol
+        +number realizedPnl
+        +number totalTrades
+        +number winRate
+        +number openLots
+        +number closedTrades
+    }
+
+    class CreateGridParams {
+        +string symbol
+        +number lowerPrice
+        +number upperPrice
+        +number gridCount
+        +number investment
+    }
+
+    class API {
+        +getAccountSummary() Promise~AccountSummary~
+        +getTickers() Promise~Ticker[]~
+        +getStrategies() Promise~Strategy[]~
+        +getPositions() Promise~Position[]~
+        +getAssets() Promise~AssetBalance[]~
+        +getOrders() Promise~Order[]~
+        +getPnlHistory() Promise~PnlPoint[]~
+        +getStrategyPerformance() Promise~StrategyPerformance[]~
+        +updateStrategyStatus(id, status) Promise
+        +getMultiSummary() Promise~MultiStrategySummary~
+        +getMultiDetails() Promise~MultiStrategyDetail[]~
+        +getMultiStrategy(id) Promise~unknown~
+        +createGridStrategy(params) Promise~Strategy~
+        -get~T~(path) Promise~T~
+    }
+
+    class SWRProvider {
+        +fetchWithTimeout(url, timeout) Promise~unknown~
+        +SWRConfig children
+    }
+
+    class ErrorBoundary {
+        +ReactNode children
+        +ReactNode? fallback
+        +boolean hasError
+        +Error? error
+        +getDerivedStateFromError(error) ErrorBoundaryState
+        +componentDidCatch(error, errorInfo) void
+        +handleReset() void
+    }
+
+    class Shell {
+        +ReactNode children
+    }
+
+    class UseTickersWsResult {
+        +Ticker[] tickers
+        +boolean isConnected
+        +boolean isFallback
+        +number reconnectAttempts
+    }
+
+    class StatCardProps {
+        +string label
+        +string value
+        +string? sub
+        +string? subClassName
+        +string? valueClassName
+        +LucideIcon? icon
+        +boolean? loading
+    }
+
+    Strategy --> GridParams : grid?
+    Strategy --> Strategy : type = StrategyType
+    Strategy --> Strategy : status = StrategyStatus
+    Order --> Order : status = OrderStatus
+    Position --> Position : side = Side
+    MultiStrategySummary --> MultiStrategySlot : strategies[]
+
+    API ..> AccountSummary : returns
+    API ..> Strategy : returns
+    API ..> Position : returns
+    API ..> Order : returns
+    API ..> AssetBalance : returns
+    API ..> Ticker : returns
+    API ..> PnlPoint : returns
+    API ..> StrategyPerformance : returns
+    API ..> MultiStrategySummary : returns
+    API ..> MultiStrategyDetail : returns
+    API ..> CreateGridParams : accepts
