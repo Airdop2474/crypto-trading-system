@@ -14,8 +14,8 @@
 |------|-------|----------|------------------|----------------|----------|
 | 安全 | 12 | 9 | 3（前端token / 镜像digest / .env运维） | 0 | 0 |
 | 金融正确性 | 8 | 7 | 0 | 0 | 1（profit/pnl）|
-| 事故响应 | 5 | 2 | 2（日志轮转/数据接入=运维） | 0 | 1（INC-003 未接线）|
-| 性能/错误处理 | 6 | 4 | 0 | 2（列表上限/init兜底，已部分）| 0 |
+| 事故响应 | 5 | 3（含 INC-003 兜底 escalation `51162cb`） | 2（日志轮转/数据接入=运维） | 0 | 0 |
+| 性能/错误处理 | 6 | 6（列表上限 + init兜底守卫 `51162cb`） | 0 | 0 | 0 |
 | 文档 | 12 | 11 | 0 | 1（命名体系=已澄清未重构）| 0 |
 | 测试 | 6 | 1 | 3（前端零测试等可接受）| 0 | 2（boom/CI=测试噪声非bug）|
 
@@ -88,7 +88,7 @@
 |----|------|-----|------|----------------------|
 | INC-001 | EMERGENCY_STOP 风暴循环 | SEV-0 | RiskManager 缺冷却/重启次数限制 | ✅ 已修（`_cooldown_until` + `_max_resets_per_window`，risk_manager.py:71-76/105） |
 | INC-002 | 持仓漂移 49%（对账失效） | SEV-0 | timeout 订单不入账本 | ✅ 已修（timeout 自动 cancel + `reconcile_unconfirmed`，exchange_runner_broker.py:94-114） |
-| INC-003 | 告警通道 100% 失败 | SEV-0 | 全通道失败无兜底升级 | ⬜ 非缺陷：告警外发功能**整体未接线**（`AlertManager()` 默认 `channels=[]`，唯一实例化点 daemon:98 不传通道，`_dispatch` 恒 no-op）。属实盘前要接的新功能，非现存 bug |
+| INC-003 | 告警通道 100% 失败 | SEV-0 | 全通道失败无兜底升级 | ✅ 已修（`51162cb`）：`_dispatch` 统计 attempted/failed，全失败 → `logger.critical("ALERT DELIVERY FAILURE")`（alert_manager.py:108-135）+ `check_channels_health()` 健康自检。剩余仅「接线真实通道」属实盘前运维 |
 | INC-004 | 日志膨胀 + 测试噪声污染 | SEV-2 | 无日志轮转 | 📋 运维：实盘前配 RotatingFileHandler |
 | INC-005 | 数据接入级联失败 | SEV-1 | OHLCV/交易所连接间歇失败 | 📋 运维：网络/符号健壮性，replay 数据所致 |
 
@@ -101,7 +101,7 @@
 | 告警系统无限流/去重/冷却 | 审计#17 / ADR-012 | 🔴 | ✅ 已修（`_should_throttle` 去重+每源限流+环形缓冲，alert_manager.py:59-97） |
 | Redis 临时断连后永久降级 | CODE-002 | 🔴 | ✅ 已修（指数退避重连，cache.py:124-156） |
 | `events`/`alerts` 列表无界增长 | CODE-011/013 | 🟡 | ✅ 已修（环形缓冲/上限 10000） |
-| `exchange_runner_broker` init 即调 API 易崩 | CODE-007 | 🟡 | ⬜ 未做（非阻塞，构造时交易所不可达才触发） |
+| `exchange_runner_broker` init 即调 API 易崩 | CODE-007 | 🟡 | ✅ 已修（`51162cb`）：构造时 try get_balance/get_position，失败 `raise ExchangeUnavailable` 拒绝带坏基线启动（exchange_runner_broker.py:66-73） |
 
 ### 2.5 文档
 
@@ -140,7 +140,7 @@
 - **CODE-006（误判）**：`AlertChannel` 已是 `ABC` + `@abstractmethod`，非鸭子类型。
 - **DOC-010（误判）**：docker-compose 注释服务实际有中文说明。
 - **INC-002 根因校准**：对账公式正确（已含 initial_position），真因是 timeout 订单不入账本。
-- **INC-003 校准**：无 `FailingChannel` 类，但"全通道失败无兜底"属实。
+- **INC-003 校准**：原报告"全通道失败无兜底"属实，**现已修复**（`51162cb`）——`_dispatch` 加 escalation + 新增 `FailingChannel` 测试类（test_alert_channels.py）覆盖全失败路径。
 - **DOC-005 校准**：API docstring 非零覆盖，实为 33%（6/18）。
 
 ---
