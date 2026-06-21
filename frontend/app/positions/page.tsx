@@ -7,10 +7,11 @@ import { StatCard } from "@/components/stat-card"
 import { PositionsTable } from "@/components/positions/positions-table"
 import { AssetAllocation } from "@/components/positions/asset-allocation"
 import { AssetsTable } from "@/components/positions/assets-table"
+import { ApiError } from "@/components/api-error"
 
 export default function PositionsPage() {
-  const { data: positions, isLoading: posLoading } = useSWR("positions", api.getPositions)
-  const { data: assets, isLoading: assetLoading } = useSWR("assets", api.getAssets)
+  const { data: positions, isLoading: posLoading, error: posError, mutate: reloadPos } = useSWR("positions", api.getPositions)
+  const { data: assets, isLoading: assetLoading, error: assetError, mutate: reloadAssets } = useSWR("assets", api.getAssets)
 
   const totalValue = (assets ?? []).reduce((a, x) => a + x.valueUsdt, 0)
   const totalUnrealized = (positions ?? []).reduce((a, p) => a + p.unrealizedPnl, 0)
@@ -25,14 +26,26 @@ export default function PositionsPage() {
         <StatCard label="持仓数量" value={String(positions?.length ?? 0)} loading={posLoading} />
       </div>
 
-      <PositionsTable positions={positions ?? []} loading={posLoading} />
+      {posError ? (
+        <ApiError error={posError} onRetry={() => reloadPos()} title="持仓数据加载失败" />
+      ) : (
+        <PositionsTable positions={positions ?? []} loading={posLoading} />
+      )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
         <div className="lg:col-span-2">
-          <AssetAllocation assets={assets ?? []} loading={assetLoading} />
+          {assetError ? (
+            <ApiError error={assetError} onRetry={() => reloadAssets()} title="资产配置加载失败" />
+          ) : (
+            <AssetAllocation assets={assets ?? []} loading={assetLoading} />
+          )}
         </div>
         <div className="lg:col-span-3">
-          <AssetsTable assets={assets ?? []} loading={assetLoading} />
+          {assetError ? (
+            <ApiError error={assetError} onRetry={() => reloadAssets()} title="资产明细加载失败" />
+          ) : (
+            <AssetsTable assets={assets ?? []} loading={assetLoading} />
+          )}
         </div>
       </div>
     </div>

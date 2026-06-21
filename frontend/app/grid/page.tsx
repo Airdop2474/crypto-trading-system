@@ -5,9 +5,10 @@ import { fmtSigned, fmtUsd, pnlColor } from "@/lib/format"
 import { StatCard } from "@/components/stat-card"
 import { CreateGridDialog } from "@/components/grid/create-grid-dialog"
 import { GridCard } from "@/components/grid/grid-card"
+import { ApiError } from "@/components/api-error"
 
 export default function GridPage() {
-  const { strategies, isLoading, setStatus } = useStrategies()
+  const { strategies, isLoading, error, setStatus, mutate } = useStrategies()
   const grids = strategies.filter((s) => s.type === "grid")
 
   const totalPnl = grids.reduce((a, s) => a + s.pnl, 0)
@@ -31,7 +32,9 @@ export default function GridPage() {
         <StatCard label="累计套利次数" value={totalArb.toLocaleString()} loading={isLoading} />
       </div>
 
-      {isLoading ? (
+      {error ? (
+        <ApiError error={error} onRetry={() => mutate()} title="策略列表加载失败" minHeight={320} />
+      ) : isLoading ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="h-80 animate-pulse rounded-lg bg-muted" />

@@ -4,12 +4,13 @@ import { useStrategies } from "@/hooks/use-strategies"
 import { fmtSigned, pnlColor } from "@/lib/format"
 import { StatCard } from "@/components/stat-card"
 import { PaCard } from "@/components/price-action/pa-card"
+import { ApiError } from "@/components/api-error"
 
 // 价格行为相关策略类型（Donchian / Structure / SuperTrend / Reversal）
 const PA_TYPES = ["donchian", "structure", "supertrend", "reversal"] as const
 
 export default function PriceActionPage() {
-  const { strategies, isLoading, setStatus } = useStrategies()
+  const { strategies, isLoading, error, setStatus, mutate } = useStrategies()
   const list = strategies.filter((s) => PA_TYPES.includes(s.type as typeof PA_TYPES[number]))
 
   const totalPnl = list.reduce((a, s) => a + s.pnl, 0)
@@ -27,7 +28,9 @@ export default function PriceActionPage() {
         <StatCard label="活跃策略数" value={String(running)} loading={isLoading} />
       </div>
 
-      {isLoading ? (
+      {error ? (
+        <ApiError error={error} onRetry={() => mutate()} title="策略列表加载失败" minHeight={288} />
+      ) : isLoading ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="h-72 animate-pulse rounded-lg bg-muted" />

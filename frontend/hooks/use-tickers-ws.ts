@@ -19,9 +19,14 @@ const API_BASE =
 
 const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN || ""
 
-/** 将 http:// 转为 ws://，https:// 转为 wss:// */
+/** 将 http:// 转为 ws://，https:// 转为 wss://。生产环境强制 wss://（F-07）。 */
 function toWsUrl(base: string): string {
-  return base.replace(/^http/, "ws") + "/ws/tickers"
+  let wsBase = base.replace(/^http/, "ws")
+  // F-07: 生产环境强制 wss://，防止 API_BASE 误配为 http 时 WS 明文传输。
+  if (process.env.NODE_ENV === "production" && wsBase.startsWith("ws://")) {
+    wsBase = "wss://" + wsBase.slice("ws://".length)
+  }
+  return wsBase + "/ws/tickers"
 }
 
 /** 重连延迟：1s → 2s → 4s → 8s → 16s → 30s（上限） */
@@ -63,6 +68,18 @@ export function useTickersWs(): UseTickersWsResult {
   // WebSocket 连接逻辑
   const connect = useCallback(() => {
     if (unmountedRef.current) return
+
+    // F-05: 修复连接状态竞态 —— 若旧连接仍处于 CONNECTING/OPEN/CLOSING，
+    // 先关闭再创建新连接，避免旧连接引用被覆盖后泄漏（其 onclose 仍会触发并叠加重连）。
+    if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
+      try {
+        wsRef.current.onclose = null
+        wsRef.current.close()
+      } catch {
+        // 关闭失败忽略，下方会覆盖引用
+      }
+      wsRef.current = null
+    }
 
     const url = toWsUrl(API_BASE)
     const ws = new WebSocket(url)

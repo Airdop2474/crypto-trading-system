@@ -6,7 +6,7 @@ import { api } from "@/lib/api"
 import type { Strategy, StrategyStatus } from "@/lib/types"
 
 export function useStrategies() {
-  const { data, isLoading, mutate } = useSWR("strategies", api.getStrategies)
+  const { data, isLoading, error, mutate } = useSWR("strategies", api.getStrategies)
 
   async function setStatus(id: string, status: StrategyStatus) {
     // 乐观更新：先改 UI，再调用服务层
@@ -27,6 +27,7 @@ export function useStrategies() {
   return {
     strategies: data ?? [],
     isLoading,
+    error,
     setStatus,
     mutate,
   }

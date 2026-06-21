@@ -7,10 +7,11 @@ import { StatCard } from "@/components/stat-card"
 import { CumulativePnl } from "@/components/analytics/cumulative-pnl"
 import { DailyPnl } from "@/components/analytics/daily-pnl"
 import { StrategyComparison } from "@/components/analytics/strategy-comparison"
+import { ApiError } from "@/components/api-error"
 
 export default function AnalyticsPage() {
-  const { data: pnl, isLoading: pnlLoading } = useSWR("pnl-history", api.getPnlHistory)
-  const { data: perf, isLoading: perfLoading } = useSWR("strategy-performance", api.getStrategyPerformance)
+  const { data: pnl, isLoading: pnlLoading, error: pnlError, mutate: reloadPnl } = useSWR("pnl-history", api.getPnlHistory)
+  const { data: perf, isLoading: perfLoading, error: perfError, mutate: reloadPerf } = useSWR("strategy-performance", api.getStrategyPerformance)
 
   const points = pnl ?? []
   const totalPnl = points.length ? points[points.length - 1].cumulativePnl : 0
@@ -28,12 +29,20 @@ export default function AnalyticsPage() {
         <StatCard label="单日最差" value={fmtSigned(worstDay)} valueClassName="text-destructive" loading={pnlLoading} />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <CumulativePnl data={points} loading={pnlLoading} />
-        <DailyPnl data={points} loading={pnlLoading} />
-      </div>
+      {pnlError ? (
+        <ApiError error={pnlError} onRetry={() => reloadPnl()} title="盈亏曲线加载失败" />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <CumulativePnl data={points} loading={pnlLoading} />
+          <DailyPnl data={points} loading={pnlLoading} />
+        </div>
+      )}
 
-      <StrategyComparison data={perf ?? []} loading={perfLoading} />
+      {perfError ? (
+        <ApiError error={perfError} onRetry={() => reloadPerf()} title="策略对比加载失败" />
+      ) : (
+        <StrategyComparison data={perf ?? []} loading={perfLoading} />
+      )}
     </div>
   )
 }
