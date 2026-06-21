@@ -5,6 +5,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { Shell } from '@/components/shell'
 import { SWRProvider } from '@/components/swr-provider'
 import { ErrorBoundary } from '@/components/error-boundary'
+import { ThemeProvider } from '@/components/theme-provider'
 import './globals.css'
 
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] })
@@ -37,8 +38,11 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  colorScheme: 'dark',
-  themeColor: '#0e1117',
+  colorScheme: 'dark light',
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#fafafa' },
+    { media: '(prefers-color-scheme: dark)', color: '#0e1117' },
+  ],
 }
 
 export default function RootLayout({
@@ -49,14 +53,22 @@ export default function RootLayout({
   return (
     <html
       lang="zh-CN"
+      suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} bg-background`}
     >
       <body className="font-sans antialiased">
-        <ErrorBoundary>
-          <SWRProvider>
-            <Shell>{children}</Shell>
-          </SWRProvider>
-        </ErrorBoundary>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="dark"
+          enableSystem
+          disableTransitionOnChange
+        >
+          <ErrorBoundary>
+            <SWRProvider>
+              <Shell>{children}</Shell>
+            </SWRProvider>
+          </ErrorBoundary>
+        </ThemeProvider>
         <Toaster position="top-right" />
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>

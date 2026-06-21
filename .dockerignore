@@ -1,0 +1,66 @@
+# ============================================
+# .dockerignore — 控制 Docker build context
+# ============================================
+
+# --- Version control ---
+.git
+.gitignore
+
+# --- Secrets (NEVER copy into image) ---
+.env
+.env.*
+*.pem
+*.key
+credentials*
+
+# --- Python ---
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage
+*.egg
+dist
+build
+venv
+.venv
+
+# --- Node / Frontend (前端在容器外独立构建) ---
+frontend/node_modules
+frontend/.next
+frontend/out
+frontend/.env.local
+frontend/.env.local.*
+
+# --- IDE ---
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# --- Logs (不打包历史日志) ---
+logs/
+*.log
+
+# --- Data (运行时挂载，不打包) ---
+data/raw/
+data/reports/
+
+# --- Docker ---
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# --- Docs / Deliverables (不进容器) ---
+deliverables/
+*.md
+!README.md
+
+# --- OS ---
+.DS_Store
+Thumbs.db

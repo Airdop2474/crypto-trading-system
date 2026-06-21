@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { toast } from "sonner"
 import type { Ticker } from "@/lib/types"
 import { api } from "@/lib/api"
 
@@ -54,6 +55,9 @@ export function useTickersWs(): UseTickersWsResult {
   const attemptRef = useRef(0)
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const unmountedRef = useRef(false)
+  // 避免首次连接失败就刷屏；只在"曾经连上过又断开"或"持续连不上"时弹 toast
+  const everConnectedRef = useRef(false)
+  const disconnectedToastIdRef = useRef<string | number | undefined>(undefined)
 
   // REST 回退轮询
   const fallbackPoll = useCallback(async () => {
@@ -89,8 +93,14 @@ export function useTickersWs(): UseTickersWsResult {
       setIsConnected(true)
       setIsFallback(false)
       attemptRef.current = 0
+      everConnectedRef.current = true
       // R-05: WebSocket first-message authentication
       ws.send(JSON.stringify({ type: "auth", token: API_TOKEN }))
+      // 重连成功后清除断线 toast
+      if (disconnectedToastIdRef.current !== undefined) {
+        toast.success("实时行情已恢复连接", { id: disconnectedToastIdRef.current })
+        disconnectedToastIdRef.current = undefined
+      }
     }
 
     ws.onmessage = (event) => {
@@ -111,6 +121,14 @@ export function useTickersWs(): UseTickersWsResult {
       setIsConnected(false)
       setIsFallback(true)
       wsRef.current = null
+
+      // 仅在曾经连上过、且当前未弹过断线 toast 时才弹（避免首屏抖动）
+      if (everConnectedRef.current && disconnectedToastIdRef.current === undefined && !unmountedRef.current) {
+        disconnectedToastIdRef.current = toast.warning(
+          "实时行情连接断开，正在尝试重连（已切换到 REST 回退）",
+          { duration: Infinity },
+        )
+      }
 
       if (unmountedRef.current) return
 
@@ -146,6 +164,11 @@ export function useTickersWs(): UseTickersWsResult {
         clearTimeout(timerRef.current)
       }
       clearInterval(fallbackTimer)
+      // 组件卸载时主动清除断线 toast，避免悬挂
+      if (disconnectedToastIdRef.current !== undefined) {
+        toast.dismiss(disconnectedToastIdRef.current)
+        disconnectedToastIdRef.current = undefined
+      }
     }
   }, [connect, fallbackPoll])
 

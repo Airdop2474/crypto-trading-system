@@ -82,8 +82,35 @@ def list_strategies() -> list[str]:
     return list(STRATEGY_REGISTRY.keys())
 
 
+# 策略中文标签（供 API 层展示用，与前端 lib/strategy-meta.ts 保持一致）
+_STRATEGY_LABELS = {
+    "grid": "网格",
+    "rsi": "RSI 动量",
+    "ma": "均线",
+    "buyhold": "买入持有",
+    "donchian": "唐奇安通道",
+    "structure": "市场结构",
+    "supertrend": "SuperTrend",
+    "reversal": "关键位反转",
+}
+
+
+def get_strategy_label(strategy_id: str) -> str:
+    """从 strategy_id（如 'grid-btc-usdt'）解析出中文标签。
+
+    参数：
+        strategy_id: 策略 ID，形如 `<type>-<symbol>-usdt`
+
+    返回：
+        中文标签；未知类型返回 strategy_id 原值
+    """
+    head = strategy_id.split("-")[0]
+    return _STRATEGY_LABELS.get(head, strategy_id)
+
+
 __all__ = [
     "STRATEGY_REGISTRY",
     "get_strategy",
     "list_strategies",
+    "get_strategy_label",
 ]

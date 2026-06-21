@@ -1,5 +1,7 @@
 "use client"
 
+import Link from "next/link"
+import { ArrowRight } from "lucide-react"
 import type { Strategy, StrategyStatus } from "@/lib/types"
 import { fmtPct, fmtSigned, fmtUsd, pnlColor } from "@/lib/format"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
@@ -58,7 +60,14 @@ export function GridCard({ strategy, onSetStatus }: Props) {
           <Progress value={fillPct} className="h-1.5" />
         </div>
 
-        <div className="flex items-center justify-end border-t border-border/60 pt-3">
+        <div className="flex items-center justify-between border-t border-border/60 pt-3">
+          <Link
+            href={`/strategy/${strategy.id}`}
+            className="inline-flex items-center gap-1 text-xs text-primary transition-colors hover:text-primary/80"
+          >
+            查看详情
+            <ArrowRight className="size-3" />
+          </Link>
           <StrategyControls strategy={strategy} onSetStatus={onSetStatus} />
         </div>
       </CardContent>

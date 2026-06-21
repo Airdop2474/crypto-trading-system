@@ -188,6 +188,20 @@ class DatabaseManager:
             self.init_redis()
         return self._redis_client
 
+    @property
+    def engine(self):
+        """获取 SQLAlchemy engine（可能为 None）。"""
+        return self._engine
+
+    def is_postgres_available(self) -> bool:
+        """快速检测 PostgreSQL 是否可用（布尔值，供 service 层 DB 优先回退判断）。"""
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("SELECT 1")
+                return cursor.fetchone() is not None
+        except Exception:
+            return False
+
     def test_connection(self) -> dict:
         """
         测试数据库连接

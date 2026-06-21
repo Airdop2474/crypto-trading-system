@@ -12,6 +12,8 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Dict, List, Optional
 
+import pandas as pd
+
 from src.execution.broker import BrokerInterface, Order, OrderResult
 from src.utils.logger import logger
 from src.utils.trading import apply_slippage
@@ -19,6 +21,9 @@ from src.utils.trading import apply_slippage
 
 class PaperBroker(BrokerInterface):
     """模拟交易 Broker"""
+
+    # P1-5: 订单列表最大保留数，超出后归档旧订单到 _archived_order_count
+    MAX_ORDERS = 500
 
     def __init__(
         self,
@@ -51,6 +56,10 @@ class PaperBroker(BrokerInterface):
         self.order_id_counter = 0
         # 限价单挂单队列：待撮合的订单
         self.pending_orders: List[dict] = []
+        # P1-5: 增量统计——避免遍历全量 orders 列表
+        self._total_commission: float = 0.0
+        self._total_slippage: float = 0.0
+        self._archived_order_count: int = 0
 
         logger.info(
             f"PaperBroker initialized: balance={initial_balance}, "
@@ -188,6 +197,11 @@ class PaperBroker(BrokerInterface):
             "position_after": self.positions.get(order.symbol, 0.0),
         })
 
+        # P1-5: 增量累加，避免 get_statistics 遍历全量列表
+        self._total_commission += commission_paid
+        self._total_slippage += slippage_paid
+        self.prune_orders()
+
         logger.debug(
             f"{order.side.upper()} {order.amount} {order.symbol} "
             f"@ {actual_price:.2f} -> {order_id}"
@@ -249,12 +263,16 @@ class PaperBroker(BrokerInterface):
         bar_high: float,
         bar_low: float,
         timestamp=None,
+        max_pending_bars: int = 6,
     ) -> List[OrderResult]:
         """检查挂单队列，撮合满足条件的限价单。
 
         在每根 bar 处理时调用，用 bar 的 high/low 判断是否触及限价：
         - BUY limit P：bar_low <= P 时按 P 成交（价格跌到了限价）
         - SELL limit P：bar_high >= P 时按 P 成交（价格涨到了限价）
+
+        P1-6: 超过 max_pending_bars 根 bar 仍未成交的挂单自动取消（解冻资金/持仓）。
+        默认 6 根 = 4h K 线下 24 小时。
 
         参数：
             bar_high: 当前 bar 最高价
@@ -267,9 +285,34 @@ class PaperBroker(BrokerInterface):
         filled_results = []
         remaining = []
 
+        # P1-6: 计算 TTL 阈值（默认 6 bars × 4h = 24h）
+        ttl_seconds = max_pending_bars * 4 * 3600  # 4h per bar
+
         for pending in self.pending_orders:
             order = pending["order"]
             limit_price = order.limit_price
+
+            # P1-6: TTL 过期检查——超时未成交则自动取消
+            if timestamp is not None and pending.get("placed_at") is not None:
+                try:
+                    placed = pd.Timestamp(pending["placed_at"])
+                    now = pd.Timestamp(timestamp)
+                    if (now - placed).total_seconds() > ttl_seconds:
+                        # 解冻资金/持仓
+                        if order.side == "buy":
+                            reserved = order.amount * limit_price * (1 + self.commission)
+                            self.balance += reserved
+                        elif order.side == "sell":
+                            current = self.positions.get(order.symbol, 0.0)
+                            self.positions[order.symbol] = current + order.amount
+                        logger.debug(
+                            f"TTL EXPIRED {pending['order_id']}: "
+                            f"{order.side} {order.amount} {order.symbol} @ {limit_price}"
+                        )
+                        continue  # 不放入 remaining，等价于取消
+                except (TypeError, ValueError):
+                    pass  # 时间戳格式不兼容，跳过 TTL 检查
+
             filled = False
 
             if order.side == "buy" and bar_low <= limit_price:
@@ -360,17 +403,29 @@ class PaperBroker(BrokerInterface):
         return self.orders.copy()
 
     def get_statistics(self) -> dict:
-        total_commission = sum(o["commission"] for o in self.orders)
-        total_slippage = sum(o["slippage"] for o in self.orders)
+        # P1-5: 使用增量统计，O(1) 而非 O(n)
         return {
             "initial_balance": self.initial_balance,
             "current_balance": self.balance,
-            "total_trades": len(self.orders),
-            "total_commission": total_commission,
-            "total_slippage": total_slippage,
-            "total_cost": total_commission + total_slippage,
+            "total_trades": len(self.orders) + self._archived_order_count,
+            "total_commission": self._total_commission,
+            "total_slippage": self._total_slippage,
+            "total_cost": self._total_commission + self._total_slippage,
             "positions": self.positions.copy(),
         }
+
+    def prune_orders(self) -> None:
+        """归档超出 MAX_ORDERS 的旧订单，释放内存。
+
+        保留最近 MAX_ORDERS 条在 self.orders 中，旧订单只保留数量计数。
+        增量统计 (_total_commission / _total_slippage) 已包含全部订单。
+        """
+        if len(self.orders) <= self.MAX_ORDERS:
+            return
+        excess = len(self.orders) - self.MAX_ORDERS
+        self._archived_order_count += excess
+        self.orders = self.orders[excess:]
+        logger.debug(f"Pruned {excess} old orders, archived total: {self._archived_order_count}")
 
 
 # 导出

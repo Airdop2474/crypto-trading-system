@@ -80,12 +80,76 @@ def test_strategies_shape(client):
 
 
 def test_orders_shape(client):
-    rows = client.get("/orders", headers=_TOKEN_HEADER).json()
-    assert rows, "应有成交记录"
-    o = rows[0]
+    """R-订单分页：/orders 返回 {items,total,limit,offset,has_more,stats}"""
+    d = client.get("/orders", headers=_TOKEN_HEADER).json()
+    # 顶层结构
+    for k in ["items", "total", "limit", "offset", "has_more", "stats"]:
+        assert k in d, f"missing key: {k}"
+    assert isinstance(d["items"], list)
+    assert d["items"], "应有成交记录"
+    assert d["total"] >= len(d["items"])
+    assert d["limit"] >= 1
+    assert d["offset"] == 0
+    o = d["items"][0]
     for k in ["id", "time", "symbol", "side", "price", "amount", "status", "fee"]:
         assert k in o
     assert o["side"] in ("buy", "sell")
+
+    # stats 结构
+    s = d["stats"]
+    for k in [
+        "total_orders", "filled_count", "open_count",
+        "partially_filled_count", "canceled_count", "total_fee",
+    ]:
+        assert k in s, f"missing stats key: {k}"
+    assert s["total_orders"] == d["total"]
+    assert s["filled_count"] == d["total"]  # Paper 模式全部 filled
+    assert s["total_fee"] >= 0
+
+
+def test_orders_pagination(client):
+    """分页参数：limit + offset 正确切片，has_more 正确判定"""
+    # 先取一份全集，确认 total
+    full = client.get("/orders", headers=_TOKEN_HEADER).json()
+    total = full["total"]
+    assert total > 0
+
+    # stats 不随分页变化
+    stats_full = full["stats"]
+
+    # limit=2, offset=0
+    p1 = client.get("/orders?limit=2&offset=0", headers=_TOKEN_HEADER).json()
+    assert p1["limit"] == 2
+    assert p1["offset"] == 0
+    assert len(p1["items"]) == min(2, total)
+    assert p1["has_more"] == (total > 2)
+    # stats 在分页响应中保持一致
+    assert p1["stats"] == stats_full
+
+    # limit=2, offset=2（下一页）
+    if total > 2:
+        p2 = client.get("/orders?limit=2&offset=2", headers=_TOKEN_HEADER).json()
+        assert len(p2["items"]) == min(2, total - 2)
+        assert p2["has_more"] == (total > 4)
+        assert p2["stats"] == stats_full
+        # 两页 id 不重叠
+        ids1 = {o["id"] for o in p1["items"]}
+        ids2 = {o["id"] for o in p2["items"]}
+        assert not (ids1 & ids2)
+
+    # 越界 offset 返回空 items，has_more=False
+    tail = client.get(f"/orders?limit=10&offset={total}", headers=_TOKEN_HEADER).json()
+    assert tail["items"] == []
+    assert tail["has_more"] is False
+    assert tail["stats"] == stats_full  # 即便空页 stats 仍正确
+
+    # limit 超上限被夹紧到 500
+    big = client.get("/orders?limit=9999", headers=_TOKEN_HEADER).json()
+    assert big["limit"] == 500
+
+    # 负 offset 被夹紧到 0
+    neg = client.get("/orders?offset=-5", headers=_TOKEN_HEADER).json()
+    assert neg["offset"] == 0
 
 
 def test_pnl_history_monotonic_dates(client):
@@ -121,3 +185,158 @@ def test_tickers_fallback_when_exchange_down(client, monkeypatch):
     assert rows
     for k in ["symbol", "price", "changePct", "volume", "high", "low"]:
         assert k in rows[0]
+
+
+# --------------------------------------------------------------------------
+# 风险指标端点
+# --------------------------------------------------------------------------
+def test_risk_metrics_shape(client):
+    """R-风险：/account/risk-metrics 返回完整风险指标"""
+    d = client.get("/account/risk-metrics", headers=_TOKEN_HEADER).json()
+    for k in [
+        "max_drawdown", "max_drawdown_pct", "sharpe_ratio", "sortino_ratio",
+        "volatility", "annual_return", "current_drawdown",
+        "equity_peak", "equity_current", "max_drawdown_duration",
+    ]:
+        assert k in d, f"missing key: {k}"
+    # max_drawdown 应为非正数（回撤 <= 0）
+    assert d["max_drawdown"] <= 0
+    assert d["max_drawdown_pct"] <= 0
+    # 当前权益应为正
+    assert d["equity_current"] > 0
+    assert d["equity_peak"] > 0
+    assert d["equity_peak"] >= d["equity_current"]
+    # 当前回撤 <= 0
+    assert d["current_drawdown"] <= 0
+
+
+def test_drawdown_curve_shape(client):
+    """R-风险：/risk/drawdown-curve 返回回撤曲线，点数与权益快照一致"""
+    rows = client.get("/risk/drawdown-curve", headers=_TOKEN_HEADER).json()
+    assert isinstance(rows, list)
+    assert len(rows) > 0
+    for r in rows:
+        for k in ["date", "equity", "peak", "drawdown"]:
+            assert k in r
+        # peak >= equity（峰值不可能小于当前）
+        assert r["peak"] >= r["equity"]
+        # drawdown <= 0（回撤非正）
+        assert r["drawdown"] <= 0
+    # 峰值应单调不减
+    peaks = [r["peak"] for r in rows]
+    assert peaks == sorted(peaks)
+
+
+def test_risk_status_shape(client):
+    """R-风险：/risk/status 返回风控状态机信息"""
+    d = client.get("/risk/status", headers=_TOKEN_HEADER).json()
+    for k in [
+        "state", "can_trade", "daily_pnl", "daily_loss_limit_pct",
+        "consecutive_losses", "max_consecutive_losses",
+        "cumulative_pnl", "total_drawdown_pct", "max_total_drawdown_pct",
+        "events", "limits",
+    ]:
+        assert k in d, f"missing key: {k}"
+    assert d["state"] in ("ACTIVE", "PAUSED", "STOPPED")
+    assert isinstance(d["can_trade"], bool)
+    assert isinstance(d["events"], list)
+    assert isinstance(d["limits"], dict)
+    for k in ["max_daily_loss", "max_consecutive_losses", "max_total_position", "max_total_drawdown"]:
+        assert k in d["limits"]
+
+
+def test_security_headers_present(client):
+    """R-安全：所有响应应含 CSP / HSTS / X-Content-Type-Options 等头"""
+    r = client.get("/health")
+    csp = r.headers.get("content-security-policy", "")
+    assert "default-src 'self'" in csp
+    assert "script-src" in csp  # 不再只有 default-src，应显式放宽 script
+    assert "connect-src" in csp  # 允许 WebSocket
+    assert r.headers.get("strict-transport-security") == "max-age=31536000"
+    assert r.headers.get("x-content-type-options") == "nosniff"
+    assert r.headers.get("x-frame-options") == "DENY"
+
+
+# --------------------------------------------------------------------------
+# 持仓历史 / 盈亏分布
+# --------------------------------------------------------------------------
+def test_positions_history_shape(client):
+    """R-持仓历史：/positions/history 返回平仓交易列表"""
+    rows = client.get("/positions/history", headers=_TOKEN_HEADER).json()
+    assert isinstance(rows, list)
+    if rows:
+        o = rows[0]
+        for k in ["id", "strategy_id", "strategy_name", "symbol", "tag",
+                  "close_time", "profit", "profit_pct"]:
+            assert k in o, f"missing key: {k}"
+        assert isinstance(o["profit"], (int, float))
+
+
+def test_positions_history_limit(client):
+    """limit 参数生效"""
+    full = client.get("/positions/history", headers=_TOKEN_HEADER).json()
+    limited = client.get("/positions/history?limit=5", headers=_TOKEN_HEADER).json()
+    assert len(limited) <= 5
+    assert len(limited) <= len(full)
+
+
+def test_pnl_distribution_shape(client):
+    """R-盈亏分布：/analytics/pnl-distribution 返回 bins + stats"""
+    d = client.get("/analytics/pnl-distribution", headers=_TOKEN_HEADER).json()
+    for k in ["bins", "stats"]:
+        assert k in d
+    assert isinstance(d["bins"], list)
+    assert len(d["bins"]) >= 2
+    for b in d["bins"]:
+        for k in ["range", "count", "label"]:
+            assert k in b
+        assert isinstance(b["count"], int)
+    s = d["stats"]
+    for k in ["total", "wins", "losses", "win_rate", "avg_profit", "avg_loss",
+              "profit_factor", "best", "worst"]:
+        assert k in s, f"missing stats key: {k}"
+    assert s["total"] == s["wins"] + s["losses"]
+    assert 0 <= s["win_rate"] <= 100
+
+
+def test_win_rate_trend_shape(client):
+    """R-胜率趋势：/analytics/win-rate-trend 返回滚动胜率序列"""
+    rows = client.get("/analytics/win-rate-trend", headers=_TOKEN_HEADER).json()
+    assert isinstance(rows, list)
+    if rows:
+        for r in rows:
+            for k in ["index", "close_time", "win_rate", "strategy_id"]:
+                assert k in r
+            assert 0 <= r["win_rate"] <= 100
+
+
+def test_strategy_correlation_shape(client):
+    """R-相关性矩阵：/analytics/strategy-correlation 返回 N×N 矩阵"""
+    d = client.get("/analytics/strategy-correlation", headers=_TOKEN_HEADER).json()
+    for k in ["strategies", "labels", "matrix"]:
+        assert k in d
+    assert isinstance(d["strategies"], list)
+    assert isinstance(d["labels"], list)
+    assert len(d["strategies"]) == len(d["labels"])
+    n = len(d["strategies"])
+    if n > 0:
+        assert len(d["matrix"]) == n
+        for row in d["matrix"]:
+            assert len(row) == n
+        # 对角线应为 1.0（自相关）
+        for i in range(n):
+            assert abs(d["matrix"][i][i] - 1.0) < 1e-6 or d["matrix"][i][i] == 0
+
+
+def test_admin_refresh_state(client):
+    """R-管理：POST /admin/refresh-state 重置 state 缓存"""
+    # 先确认 state 已构建（前面测试已触发）
+    client.get("/account/summary", headers=_TOKEN_HEADER)
+    # 重置
+    r = client.post("/admin/refresh-state", headers=_TOKEN_HEADER)
+    assert r.status_code == 200
+    d = r.json()
+    assert d["status"] == "ok"
+    # 再次请求会重建（测试不报错即说明 reset + rebuild 链路正常）
+    r2 = client.get("/account/summary", headers=_TOKEN_HEADER)
+    assert r2.status_code == 200

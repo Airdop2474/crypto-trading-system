@@ -89,6 +89,26 @@ services:
       start_period: 10s
     command: python -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000
 
+  # Paper Trading 守护进程（自动重启）
+  paper_daemon:
+    build: .
+    container_name: crypto_trading_paper_daemon
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config:/app/config
+    restart: unless-stopped
+    command: python scripts/run_paper_trading_daemon.py --days 60
+    # 不设 ports —— 守护进程不需要对外暴露端口
+    # 通过 checkpoint 文件（data/paper_daemon_state.json）实现崩溃恢复
+
 volumes:
   timescaledb_data:
   redis_data:

@@ -13,6 +13,7 @@ numpy==1.26.3                 # 数值计算
 psycopg2-binary==2.9.9        # PostgreSQL 驱动
 redis==5.0.1                  # Redis 客户端
 sqlalchemy==2.0.25            # ORM
+alembic==1.13.1              # 数据库迁移
 
 # ============================================
 # 工具库
@@ -82,9 +83,9 @@ slowapi>=0.1.9               # API 速率限制
 # Phase 5+ 依赖（暂时注释）
 # ============================================
 
-# # AI/ML
-# openai==1.10.0              # OpenAI API
-# anthropic==0.8.1            # Anthropic API
+# AI/ML
+openai>=1.10.0                 # OpenAI API (策略进化 LLM 解读)
+anthropic>=0.8.1               # Anthropic API (策略进化 LLM 解读)
 
 # ============================================
 # 注意事项

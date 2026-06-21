@@ -9,26 +9,34 @@ AI Agent 审计日志
 - 是否人工采纳
 - 执行的动作（如果有）
 
-存储：JSON 文件（每次分析追加一条）
+存储：DB 优先（audit_log 表），JSON 文件回退。
 """
 
 import json
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.utils.logger import logger
+from src.utils.database import db
 
 
 class AuditLog:
-    """AI 分析调用审计日志"""
+    """AI 分析调用审计日志（DB 优先 + JSON 回退）"""
 
     def __init__(self, log_dir: str = "data/reports/agent"):
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self._log_file = self.log_dir / "audit_log.json"
         self._lock = threading.Lock()
+
+    def _db_available(self) -> bool:
+        """检测 DB 是否可用。"""
+        try:
+            return db.is_postgres_available()
+        except Exception:
+            return False
 
     def record(
         self,
@@ -57,7 +65,7 @@ class AuditLog:
 
         entry = {
             "id": entry_id,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "phase": phase,
             "task": task,
             "input_summary": input_summary,
@@ -68,12 +76,25 @@ class AuditLog:
             "action_taken": None,
         }
 
+        # DB 优先
+        if self._db_available():
+            try:
+                from src.repositories.audit_repo import AuditRepository
+                with db.get_session() as session:
+                    AuditRepository.insert_entry(session, entry)
+                    session.commit()
+                logger.info(f"Agent audit log recorded (DB): {entry_id}")
+                return entry_id
+            except Exception as e:
+                logger.warning(f"DB audit log failed, falling back to JSON: {e}")
+
+        # JSON 文件回退
         with self._lock:
             logs = self._load_logs()
             logs.append(entry)
             self._save_logs(logs)
 
-        logger.info(f"Agent audit log recorded: {entry_id}")
+        logger.info(f"Agent audit log recorded (JSON): {entry_id}")
         return entry_id
 
     def update_approval(self, entry_id: str, approved: bool, action: Optional[str] = None) -> bool:
@@ -88,6 +109,20 @@ class AuditLog:
         返回：
             是否成功更新
         """
+        # DB 优先
+        if self._db_available():
+            try:
+                from src.repositories.audit_repo import AuditRepository
+                with db.get_session() as session:
+                    ok = AuditRepository.update_approval(session, entry_id, approved, action)
+                    session.commit()
+                if ok:
+                    logger.info(f"Agent audit log updated (DB): {entry_id}, approved={approved}")
+                    return True
+            except Exception as e:
+                logger.warning(f"DB audit update failed, falling back to JSON: {e}")
+
+        # JSON 文件回退
         with self._lock:
             logs = self._load_logs()
             for entry in logs:
@@ -95,7 +130,7 @@ class AuditLog:
                     entry["human_approved"] = approved
                     entry["action_taken"] = action
                     self._save_logs(logs)
-                    logger.info(f"Agent audit log updated: {entry_id}, approved={approved}")
+                    logger.info(f"Agent audit log updated (JSON): {entry_id}, approved={approved}")
                     return True
 
         logger.warning(f"Agent audit log entry not found: {entry_id}")
@@ -112,6 +147,17 @@ class AuditLog:
         返回：
             日志条目列表
         """
+        # DB 优先
+        if self._db_available():
+            try:
+                from src.repositories.audit_repo import AuditRepository
+                with db.get_session() as session:
+                    results = AuditRepository.get_logs(session, task, limit)
+                return results
+            except Exception as e:
+                logger.warning(f"DB audit log query failed, falling back to JSON: {e}")
+
+        # JSON 文件回退
         logs = self._load_logs()
         if task:
             logs = [e for e in logs if e["task"] == task]
@@ -127,6 +173,16 @@ class AuditLog:
         返回：
             统计结果
         """
+        # DB 优先
+        if self._db_available():
+            try:
+                from src.repositories.audit_repo import AuditRepository
+                with db.get_session() as session:
+                    return AuditRepository.get_adoption_rate(session, task)
+            except Exception as e:
+                logger.warning(f"DB adoption rate failed, falling back to JSON: {e}")
+
+        # JSON 文件回退
         logs = self._load_logs()
         if task:
             logs = [e for e in logs if e["task"] == task]

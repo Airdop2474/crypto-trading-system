@@ -9,6 +9,10 @@ import {
   LayoutDashboard,
   LineChart,
   ListOrdered,
+  Server,
+  Settings,
+  ShieldAlert,
+  Sparkles,
   Wallet,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -20,6 +24,10 @@ const nav = [
   { href: "/positions", label: "持仓与资产", icon: Wallet },
   { href: "/orders", label: "订单与成交", icon: ListOrdered },
   { href: "/analytics", label: "收益统计", icon: LineChart },
+  { href: "/risk", label: "风险管理", icon: ShieldAlert },
+  { href: "/agent", label: "AI 分析中心", icon: Sparkles },
+  { href: "/system", label: "系统状态", icon: Server },
+  { href: "/settings", label: "设置", icon: Settings },
 ]
 
 export function AppSidebar() {
@@ -68,7 +76,7 @@ export function AppSidebar() {
           </div>
           <div className="min-w-0">
             <p className="truncate text-xs font-medium text-sidebar-foreground">交易员</p>
-            <p className="truncate text-[11px] text-muted-foreground">主账户 · 实盘</p>
+            <p className="truncate text-[11px] text-muted-foreground">主账户 · 模拟盘</p>
           </div>
         </div>
       </div>

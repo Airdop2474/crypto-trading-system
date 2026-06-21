@@ -6,6 +6,7 @@ import { StatCard } from "@/components/stat-card"
 import { CreateGridDialog } from "@/components/grid/create-grid-dialog"
 import { GridCard } from "@/components/grid/grid-card"
 import { ApiError } from "@/components/api-error"
+import { ErrorBoundary } from "@/components/error-boundary"
 
 export default function GridPage() {
   const { strategies, isLoading, error, setStatus, mutate } = useStrategies()
@@ -17,6 +18,7 @@ export default function GridPage() {
   const totalArb = grids.reduce((a, s) => a + (s.grid?.arbitrageCount ?? 0), 0)
 
   return (
+    <ErrorBoundary>
     <div className="flex flex-col gap-4 pb-16 md:pb-0">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
@@ -48,5 +50,6 @@ export default function GridPage() {
         </div>
       )}
     </div>
+    </ErrorBoundary>
   )
 }

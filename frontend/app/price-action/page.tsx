@@ -5,6 +5,7 @@ import { fmtSigned, pnlColor } from "@/lib/format"
 import { StatCard } from "@/components/stat-card"
 import { PaCard } from "@/components/price-action/pa-card"
 import { ApiError } from "@/components/api-error"
+import { ErrorBoundary } from "@/components/error-boundary"
 
 // 价格行为相关策略类型（Donchian / Structure / SuperTrend / Reversal）
 const PA_TYPES = ["donchian", "structure", "supertrend", "reversal"] as const
@@ -17,6 +18,7 @@ export default function PriceActionPage() {
   const running = list.filter((s) => s.status === "running").length
 
   return (
+    <ErrorBoundary>
     <div className="flex flex-col gap-4 pb-16 md:pb-0">
       <p className="text-sm text-muted-foreground">
         基于技术指标与价格行为的高胜率趋势策略
@@ -49,5 +51,6 @@ export default function PriceActionPage() {
         </div>
       )}
     </div>
+    </ErrorBoundary>
   )
 }

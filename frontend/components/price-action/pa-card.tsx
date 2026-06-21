@@ -1,6 +1,7 @@
 "use client"
 
-import { Clock, BarChart3 } from "lucide-react"
+import Link from "next/link"
+import { ArrowRight, Clock, BarChart3 } from "lucide-react"
 import type { Strategy, StrategyStatus } from "@/lib/types"
 import { fmtPct, fmtSigned, fmtUsd, pnlColor } from "@/lib/format"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
@@ -68,7 +69,14 @@ export function PaCard({ strategy, onSetStatus }: Props) {
           <InfoRow label="投入本金" value={fmtUsd(strategy.investment, 0)} />
         </div>
 
-        <div className="flex items-center justify-end border-t border-border/60 pt-3">
+        <div className="flex items-center justify-between border-t border-border/60 pt-3">
+          <Link
+            href={`/strategy/${strategy.id}`}
+            className="inline-flex items-center gap-1 text-xs text-primary transition-colors hover:text-primary/80"
+          >
+            查看详情
+            <ArrowRight className="size-3" />
+          </Link>
           <StrategyControls strategy={strategy} onSetStatus={onSetStatus} />
         </div>
       </CardContent>

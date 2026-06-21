@@ -37,7 +37,10 @@ COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY config/ ./config/
 COPY data/ ./data/
+COPY alembic/ ./alembic/
+COPY alembic.ini .
 COPY pyproject.toml .
+COPY requirements.txt .
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash trader && \

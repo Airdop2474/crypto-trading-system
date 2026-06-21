@@ -2,37 +2,11 @@
 
 import { useMemo } from "react"
 import useSWR from "swr"
-import {
-  BarChart3,
-  TrendingUp,
-  Grid3x3,
-  TrendingDown,
-  Activity,
-  Layers,
-  Building2,
-  Zap,
-  RefreshCw,
-  Gem,
-  type LucideIcon,
-} from "lucide-react"
+import { BarChart3, TrendingUp } from "lucide-react"
 import { api } from "@/lib/api"
 import { fmtSigned, fmtPct } from "@/lib/format"
+import { getStrategyLabelIcon } from "@/lib/strategy-meta"
 import type { MultiStrategyDetail, MultiStrategySummary } from "@/lib/types"
-
-const STRATEGY_META: Record<string, { label: string; LucideIcon: LucideIcon }> = {
-  "grid-btc-usdt":      { label: "网格交易", LucideIcon: Grid3x3 },
-  "rsi-btc-usdt":       { label: "RSI动量", LucideIcon: TrendingUp },
-  "sma-btc-usdt":       { label: "均线策略", LucideIcon: Activity },
-  "donchian-btc-usdt":  { label: "唐奇安通道", LucideIcon: Layers },
-  "structure-btc-usdt": { label: "市场结构", LucideIcon: Building2 },
-  "supertrend-btc-usdt":{ label: "SuperTrend", LucideIcon: Zap },
-  "reversal-btc-usdt":  { label: "关键位反转", LucideIcon: RefreshCw },
-  "buyhold-btc-usdt":   { label: "买入持有", LucideIcon: Gem },
-}
-
-function getStrategyMeta(id: string) {
-  return STRATEGY_META[id] ?? { label: id, LucideIcon: BarChart3 }
-}
 
 export function StrategyPerformanceDashboard() {
   const { data: summary, error: summaryError } = useSWR<MultiStrategySummary>(
@@ -101,7 +75,7 @@ export function StrategyPerformanceDashboard() {
 
       <div className="space-y-2">
         {sorted.map((s) => {
-          const { label, LucideIcon: Icon } = getStrategyMeta(s.strategyId)
+          const { label, LucideIcon: Icon } = getStrategyLabelIcon(s.strategyId)
           const isPositive = s.realizedPnl >= 0
           const barWidth = Math.max(
             (Math.abs(s.realizedPnl) / maxAbsPnl) * 100,

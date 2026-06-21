@@ -110,18 +110,29 @@ class PaperTradingDaemon:
 
     # ---- 组件装配（区间来自预热窗口；与 run_paper_trading 一致）----
     def _build(self, lower, upper):
+        from src.utils.config import config as _cfg
         initial = self.args.initial
         self.strategy = GridTradingStrategy(
             lower_price=lower, upper_price=upper, grid_count=10,
             initial_capital=initial,
+            max_consecutive_losses=_cfg.MAX_CONSECUTIVE_LOSSES,
+            max_daily_loss=_cfg.MAX_DAILY_LOSS,
         )
-        self.risk = RiskManager(capital_base=initial)
+        # P0-2: 风控参数从 .env / config.py 读取，而非硬编码默认值
+        self.risk = RiskManager(
+            capital_base=initial,
+            max_daily_loss=_cfg.MAX_DAILY_LOSS,
+            max_consecutive_losses=_cfg.MAX_CONSECUTIVE_LOSSES,
+            max_total_position=_cfg.MAX_TOTAL_POSITION,
+        )
         if self.args.broker == "exchange":
             self.broker, exec_config = self._build_exchange_broker()
         else:
+            # P0-3: 仓位限制从 config 读取，不再设为 100%
             self.broker = PaperBroker(
                 initial, commission=0.001, slippage={self.symbol: 0.0005},
-                max_position_per_trade=1.0, max_total_position=1.0,
+                max_position_per_trade=_cfg.MAX_POSITION_SIZE,
+                max_total_position=_cfg.MAX_TOTAL_POSITION,
             )
             exec_config = None  # None → runner 从 PaperBroker 快照（行为不变）
         # runner 持有 risk → process_bar 内 _execute_signal 自动按 can_trade() 门控
@@ -195,8 +206,12 @@ class PaperTradingDaemon:
             broker_state = {
                 "balance": self.broker.balance,
                 "positions": self.broker.positions,
-                "orders": self.broker.orders,
+                # P1-5: 只保存最近 N 条 + 增量统计
+                "orders": self.broker.orders[-self.broker.MAX_ORDERS:],
                 "order_id_counter": self.broker.order_id_counter,
+                "_total_commission": self.broker._total_commission,
+                "_total_slippage": self.broker._total_slippage,
+                "_archived_order_count": self.broker._archived_order_count,
             }
         st = {
             "version": 1, "symbol": self.symbol,
@@ -209,7 +224,9 @@ class PaperTradingDaemon:
             "runner": {
                 "lots": {str(k): v for k, v in self.runner.lots.items()},
                 "realized_pnl": self.runner.realized_pnl,
-                "closed_trades": self.runner.closed_trades,
+                # P1-5: 只保留最近 200 条，避免 checkpoint 文件无限增长
+                "closed_trades": self.runner.closed_trades[-200:],
+                "closed_trades_total": len(self.runner.closed_trades),
             },
             "strategy": {
                 "grid_filled": self.strategy.grid_filled,
@@ -254,6 +271,10 @@ class PaperTradingDaemon:
             self.broker.positions = b["positions"]
             self.broker.orders = b["orders"]
             self.broker.order_id_counter = b["order_id_counter"]
+            # P1-5: 恢复增量统计（旧 checkpoint 无这些字段时用默认值）
+            self.broker._total_commission = b.get("_total_commission", 0.0)
+            self.broker._total_slippage = b.get("_total_slippage", 0.0)
+            self.broker._archived_order_count = b.get("_archived_order_count", 0)
 
         r = st["runner"]
         self.runner.lots = {
@@ -262,6 +283,9 @@ class PaperTradingDaemon:
         }
         self.runner.realized_pnl = r["realized_pnl"]
         self.runner.closed_trades = r["closed_trades"]
+        total = r.get("closed_trades_total", len(self.runner.closed_trades))
+        if total > len(self.runner.closed_trades):
+            logger.info(f"恢复时 closed_trades 已归档：保留最近 {len(self.runner.closed_trades)} / 总计 {total}")
 
         s = st["strategy"]
         self.strategy.grid_filled = s["grid_filled"]
@@ -344,8 +368,42 @@ class PaperTradingDaemon:
             self.risk._trip_pause(reason)
             self.strategy.paused = True
 
+    # ---- P1-8: 实时数据轻量校验 ----
+    @staticmethod
+    def _validate_bar(bar) -> bool:
+        """校验单根 OHLCV bar 的基本逻辑一致性。
+
+        检查：价格 > 0、high >= low、open/close 在 [low, high] 范围内、volume >= 0。
+        返回 True 表示合法，False 表示异常。
+        """
+        try:
+            o, h, l, c = float(bar["open"]), float(bar["high"]), float(bar["low"]), float(bar["close"])
+            v = float(bar.get("volume", 0))
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning(f"bar 字段缺失或类型错误：{e}")
+            return False
+        if l <= 0 or o <= 0 or h <= 0 or c <= 0:
+            logger.warning(f"bar 价格 <= 0: O={o} H={h} L={l} C={c}")
+            return False
+        if h < l:
+            logger.warning(f"bar high < low: H={h} L={l}")
+            return False
+        if o < l or o > h or c < l or c > h:
+            logger.warning(f"bar open/close 超出 [low, high]: O={o} H={h} L={l} C={c}")
+            return False
+        if v < 0:
+            logger.warning(f"bar volume < 0: V={v}")
+            return False
+        return True
+
     # ---- 单 bar 处理 ----
     def _on_bar(self, bar):
+        # P1-8: 实时数据校验——异常 bar 跳过本根，不进入策略
+        if not self._validate_bar(bar):
+            self.risk.record_data_anomaly("bar validation failed")
+            logger.warning(f"跳过异常 bar: ts={bar.get('timestamp', '?')}")
+            return
+
         self._check_resume()
 
         # 闪崩保护：在信号生成前检查
@@ -525,12 +583,16 @@ def parse_args(argv=None):
                    help="单日订单数上限（exchange 模式）")
     p.add_argument("--max-bar-drop-pct", type=float, default=0.10,
                    help="单根 bar 跌幅熔断阈值（默认 10%%），超过则 PAUSE")
+    p.add_argument("--log-level", default="INFO",
+                   choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+                   help="日志级别（默认 INFO）")
     return p.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    setup_logger(log_level="WARNING")
+    # P1-7: 默认 INFO 级别，生产排障需要看到交易级日志
+    setup_logger(log_level=getattr(args, 'log_level', 'INFO'))
     return PaperTradingDaemon(args).run()
 
 

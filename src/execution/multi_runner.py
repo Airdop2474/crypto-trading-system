@@ -241,15 +241,67 @@ class MultiStrategyRunner:
         """
         results = {}
         symbol = bar.get("_symbol", "")
+        current_price = float(bar.get("close", 0))
 
         for slot in self._slots:
             if slot.config.symbol != symbol:
                 continue
 
+            # max_allocation 预算校验（0 表示不限）
+            alloc = slot.config.max_allocation
+            if alloc > 0 and current_price > 0:
+                try:
+                    broker_balance = self.broker.get_balance()
+                    positions_value = sum(
+                        amt * current_price
+                        for amt in self.broker.positions.values()
+                    )
+                    total_value = broker_balance + positions_value
+                    if total_value > 0:
+                        slot_position = sum(
+                            lot["amount"] for lot in slot.runner.lots.values()
+                        )
+                        slot_value = slot_position * current_price
+                        if slot_value / total_value > alloc:
+                            logger.warning(
+                                f"Strategy '{slot.config.strategy_id}' exceeds "
+                                f"max_allocation {alloc:.0%}: "
+                                f"{slot_value / total_value:.1%} > {alloc:.0%}, skipping bar"
+                            )
+                            slot.bars_processed += 1
+                            results[slot.config.strategy_id] = self._pending_map.get(
+                                slot.config.strategy_id
+                            )
+                            continue
+                except Exception as e:
+                    logger.debug(f"max_allocation check failed for '{slot.config.strategy_id}': {e}")
+
             pending = self._pending_map.get(slot.config.strategy_id)
-            new_pending = slot.runner.process_bar(
-                bar, historical, slot.config.strategy, pending,
-            )
+            try:
+                new_pending = slot.runner.process_bar(
+                    bar, historical, slot.config.strategy, pending,
+                )
+            except Exception as e:
+                # P0-4: 单策略崩溃隔离——跳过该策略，继续处理其他策略
+                logger.error(
+                    f"Strategy '{slot.config.strategy_id}' crashed in process_bar: "
+                    f"{type(e).__name__}: {e}",
+                    exc_info=True,
+                )
+                if self.risk_manager is not None:
+                    try:
+                        self.risk_manager._log_event(
+                            "WARNING",
+                            f"strategy_crash:{slot.config.strategy_id}:"
+                            f"{type(e).__name__}:{e}",
+                        )
+                    except Exception:
+                        pass  # _log_event 内部错误不应影响其他策略
+                self._pending_map[slot.config.strategy_id] = pending  # 保持旧 pending
+                slot.bars_processed += 1
+                results[slot.config.strategy_id] = pending
+                continue
+
             self._pending_map[slot.config.strategy_id] = new_pending
             slot.bars_processed += 1
             results[slot.config.strategy_id] = new_pending
@@ -291,6 +343,53 @@ class MultiStrategyRunner:
             "strategies_count": len(self._slots),
             "strategies": strategy_summaries,
         }
+
+    def update_strategy_params(self, strategy_id: str, new_params: Dict) -> bool:
+        """热替换运行中策略的参数。
+
+        更新策略实例属性 + 重置指标缓存状态（_init_*_state），
+        保留持仓/风控状态。下一根 bar 即生效。
+
+        参数:
+            strategy_id: 策略 ID
+            new_params: 新参数 dict（仅包含需要更新的参数）
+
+        返回:
+            True 如果成功更新，False 如果策略未找到
+        """
+        slot = self.get_slot(strategy_id)
+        if slot is None:
+            logger.warning(f"update_strategy_params: '{strategy_id}' not found")
+            return False
+
+        strategy = slot.config.strategy
+        old_params = dict(strategy.parameters) if hasattr(strategy, "parameters") else {}
+
+        # 1. 更新策略实例属性
+        for key, value in new_params.items():
+            if hasattr(strategy, key):
+                setattr(strategy, key, value)
+
+        # 2. 更新 parameters dict
+        if hasattr(strategy, "parameters"):
+            strategy.parameters.update(new_params)
+
+        # 3. 重置策略指标缓存（不影响持仓/风控）
+        #    各策略命名约定：_init_grid_state, _init_rsi_state, _init_ma_state 等
+        for attr_name in dir(strategy):
+            if attr_name.startswith("_init_") and attr_name.endswith("_state") and callable(getattr(strategy, attr_name)):
+                try:
+                    getattr(strategy, attr_name)()
+                    logger.debug(f"Called {attr_name}() on '{strategy_id}'")
+                except Exception as e:
+                    logger.warning(f"Failed to call {attr_name}() on '{strategy_id}': {e}")
+                break  # 只调用第一个匹配的方法
+
+        logger.info(
+            f"Strategy '{strategy_id}' params updated: "
+            f"{old_params} -> {dict(strategy.parameters)}"
+        )
+        return True
 
     # ---- 结果分析工具 ----
 

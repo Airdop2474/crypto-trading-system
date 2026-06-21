@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 import { fmtNum, fmtPct } from "@/lib/format"
 import { Button } from "@/components/ui/button"
 import { useTickersWs } from "@/hooks/use-tickers-ws"
+import { ThemeToggle } from "@/components/theme-toggle"
 
 const titles: Record<string, string> = {
   "/": "总览仪表盘",
@@ -14,6 +15,10 @@ const titles: Record<string, string> = {
   "/positions": "持仓与资产",
   "/orders": "订单与成交",
   "/analytics": "收益统计",
+  "/risk": "风险管理",
+  "/agent": "AI 分析中心",
+  "/system": "系统状态",
+  "/settings": "设置",
 }
 
 export function TopBar() {
@@ -54,6 +59,7 @@ export function TopBar() {
         <Button variant="ghost" size="icon" className="size-8" aria-label="通知">
           <Bell className="size-4" />
         </Button>
+        <ThemeToggle />
       </div>
     </header>
   )

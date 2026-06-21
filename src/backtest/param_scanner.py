@@ -42,7 +42,7 @@ def _run_single_backtest(args: Tuple) -> Optional[Dict]:
             }
     except Exception as e:
         logger.warning(
-            f"Param scan failed for params={params}, data_hash={data_hash}: "
+            f"Param scan failed for params={param_dict}: "
             f"{type(e).__name__}: {e}"
         )
     return None

@@ -12,16 +12,36 @@
 
 import type {
   AccountSummary,
+  AgentAdoptionRate,
+  AgentAnalysisResult,
+  AgentAuditLogEntry,
+  AgentTask,
   AssetBalance,
+  ClosedTradeHistory,
   CreateGridParams,
+  DrawdownPoint,
+  EvolutionResult,
+  EvolutionHistoryResponse,
+  EvolutionStats,
+  EvolveRequest,
   MultiStrategyDetail,
+  MultiStrategyResult,
   MultiStrategySummary,
-  Order,
+  OrdersPage,
+  PnlDistribution,
   PnlPoint,
   Position,
+  RiskMetrics,
+  RiskStatus,
   Strategy,
+  StrategyCorrelation,
   StrategyPerformance,
   Ticker,
+  WinRateTrendPoint,
+  ModeState,
+  StartModeParams,
+  RunningMode,
+  TestnetValidationResult,
 } from "./types"
 
 const API_BASE =
@@ -55,8 +75,10 @@ export const api = {
   // GET /assets
   getAssets: (): Promise<AssetBalance[]> => get("/assets"),
 
-  // GET /orders
-  getOrders: (): Promise<Order[]> => get("/orders"),
+  // GET /orders?limit=&offset=
+  // 返回分页结构 { items, total, limit, offset, has_more }
+  getOrders: (limit: number = 100, offset: number = 0): Promise<OrdersPage> =>
+    get(`/orders?limit=${limit}&offset=${offset}`),
 
   // GET /analytics/pnl-history
   getPnlHistory: (): Promise<PnlPoint[]> => get("/analytics/pnl-history"),
@@ -93,7 +115,7 @@ export const api = {
     get("/multi/details"),
 
   // GET /multi/strategy/:id
-  getMultiStrategy: (id: string): Promise<unknown> =>
+  getMultiStrategy: (id: string): Promise<MultiStrategyResult> =>
     get(`/multi/strategy/${id}`),
 
   // --------------------------------------------------------------------------
@@ -110,6 +132,179 @@ export const api = {
     }
     return res.json()
   },
+
+  // --------------------------------------------------------------------------
+  // AI Agent 分析（只分析，不执行）
+  // --------------------------------------------------------------------------
+  // POST /agent/analyze
+  runAgentAnalysis: async (
+    task: AgentTask,
+    phase: string = "Phase 6",
+  ): Promise<AgentAnalysisResult> => {
+    const res = await fetch(`${API_BASE}/agent/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify({ task, phase }),
+    })
+    if (!res.ok) {
+      throw new Error(`POST /agent/analyze failed: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // GET /agent/audit-logs?task=&limit=
+  getAgentAuditLogs: (
+    task?: AgentTask,
+    limit: number = 50,
+  ): Promise<AgentAuditLogEntry[]> =>
+    get(
+      `/agent/audit-logs?limit=${limit}${task ? `&task=${task}` : ""}`,
+    ),
+
+  // GET /agent/adoption-rate?task=
+  getAgentAdoptionRate: (task?: AgentTask): Promise<AgentAdoptionRate> =>
+    get(`/agent/adoption-rate${task ? `?task=${task}` : ""}`),
+
+  // GET /health/detailed
+  getHealthDetailed: (): Promise<{
+    status: string
+    ws_connected: boolean
+    ws_clients: number
+    cache_backend: string
+    cache_available: boolean
+  }> => get("/health/detailed"),
+
+  // --------------------------------------------------------------------------
+  // 风险指标
+  // --------------------------------------------------------------------------
+  // GET /account/risk-metrics
+  getRiskMetrics: (): Promise<RiskMetrics> => get("/account/risk-metrics"),
+
+  // GET /risk/drawdown-curve
+  getDrawdownCurve: (): Promise<DrawdownPoint[]> => get("/risk/drawdown-curve"),
+
+  // GET /risk/status
+  getRiskStatus: (): Promise<RiskStatus> => get("/risk/status"),
+
+  // --------------------------------------------------------------------------
+  // 持仓历史 / 盈亏分布
+  // --------------------------------------------------------------------------
+  // GET /positions/history?limit=
+  getPositionsHistory: (limit: number = 200): Promise<ClosedTradeHistory[]> =>
+    get(`/positions/history?limit=${limit}`),
+
+  // GET /analytics/pnl-distribution?bins=
+  getPnlDistribution: (bins: number = 10): Promise<PnlDistribution> =>
+    get(`/analytics/pnl-distribution?bins=${bins}`),
+
+  // GET /analytics/win-rate-trend?window=
+  getWinRateTrend: (window: number = 20): Promise<WinRateTrendPoint[]> =>
+    get(`/analytics/win-rate-trend?window=${window}`),
+
+  // GET /analytics/strategy-correlation
+  getStrategyCorrelation: (): Promise<StrategyCorrelation> =>
+    get("/analytics/strategy-correlation"),
+
+  // --------------------------------------------------------------------------
+  // 运行模式管理
+  // --------------------------------------------------------------------------
+  // GET /modes
+  getModes: (): Promise<ModeState[]> => get("/modes"),
+
+  // GET /modes/{mode}/status
+  getModeStatus: (mode: RunningMode): Promise<ModeState> =>
+    get(`/modes/${mode}/status`),
+
+  // POST /modes/{mode}/start
+  startMode: async (mode: RunningMode, params: StartModeParams): Promise<ModeState> => {
+    const res = await fetch(`${API_BASE}/modes/${mode}/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `启动模式失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // POST /modes/{mode}/stop
+  stopMode: async (mode: RunningMode): Promise<ModeState> => {
+    const res = await fetch(`${API_BASE}/modes/${mode}/stop`, {
+      method: "POST",
+      headers: { "X-API-Token": API_TOKEN },
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `停止模式失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // POST /modes/testnet_live/validate
+  validateTestnet: async (): Promise<TestnetValidationResult> => {
+    const res = await fetch(`${API_BASE}/modes/testnet_live/validate`, {
+      method: "POST",
+      headers: { "X-API-Token": API_TOKEN },
+    })
+    if (!res.ok) throw new Error(`验证失败: ${res.status}`)
+    return res.json()
+  },
+
+  // GET /modes/{mode}/logs?limit=
+  getModeLogs: (mode: RunningMode, limit: number = 200): Promise<string[]> =>
+    get(`/modes/${mode}/logs?limit=${limit}`),
+
+  // --------------------------------------------------------------------------
+  // 管理 / 急停
+  // --------------------------------------------------------------------------
+  // POST /admin/emergency-stop
+  emergencyStop: async (): Promise<{
+    ok: boolean
+    previous_state: string
+    current_state: string
+    message: string
+  }> => {
+    const res = await fetch(`${API_BASE}/admin/emergency-stop`, {
+      method: "POST",
+      headers: { "X-API-Token": API_TOKEN },
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `急停失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // --------------------------------------------------------------------------
+  // 策略 AI 进化
+  // --------------------------------------------------------------------------
+  // POST /agent/evolve
+  runEvolution: async (req: EvolveRequest): Promise<EvolutionResult[]> => {
+    const res = await fetch(`${API_BASE}/agent/evolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      throw new Error(`POST /agent/evolve failed: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // GET /agent/evolution-history?strategy_id=&limit=
+  getEvolutionHistory: (
+    strategyId?: string,
+    limit: number = 50,
+  ): Promise<EvolutionHistoryResponse> =>
+    get(
+      `/agent/evolution-history?limit=${limit}${strategyId ? `&strategy_id=${strategyId}` : ""}`,
+    ),
+
+  // GET /agent/evolution-stats
+  getEvolutionStats: (): Promise<EvolutionStats> =>
+    get("/agent/evolution-stats"),
 }
 
 // SWR fetcher：以函数 key 直接调用对应的服务方法

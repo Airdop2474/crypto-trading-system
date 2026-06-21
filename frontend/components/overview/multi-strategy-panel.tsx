@@ -3,6 +3,7 @@
 import useSWR from "swr"
 import { api } from "@/lib/api"
 import { fmtSigned, fmtPct, pnlColor } from "@/lib/format"
+import { getStrategyLabelColor } from "@/lib/strategy-meta"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Table,
@@ -13,12 +14,6 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-
-const STRATEGY_LABELS: Record<string, { label: string; color: string }> = {
-  "grid-btc-usdt": { label: "网格", color: "bg-blue-500/20 text-blue-400" },
-  "rsi-btc-usdt": { label: "RSI 动量", color: "bg-purple-500/20 text-purple-400" },
-  "sma-btc-usdt": { label: "均线", color: "bg-amber-500/20 text-amber-400" },
-}
 
 export function MultiStrategyPanel() {
   const { data: summary, isLoading } = useSWR("multi-summary", api.getMultiSummary)
@@ -57,10 +52,7 @@ export function MultiStrategyPanel() {
             </TableHeader>
             <TableBody>
               {details.map((d) => {
-                const meta = STRATEGY_LABELS[d.strategyId] ?? {
-                  label: d.strategyId,
-                  color: "bg-gray-500/20 text-gray-400",
-                }
+                const meta = getStrategyLabelColor(d.strategyId)
                 return (
                   <TableRow key={d.strategyId}>
                     <TableCell>

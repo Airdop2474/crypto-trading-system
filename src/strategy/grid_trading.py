@@ -180,9 +180,9 @@ class GridTradingStrategy(RiskAwareStrategy):
         current_price = data.iloc[-1]["close"]
 
         # --- 熔断暂停检查（RiskAwareStrategy 统一管理）---
-        if self._is_paused():
+        if self._is_paused(current_time):
             self._try_recover(data)
-            if self._is_paused():
+            if self._is_paused(current_time):
                 return []
 
         # --- 网格边界击穿检测 ---

@@ -92,6 +92,26 @@ class Config:
         self.TIMEZONE = os.getenv("TIMEZONE", "UTC")
         self.DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
+        # ============================================
+        # CORS 配置
+        # ============================================
+        # 逗号分隔的允许来源列表。开发默认放行 Next.js 3000/3001；
+        # 生产应通过 CORS_ORIGINS 环境变量收紧到实际域名。
+        # 例：CORS_ORIGINS=https://app.example.com,https://admin.example.com
+        default_origins = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
+        cors_raw = os.getenv("CORS_ORIGINS", default_origins)
+        self.CORS_ORIGINS: List[str] = [
+            o.strip() for o in cors_raw.split(",") if o.strip()
+        ]
+
+        # ============================================
+        # LLM / AI 配置（策略进化用）
+        # ============================================
+        self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+        self.OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+        self.ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+
     def validate(self, strict: bool = False) -> tuple[bool, list[str]]:
         """
         验证配置

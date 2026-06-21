@@ -4,6 +4,7 @@ import { ActiveStrategies } from "@/components/overview/active-strategies"
 import { EquityChart } from "@/components/overview/equity-chart"
 import { MarketWatch } from "@/components/overview/market-watch"
 import { MultiStrategyPanel } from "@/components/overview/multi-strategy-panel"
+import { RiskMetricsCards } from "@/components/overview/risk-metrics-cards"
 import { StrategyPerformanceDashboard } from "@/components/overview/strategy-performance"
 
 export default function OverviewPage() {
@@ -11,6 +12,10 @@ export default function OverviewPage() {
     <div className="flex flex-col gap-4 pb-16 md:pb-0">
       <ErrorBoundary>
         <AccountCards />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <RiskMetricsCards />
       </ErrorBoundary>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
