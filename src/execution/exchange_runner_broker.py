@@ -19,6 +19,14 @@ from src.execution.broker import Order, OrderResult
 from src.utils.logger import logger
 
 
+class ExchangeUnavailable(RuntimeError):
+    """交易所在构造适配器时不可达（查余额/持仓失败）。
+
+    真实下单 broker 不能带着错误的对账基线继续运行，否则 delta 对账会失真、
+    可能误触发漂移熔断。故构造期连接失败直接抛此异常，由调用方明确拒绝启动。
+    """
+
+
 def assess_position_drift(real_pos, initial_pos, local_net, abs_tol, rel_tol):
     """对账：交易所真实净持仓变化是否与本地账本净持仓一致。
 
@@ -53,9 +61,16 @@ class ExchangeRunnerBroker:
         self._ledger: List[dict] = []
         self._unconfirmed: List[str] = []
         self._errors = 0  # 拒单/超时累计（护栏拒、sizing 拒、未确认）
-        # 开跑基线：testnet 账户的现有现金/底仓，对账按 delta 扣掉
-        self.initial_balance = self.get_balance()
-        self.initial_position = self.get_position(symbol)
+        # 开跑基线：testnet 账户的现有现金/底仓，对账按 delta 扣掉。
+        # 交易所不可达时拒绝带坏基线启动（坏基线会让 delta 对账误判、误触发漂移熔断）。
+        try:
+            self.initial_balance = self.get_balance()
+            self.initial_position = self.get_position(symbol)
+        except Exception as e:
+            raise ExchangeUnavailable(
+                f"初始化基线快照失败（交易所不可达），拒绝启动 {symbol}: "
+                f"{type(e).__name__}: {e}"
+            ) from e
 
     # ---- 查询（透传真实交易所状态）----
 

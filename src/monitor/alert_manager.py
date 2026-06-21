@@ -106,16 +106,63 @@ class AlertManager:
         return alert
 
     def _dispatch(self, alert: dict) -> None:
-        """派发到外部通道。单个通道失败被隔离，绝不影响告警主流程。"""
+        """派发到外部通道。单个通道失败被隔离，绝不影响告警主流程。
+
+        若配置了通道、且本应发送该告警的通道全部失败，则记一条 CRITICAL
+        兜底日志（escalation）——避免"告警系统自身静默失效"无人察觉。
+        无通道时（channels 为空）为 no-op，不触发兜底。
+        """
+        attempted = 0
+        failed = 0
         for ch in self.channels:
             try:
                 if ch.should_send(alert["level"]):
+                    attempted += 1
                     ch.send(alert)
             except Exception as e:
                 # 告警通道挂掉不能拖垮交易/监控，仅记录
+                failed += 1
                 logger.error(
                     f"Alert channel {type(ch).__name__} failed: {e}"
                 )
+
+        # 兜底升级：有通道本应发送但全部失败 → 告警系统自身故障
+        if attempted > 0 and failed == attempted:
+            logger.critical(
+                f"ALERT DELIVERY FAILURE: all {attempted} channel(s) failed to "
+                f"deliver alert [{alert['level']}] {alert['source']}: "
+                f"{alert['message']}"
+            )
+
+    def check_channels_health(self) -> Dict[str, bool]:
+        """通道健康自检：对每个通道发送一条 INFO 探针，返回 {通道名: 是否成功}。
+
+        全部失败时记 CRITICAL 兜底日志。无通道时返回空 dict。
+        探针不进 self.alerts，也不受限流影响（直接调通道）。
+        """
+        probe = {
+            "time": datetime.now().isoformat(),
+            "level": INFO,
+            "source": "healthcheck",
+            "message": "channel health probe",
+        }
+        health: Dict[str, bool] = {}
+        for ch in self.channels:
+            name = type(ch).__name__
+            try:
+                # 探针强制发送，绕过 should_send 级别过滤
+                ch.send(probe)
+                health[name] = True
+            except Exception as e:
+                health[name] = False
+                logger.error(f"Alert channel {name} health probe failed: {e}")
+
+        if health and not any(health.values()):
+            logger.critical(
+                f"ALERT CHANNELS UNHEALTHY: all {len(health)} channel(s) "
+                f"failed health probe: {list(health.keys())}"
+            )
+        return health
 
     def check_risk_events(self, rm: RiskManager) -> List[dict]:
         """

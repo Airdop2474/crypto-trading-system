@@ -3,7 +3,7 @@
 from src.execution.broker import BrokerInterface, Order, OrderResult
 from src.execution.exchange_broker import ExchangeBroker
 from src.execution.exchange_runner_broker import (
-    ExchangeRunnerBroker, assess_position_drift,
+    ExchangeRunnerBroker, ExchangeUnavailable, assess_position_drift,
 )
 from src.execution.multi_runner import MultiStrategyRunner, StrategyConfig, StrategySlot
 from src.execution.order_guard import OrderRateGuard
@@ -18,6 +18,7 @@ __all__ = [
     "OrderResult",
     "ExchangeBroker",
     "ExchangeRunnerBroker",
+    "ExchangeUnavailable",
     "assess_position_drift",
     "MultiStrategyRunner",
     "OrderRateGuard",

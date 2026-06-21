@@ -149,3 +149,83 @@ class TestEmailChannel:
         )
         assert ch.should_send(WARNING) is False
         assert ch.should_send(CRITICAL) is True
+
+
+class TestDeliveryEscalation:
+    """OPEN-2：通道全部失败时的兜底升级 + 健康检查。
+
+    项目用 loguru（非 stdlib logging），caplog 无效，故用 loguru sink 捕获。
+    """
+
+    @staticmethod
+    def _capture():
+        """返回 (messages, remove_fn)：注册一个 loguru sink 收集 CRITICAL 消息。"""
+        from src.utils.logger import logger
+        msgs = []
+        sink_id = logger.add(lambda m: msgs.append(m.record["message"]), level="CRITICAL")
+        return msgs, lambda: logger.remove(sink_id)
+
+    def test_all_channels_fail_logs_critical(self):
+        """有通道本应发送但全部失败 → 记一条 CRITICAL 兜底日志。"""
+        msgs, remove = self._capture()
+        try:
+            am = AlertManager(channels=[FailingChannel(), FailingChannel()])
+            am.emit(CRITICAL, "src", "boom")
+        finally:
+            remove()
+        assert any("ALERT DELIVERY FAILURE" in m for m in msgs)
+
+    def test_partial_failure_no_escalation(self):
+        """只要有一个通道成功，就不算投递失败，不升级。"""
+        msgs, remove = self._capture()
+        try:
+            good = RecordingChannel(min_level=INFO)
+            am = AlertManager(channels=[FailingChannel(), good])
+            am.emit(CRITICAL, "src", "boom")
+        finally:
+            remove()
+        assert not any("ALERT DELIVERY FAILURE" in m for m in msgs)
+        assert len(good.received) == 1
+
+    def test_no_channels_no_escalation(self):
+        """无通道时不触发兜底（channels 为空是 no-op）。"""
+        msgs, remove = self._capture()
+        try:
+            am = AlertManager()  # 无通道
+            am.emit(CRITICAL, "src", "boom")
+        finally:
+            remove()
+        assert not any("ALERT DELIVERY FAILURE" in m for m in msgs)
+
+    def test_below_threshold_failure_not_counted(self):
+        """通道因级别过滤未尝试发送，不算失败、不升级。"""
+        msgs, remove = self._capture()
+        try:
+            crit_only = RecordingChannel(min_level=CRITICAL)
+            am = AlertManager(channels=[crit_only])
+            am.emit(WARNING, "src", "minor")  # 低于阈值，未尝试
+        finally:
+            remove()
+        assert not any("ALERT DELIVERY FAILURE" in m for m in msgs)
+
+    def test_health_check_all_ok(self):
+        good1 = RecordingChannel(min_level=INFO)
+        good2 = RecordingChannel(min_level=INFO)
+        am = AlertManager(channels=[good1, good2])
+        health = am.check_channels_health()
+        assert health == {"RecordingChannel": True}  # 同名通道键合并，均成功
+        assert len(good1.received) == 1  # 探针已发送
+
+    def test_health_check_all_fail_logs_critical(self):
+        msgs, remove = self._capture()
+        try:
+            am = AlertManager(channels=[FailingChannel()])
+            health = am.check_channels_health()
+        finally:
+            remove()
+        assert health == {"FailingChannel": False}
+        assert any("ALERT CHANNELS UNHEALTHY" in m for m in msgs)
+
+    def test_health_check_no_channels_empty(self):
+        am = AlertManager()
+        assert am.check_channels_health() == {}

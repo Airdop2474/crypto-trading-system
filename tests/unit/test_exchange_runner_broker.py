@@ -16,7 +16,7 @@ from src.execution.broker import Order
 from src.execution.exchange_broker import ExchangeBroker
 from src.execution.exchange_execution import ExchangeExecutor
 from src.execution.exchange_runner_broker import (
-    ExchangeRunnerBroker, assess_position_drift,
+    ExchangeRunnerBroker, assess_position_drift, ExchangeUnavailable,
 )
 
 
@@ -25,7 +25,7 @@ class FakeExchange:
 
     def __init__(self, *, create_result=None, min_amount=0.0001, min_cost=5.0,
                  order_status=None, usdt_free=10000.0, base_free=1.0,
-                 base="BTC"):
+                 base="BTC", balance_raises=None):
         self._create_result = create_result
         self._min_amount = min_amount
         self._min_cost = min_cost
@@ -33,6 +33,7 @@ class FakeExchange:
         self._usdt_free = usdt_free
         self._base_free = base_free
         self._base = base
+        self._balance_raises = balance_raises
 
     def amount_to_precision(self, symbol, amount):
         return f"{float(amount):.5f}"
@@ -54,6 +55,8 @@ class FakeExchange:
         return self._order_status
 
     def fetch_balance(self):
+        if self._balance_raises is not None:
+            raise self._balance_raises
         return {"USDT": {"free": self._usdt_free},
                 self._base: {"free": self._base_free}}
 
@@ -87,6 +90,25 @@ class TestBaseline:
         a = _adapter(usdt_free=999.0, base_free=0.5)
         assert a.get_balance() == 999.0
         assert a.get_position("BTC/USDT") == 0.5
+
+
+# ---- CODE-007: 交易所不可达时构造抛清晰领域异常（不带坏基线续跑）----
+
+class TestUnavailableExchange:
+    def test_init_raises_exchange_unavailable_on_connect_failure(self):
+        """交易所基线快照失败 → ExchangeUnavailable（而非原始 ccxt traceback）。"""
+        with pytest.raises(ExchangeUnavailable) as exc:
+            _adapter(balance_raises=ConnectionError("network down"))
+        # 异常消息含 symbol 和原因，便于诊断
+        assert "BTC/USDT" in str(exc.value)
+        assert "network down" in str(exc.value)
+
+    def test_exchange_unavailable_chains_original_cause(self):
+        """保留原始异常 __cause__，不丢失底层栈信息。"""
+        orig = ConnectionError("boom")
+        with pytest.raises(ExchangeUnavailable) as exc:
+            _adapter(balance_raises=orig)
+        assert exc.value.__cause__ is orig
 
 
 # ---- 下单归一化 ----
