@@ -23,14 +23,7 @@ from src.execution.multi_runner import MultiStrategyRunner, StrategyConfig
 from src.execution.paper_report import PaperTradingReportGenerator
 from src.execution.risk_manager import RiskManager
 from src.monitor import MetricsCollector
-from src.strategy.grid_trading import GridTradingStrategy
-from src.strategy.rsi_momentum import RSIMomentumStrategy
-from src.strategy.simple_ma import SimpleMAStrategy
-from src.strategy.donchian_channel import DonchianChannelStrategy
-from src.strategy.market_structure import MarketStructureStrategy
-from src.strategy.super_trend import SuperTrendStrategy
-from src.strategy.key_level_reversal import KeyLevelReversalStrategy
-from src.strategy.buy_and_hold import BuyAndHoldStrategy
+from src.strategy.registry import get_strategy
 from src.utils.logger import logger
 from src.utils.cache import cache, CacheKeys
 
@@ -74,7 +67,7 @@ def _build_state() -> dict:
     lower, upper = lo + span * 0.1, hi - span * 0.1
 
     # --- 单策略（Grid BTC/USDT）：兼容现有前端映射 ---
-    strategy = GridTradingStrategy(
+    strategy = get_strategy("grid")(
         lower_price=lower, upper_price=upper, grid_count=10,
         initial_capital=INITIAL_CAPITAL,
     )
@@ -151,7 +144,7 @@ def _build_multi_results(
     configs = [
         StrategyConfig(
             strategy_id="grid-btc-usdt",
-            strategy=GridTradingStrategy(
+            strategy=get_strategy("grid")(
                 lower_price=lower, upper_price=upper, grid_count=10,
                 initial_capital=INITIAL_CAPITAL,
             ),
@@ -160,43 +153,43 @@ def _build_multi_results(
         ),
         StrategyConfig(
             strategy_id="rsi-btc-usdt",
-            strategy=RSIMomentumStrategy(),
+            strategy=get_strategy("rsi")(),
             symbol=SYMBOL,
             description="RSI 动量策略：趋势回调买入/超买卖出",
         ),
         StrategyConfig(
             strategy_id="sma-btc-usdt",
-            strategy=SimpleMAStrategy(),
+            strategy=get_strategy("ma")(),
             symbol=SYMBOL,
             description="均线策略：金叉买入/死叉卖出",
         ),
         StrategyConfig(
             strategy_id="donchian-btc-usdt",
-            strategy=DonchianChannelStrategy(period=20),
+            strategy=get_strategy("donchian")(period=20),
             symbol=SYMBOL,
             description="唐奇安通道：N周期高低点突破",
         ),
         StrategyConfig(
             strategy_id="structure-btc-usdt",
-            strategy=MarketStructureStrategy(lookback=10),
+            strategy=get_strategy("structure")(lookback=10),
             symbol=SYMBOL,
             description="市场结构：波动结构突破",
         ),
         StrategyConfig(
             strategy_id="supertrend-btc-usdt",
-            strategy=SuperTrendStrategy(period=10, multiplier=3.0),
+            strategy=get_strategy("supertrend")(period=10, multiplier=3.0),
             symbol=SYMBOL,
             description="SuperTrend：ATR自适应跟踪止损",
         ),
         StrategyConfig(
             strategy_id="reversal-btc-usdt",
-            strategy=KeyLevelReversalStrategy(lookback=50),
+            strategy=get_strategy("reversal")(lookback=50),
             symbol=SYMBOL,
             description="关键位反转：支撑阻力+pin bar确认",
         ),
         StrategyConfig(
             strategy_id="buyhold-btc-usdt",
-            strategy=BuyAndHoldStrategy(),
+            strategy=get_strategy("buyhold")(),
             symbol=SYMBOL,
             description="买入持有：基准策略",
         ),
