@@ -35,6 +35,12 @@ function StrategiesContent() {
 
   const { data: instances } = useSWR("multi-details", () => api.getMultiDetails())
 
+  // 持久化策略参数配置
+  const { data: configs } = useSWR("strategy-configs", () => api.getStrategyConfigs(), {
+    revalidateOnFocus: false,
+    dedupingInterval: 30_000,
+  })
+
   // 参数配置对话框状态
   const [configTarget, setConfigTarget] = useState<{
     entry: StrategyRegistryEntry
@@ -169,6 +175,29 @@ function StrategiesContent() {
             />
           ))}
         </div>
+      )}
+
+      {/* 持久化参数配置一览 */}
+      {configs && Object.keys(configs).length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">已保存的策略参数</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+            {Object.entries(configs).map(([key, params]) => (
+              <div key={key} className="rounded-md border border-border/60 bg-muted/20 p-3">
+                <p className="text-xs font-medium text-foreground mb-1.5">{key}</p>
+                <div className="space-y-0.5">
+                  {Object.entries(params).map(([k, v]) => (
+                    <p key={k} className="text-[11px] text-muted-foreground">
+                      {k}: <span className="font-mono text-foreground/80">{String(v)}</span>
+                    </p>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       )}
 
       {/* 运行历史 */}

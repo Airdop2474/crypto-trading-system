@@ -5,6 +5,7 @@ import { AuditLogs } from "@/components/agent/audit-logs"
 import { AdoptionCard } from "@/components/agent/adoption-card"
 import { EvolutionPanel } from "@/components/agent/evolution-panel"
 import { EvolutionHistory } from "@/components/agent/evolution-history"
+import { EvolutionStatsCard } from "@/components/agent/evolution-stats"
 
 export default function AgentPage() {
   return (
@@ -15,6 +16,10 @@ export default function AgentPage() {
 
       <ErrorBoundary>
         <AnalyzeTrigger />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <EvolutionStatsCard />
       </ErrorBoundary>
 
       <ErrorBoundary>

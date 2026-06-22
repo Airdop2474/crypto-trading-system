@@ -7,8 +7,8 @@ import { PaCard } from "@/components/price-action/pa-card"
 import { ApiError } from "@/components/api-error"
 import { ErrorBoundary } from "@/components/error-boundary"
 
-// 价格行为相关策略类型（Donchian / Structure / SuperTrend / Reversal）
-const PA_TYPES = ["donchian", "structure", "supertrend", "reversal"] as const
+// 价格行为相关策略类型
+const PA_TYPES = ["donchian", "structure", "supertrend", "reversal", "priceaction"] as const
 
 export default function PriceActionPage() {
   const { strategies, isLoading, error, setStatus, mutate } = useStrategies()
@@ -41,7 +41,7 @@ export default function PriceActionPage() {
       ) : list.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
           <p className="text-lg font-medium">暂无活跃的价格行为策略</p>
-          <p className="text-sm mt-1">启动 Donchian、Structure、SuperTrend 或 Reversal 策略后将在此显示</p>
+          <p className="text-sm mt-1">启动 Donchian、Structure、SuperTrend、Reversal 或 Price Action 策略后将在此显示</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

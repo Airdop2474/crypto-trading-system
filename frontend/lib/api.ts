@@ -263,6 +263,19 @@ export const api = {
   // --------------------------------------------------------------------------
   // 管理 / 急停
   // --------------------------------------------------------------------------
+  // POST /admin/start-trading
+  startTrading: async (): Promise<{ ok: boolean; message: string }> => {
+    const res = await fetch(`${API_BASE}/admin/start-trading`, {
+      method: "POST",
+      headers: { "X-API-Token": API_TOKEN },
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `启动交易引擎失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
   // POST /admin/emergency-stop
   emergencyStop: async (): Promise<{
     ok: boolean
@@ -396,6 +409,19 @@ export const api = {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       throw new Error(body.detail || `清除缓存失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // POST /admin/refresh-state
+  refreshState: async (): Promise<{ status: string; message: string }> => {
+    const res = await fetch(`${API_BASE}/admin/refresh-state`, {
+      method: "POST",
+      headers: { "X-API-Token": API_TOKEN },
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `刷新状态失败: ${res.status}`)
     }
     return res.json()
   },
