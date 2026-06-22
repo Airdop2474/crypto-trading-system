@@ -1,7 +1,10 @@
 """
 LLM 抽象层
 
-优先级：OpenAI → Anthropic → 本地规则回退。
+支持 OpenAI Chat Completions 协议和 Anthropic Messages 协议，
+可通过 LLM_BASE_URL 对接任意兼容提供商（DeepSeek / 智谱 / Ollama / vLLM 等）。
+
+优先级：LLM_API_KEY → OPENAI_API_KEY → ANTHROPIC_API_KEY → 本地规则回退。
 无 API key 时功能完整可用，仅解读质量略低。
 """
 
@@ -63,15 +66,43 @@ class LLMClient:
             )
 
     # ------------------------------------------------------------------
-    # Provider 检测
+    # Provider 检测 + 配置读取
     # ------------------------------------------------------------------
 
     def _detect_provider(self) -> str:
+        """检测 LLM 提供商，优先级：LLM_API_KEY → OPENAI → ANTHROPIC → local。"""
+        if _cfg.LLM_API_KEY:
+            # 统一配置：用 LLM_PROVIDER 决定协议（默认 openai）
+            provider = (_cfg.LLM_PROVIDER or "openai").lower().strip()
+            if provider in ("openai", "anthropic", "local"):
+                return provider
+            logger.warning(f"LLM_PROVIDER='{_cfg.LLM_PROVIDER}' 无法识别，默认 openai")
+            return "openai"
         if _cfg.OPENAI_API_KEY:
             return "openai"
         if _cfg.ANTHROPIC_API_KEY:
             return "anthropic"
         return "local"
+
+    def _get_api_key(self) -> str:
+        """获取当前 provider 对应的 API Key。"""
+        if _cfg.LLM_API_KEY:
+            return _cfg.LLM_API_KEY
+        if self.provider == "openai":
+            return _cfg.OPENAI_API_KEY
+        if self.provider == "anthropic":
+            return _cfg.ANTHROPIC_API_KEY
+        return ""
+
+    def _get_model(self) -> str:
+        """获取当前 provider 使用的模型名称。"""
+        if _cfg.LLM_MODEL:
+            return _cfg.LLM_MODEL
+        if self.provider == "openai":
+            return _cfg.OPENAI_MODEL or "gpt-4o-mini"
+        if self.provider == "anthropic":
+            return _cfg.ANTHROPIC_MODEL or "claude-sonnet-4-20250514"
+        return ""
 
     # ------------------------------------------------------------------
     # OpenAI
@@ -87,12 +118,15 @@ class LLMClient:
         prompt = self._build_prompt(*args)
 
         try:
-            client = openai.OpenAI(
-                api_key=_cfg.OPENAI_API_KEY,
-                timeout=_TIMEOUT_SECONDS,
-            )
+            kwargs: Dict[str, Any] = {
+                "api_key": self._get_api_key(),
+                "timeout": _TIMEOUT_SECONDS,
+            }
+            if _cfg.LLM_BASE_URL:
+                kwargs["base_url"] = _cfg.LLM_BASE_URL
+            client = openai.OpenAI(**kwargs)
             resp = client.chat.completions.create(
-                model=_cfg.OPENAI_MODEL,
+                model=self._get_model(),
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
@@ -120,12 +154,15 @@ class LLMClient:
         prompt = self._build_prompt(*args)
 
         try:
-            client = anthropic.Anthropic(
-                api_key=_cfg.ANTHROPIC_API_KEY,
-                timeout=_TIMEOUT_SECONDS,
-            )
+            kwargs: Dict[str, Any] = {
+                "api_key": self._get_api_key(),
+                "timeout": _TIMEOUT_SECONDS,
+            }
+            if _cfg.LLM_BASE_URL:
+                kwargs["base_url"] = _cfg.LLM_BASE_URL
+            client = anthropic.Anthropic(**kwargs)
             resp = client.messages.create(
-                model=_cfg.ANTHROPIC_MODEL,
+                model=self._get_model(),
                 max_tokens=800,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],

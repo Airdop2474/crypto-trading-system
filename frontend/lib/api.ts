@@ -19,6 +19,8 @@ import type {
   AssetBalance,
   ClosedTradeHistory,
   CreateGridParams,
+  CreateStrategyParams,
+  DataCleanupResult,
   DrawdownPoint,
   EvolutionResult,
   EvolutionHistoryResponse,
@@ -36,6 +38,8 @@ import type {
   Strategy,
   StrategyCorrelation,
   StrategyPerformance,
+  StrategyRegistryResponse,
+  StrategyRunHistoryResponse,
   Ticker,
   WinRateTrendPoint,
   ModeState,
@@ -305,6 +309,74 @@ export const api = {
   // GET /agent/evolution-stats
   getEvolutionStats: (): Promise<EvolutionStats> =>
     get("/agent/evolution-stats"),
+
+  // --------------------------------------------------------------------------
+  // 策略注册表 / 通用创建 / 参数更新 / 运行历史
+  // --------------------------------------------------------------------------
+  // GET /strategies/registry
+  getStrategyRegistry: (): Promise<StrategyRegistryResponse> =>
+    get("/strategies/registry"),
+
+  // POST /strategies/create
+  createStrategy: async (params: CreateStrategyParams): Promise<Strategy> => {
+    const res = await fetch(`${API_BASE}/strategies/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `创建策略失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // PATCH /strategies/{id}/params
+  updateStrategyParams: async (
+    id: string,
+    params: Record<string, number | boolean>,
+  ): Promise<{ strategy_id: string; updated: Record<string, number | boolean> }> => {
+    const res = await fetch(`${API_BASE}/strategies/${id}/params`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify({ params }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `更新参数失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // GET /strategies/history?strategy_id=&limit=&offset=
+  getStrategyHistory: (
+    strategyId?: string,
+    limit: number = 50,
+    offset: number = 0,
+  ): Promise<StrategyRunHistoryResponse> =>
+    get(
+      `/strategies/history?limit=${limit}&offset=${offset}${strategyId ? `&strategy_id=${strategyId}` : ""}`,
+    ),
+
+  // --------------------------------------------------------------------------
+  // 数据清理
+  // --------------------------------------------------------------------------
+  // POST /admin/data/cleanup
+  cleanupData: async (
+    scope: "all" | "runs" | "evolutions" = "all",
+    keepLatest: boolean = false,
+  ): Promise<DataCleanupResult> => {
+    const res = await fetch(`${API_BASE}/admin/data/cleanup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify({ scope, keepLatest }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `清理数据失败: ${res.status}`)
+    }
+    return res.json()
+  },
 }
 
 // SWR fetcher：以函数 key 直接调用对应的服务方法

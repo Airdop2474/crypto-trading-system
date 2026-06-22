@@ -6,10 +6,12 @@ import { toast } from "sonner"
 import {
   Activity,
   Database,
+  HardDrive,
   OctagonAlert,
   RadioTower,
   RefreshCw,
   Server,
+  Trash2,
   Users,
   Zap,
 } from "lucide-react"
@@ -28,6 +30,13 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 
 const REFRESH_INTERVAL = 5_000  // 5s 自动刷新
@@ -44,6 +53,10 @@ export default function SystemPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [stopDialogOpen, setStopDialogOpen] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false)
+  const [cleaning, setCleaning] = useState(false)
+  const [cleanupScope, setCleanupScope] = useState<"all" | "runs" | "evolutions">("all")
+  const [keepLatest, setKeepLatest] = useState(true)
   useEffect(() => {
     if (data) setUpdatedAt(new Date())
   }, [data])
@@ -90,6 +103,27 @@ export default function SystemPage() {
       toast.error("急停失败", { id: toastId, description: msg })
     } finally {
       setStopping(false)
+    }
+  }
+
+  // 清理历史数据
+  const handleCleanup = async () => {
+    setCleaning(true)
+    const toastId = toast.loading("正在清理历史数据…")
+    try {
+      const result = await api.cleanupData(cleanupScope, keepLatest)
+      const parts: string[] = []
+      if (result.runs_deleted > 0) parts.push(`运行记录 ${result.runs_deleted} 条`)
+      if (result.evolutions_deleted > 0) parts.push(`进化记录 ${result.evolutions_deleted} 条`)
+      if (result.audit_deleted > 0) parts.push(`审计日志 ${result.audit_deleted} 条`)
+      const summary = parts.length > 0 ? `已删除：${parts.join("、")}` : "没有需要清理的数据"
+      toast.success("数据清理完成", { id: toastId, description: summary })
+      setCleanupDialogOpen(false)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "未知错误"
+      toast.error("清理失败", { id: toastId, description: msg })
+    } finally {
+      setCleaning(false)
     }
   }
 
@@ -287,6 +321,30 @@ export default function SystemPage() {
         </>
       )}
 
+      {/* 数据管理 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm font-medium">
+            <HardDrive className="size-4 text-primary" />
+            数据管理
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            清理历史运行记录、进化记录和审计日志，释放存储空间。此操作不可逆，请谨慎使用。
+          </p>
+          <Button
+            variant="destructive"
+            size="sm"
+            className="h-7 gap-1.5 text-xs"
+            onClick={() => setCleanupDialogOpen(true)}
+          >
+            <Trash2 className="size-3" />
+            清理历史数据
+          </Button>
+        </CardContent>
+      </Card>
+
       {/* 急停确认对话框 */}
       <Dialog open={stopDialogOpen} onOpenChange={setStopDialogOpen}>
         <DialogContent>
@@ -306,6 +364,61 @@ export default function SystemPage() {
             </Button>
             <Button variant="destructive" onClick={handleEmergencyStop} disabled={stopping}>
               {stopping ? "急停中…" : "确认急停"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 数据清理确认对话框 */}
+      <Dialog open={cleanupDialogOpen} onOpenChange={setCleanupDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="size-5" />
+              确认清理历史数据
+            </DialogTitle>
+            <DialogDescription>
+              此操作将永久删除指定的历史数据，无法恢复。请确认清理范围后继续。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground">清理范围</label>
+              <Select
+                value={cleanupScope}
+                onValueChange={(v) => v && setCleanupScope(v as "all" | "runs" | "evolutions")}
+                disabled={cleaning}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部数据</SelectItem>
+                  <SelectItem value="runs">仅运行记录</SelectItem>
+                  <SelectItem value="evolutions">仅进化记录</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={keepLatest}
+                onChange={(e) => setKeepLatest(e.target.checked)}
+                disabled={cleaning}
+                className="size-4 rounded border-border accent-primary"
+              />
+              保留最近 7 天数据
+            </label>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCleanupDialogOpen(false)} disabled={cleaning}>
+              取消
+            </Button>
+            <Button variant="destructive" onClick={handleCleanup} disabled={cleaning}>
+              {cleaning ? "清理中…" : "确认清理"}
             </Button>
           </DialogFooter>
         </DialogContent>

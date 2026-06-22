@@ -16,7 +16,16 @@ interface Props {
 }
 
 export function GridCard({ strategy, onSetStatus }: Props) {
-  const g = strategy.grid!
+  const g = strategy.grid
+  if (!g) {
+    return (
+      <Card>
+        <CardContent className="flex items-center justify-center p-8 text-sm text-muted-foreground">
+          网格参数缺失
+        </CardContent>
+      </Card>
+    )
+  }
   const fillPct = (g.filledGrids / g.gridCount) * 100
 
   return (

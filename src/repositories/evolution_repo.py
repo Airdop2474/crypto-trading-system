@@ -4,7 +4,7 @@
 
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from src.models.strategy_evolution import StrategyEvolution
@@ -116,3 +116,13 @@ class EvolutionRepository:
             "walk_forward_windows": row.walk_forward_windows,
             "audit_log_id": row.audit_log_id,
         }
+
+    @staticmethod
+    def delete_all(session: Session) -> int:
+        """删除所有进化记录。返回删除的行数。"""
+        stmt = delete(StrategyEvolution)
+        result = session.execute(stmt)
+        session.flush()
+        count = result.rowcount
+        logger.info(f"All strategy_evolutions deleted: {count} rows")
+        return count

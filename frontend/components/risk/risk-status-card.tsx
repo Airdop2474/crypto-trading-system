@@ -75,7 +75,7 @@ export function RiskStatusCard() {
   const dailyUsedPct = data.daily_loss_used_pct
   const dailyLimitPct = data.daily_loss_limit_pct
   const dailyUsageRatio = dailyLimitPct > 0
-    ? Math.min(100, (Math.abs(dailyUsedPct) / dailyLimitPct) * 100)
+    ? Math.min(100, (Math.max(0, dailyUsedPct) / dailyLimitPct) * 100)
     : 0
 
   // 总回撤已用比例

@@ -142,3 +142,51 @@ class TestMisc:
         assert status is not None
         assert status["order_id"] == r.order_id
         assert b.get_order_status("NONEXISTENT") is None
+
+
+class TestOrderTTL:
+    """P1-6: 限价单 TTL 过期自动取消"""
+
+    def test_expired_buy_order_unfreezes_funds(self):
+        """BUY 限价单超时后解冻冻结资金"""
+        b = make_broker(balance=100000.0)
+        initial_balance = b.balance
+
+        # 下限价单：买入 0.1 BTC @ 40000（当前价 50000，不会立即成交）
+        order = Order("BTC/USDT", "buy", amount=0.1, price=50000,
+                      order_type="limit", limit_price=40000)
+        r = b.place_order(order, timestamp="2026-06-01 00:00:00")
+        assert r.status == "pending"
+
+        # 资金应被冻结
+        reserved = 0.1 * 40000 * 1.001  # amount * limit_price * (1+commission)
+        assert abs(b.balance - (initial_balance - reserved)) < 0.01
+
+        # 25 小时后检查（超过默认 24h TTL）
+        results = b.check_pending_orders(
+            bar_high=50000, bar_low=49000,
+            timestamp="2026-06-02 01:00:00",
+            max_pending_bars=6,
+        )
+        # 不应成交
+        assert len(results) == 0
+        # 挂单应被清空
+        assert len(b.pending_orders) == 0
+        # 资金应解冻回来
+        assert abs(b.balance - initial_balance) < 0.01
+
+    def test_non_expired_order_stays_pending(self):
+        """未超时的限价单保持挂单状态"""
+        b = make_broker(balance=100000.0)
+        order = Order("BTC/USDT", "buy", amount=0.1, price=50000,
+                      order_type="limit", limit_price=40000)
+        b.place_order(order, timestamp="2026-06-01 00:00:00")
+
+        # 仅过了 2 小时（远小于 24h TTL）
+        results = b.check_pending_orders(
+            bar_high=50000, bar_low=49000,
+            timestamp="2026-06-01 02:00:00",
+            max_pending_bars=6,
+        )
+        assert len(results) == 0
+        assert len(b.pending_orders) == 1  # 仍然挂单

@@ -143,3 +143,44 @@ def test_live_new_bar_after_seed_is_processed(tmp_path):
     d._history = pd.concat([seed, pd.DataFrame([new_row])], ignore_index=True)
     d._consume_new_bars()
     assert d.last_bar_ts == str(new_ts)  # 推进到新 bar
+
+
+# ---- bar 校验测试 ----
+
+class TestBarValidation:
+    """_validate_bar 静态方法测试"""
+
+    _validate = staticmethod(PaperTradingDaemon._validate_bar)
+
+    def _bar(self, **kw):
+        base = {"open": 100, "high": 110, "low": 90, "close": 105, "volume": 1000}
+        base.update(kw)
+        return base
+
+    def test_valid_bar(self):
+        assert self._validate(self._bar()) is True
+
+    def test_missing_field(self):
+        bar = {"open": 100, "high": 110}  # missing low, close
+        assert self._validate(bar) is False
+
+    def test_price_zero(self):
+        assert self._validate(self._bar(close=0)) is False
+
+    def test_price_negative(self):
+        assert self._validate(self._bar(low=-5)) is False
+
+    def test_high_below_low(self):
+        assert self._validate(self._bar(high=80, low=90)) is False
+
+    def test_open_outside_range(self):
+        assert self._validate(self._bar(open=120)) is False  # open > high
+
+    def test_close_outside_range(self):
+        assert self._validate(self._bar(close=85)) is False  # close < low
+
+    def test_negative_volume(self):
+        assert self._validate(self._bar(volume=-1)) is False
+
+    def test_zero_volume_ok(self):
+        assert self._validate(self._bar(volume=0)) is True

@@ -99,6 +99,7 @@ class RiskManager:
         # 账户级最大回撤跟踪（reset 不清零）
         self.cumulative_pnl = 0.0          # 累计已实现盈亏
         self.peak_equity = self.capital_base  # 权益峰值（近似）
+        self._last_pause_reason: Optional[str] = None  # 最近一次 PAUSE 原因
 
     def _init_debounce(self) -> None:
         """初始化防抖计数器（仅 __init__ 调用，reset 不清零）。"""
@@ -137,7 +138,38 @@ class RiskManager:
         if self.state == STOPPED:
             return
         self.state = PAUSED
+        self._last_pause_reason = reason
         self._log_event("PAUSE", reason)
+
+    # ---- 日切恢复（守护进程每根 bar 调用）----
+
+    def check_new_day(self, bar_timestamp) -> None:
+        """检测日切，重置日内限额并在条件满足时自动恢复。
+
+        仅对 daily loss 触发的 PAUSE 自动恢复；consecutive losses /
+        drawdown / API failures 触发的 PAUSE 及 STOPPED 不自动恢复，
+        需人工 resume() 或 reset()。
+
+        参数：
+            bar_timestamp: 当前 K 线时间戳（由守护进程传入）
+        """
+        with self._lock:
+            bar_day = pd.Timestamp(bar_timestamp).date()
+            if self.current_day is not None and bar_day <= self.current_day:
+                return  # 同一天或未初始化
+
+            self.current_day = bar_day
+            self.daily_pnl = 0.0
+
+            if self.state != PAUSED:
+                return
+            # 仅 daily loss 触发的 PAUSE 可日切恢复
+            reason = self._last_pause_reason or ""
+            if "daily loss" in reason and "drawdown" not in reason:
+                self.state = ACTIVE
+                self._last_pause_reason = None
+                self._log_event("DAY_CHANGE_RESUME",
+                                f"new day {bar_day}, daily_pnl reset")
 
     # ---- 仓位检查（账户级，与 Broker 的每单检查互补）----
 

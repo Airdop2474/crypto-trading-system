@@ -7,7 +7,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from src.models.audit_log import AuditLogEntry
@@ -103,3 +103,13 @@ class AuditRepository:
             "adoption_rate": approved / total if total > 0 else 0.0,
             "task": task or "all",
         }
+
+    @staticmethod
+    def delete_all(session: Session) -> int:
+        """删除所有审计日志。返回删除的行数。"""
+        stmt = delete(AuditLogEntry)
+        result = session.execute(stmt)
+        session.flush()
+        count = result.rowcount
+        logger.info(f"All audit_log entries deleted: {count} rows")
+        return count

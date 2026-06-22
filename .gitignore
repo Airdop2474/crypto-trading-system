@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -143,12 +143,21 @@ start.err
 logs/
 data/paper_daemon_state.json
 data/paper_daemon_state.json.*
+data/.emergency_stop
 data/reports/paper/daily/
 data/_archive_*/
+
+# 测试运行产物
+data/reports/test/
+data/reports/test_verify/
+data/test_verify.json
 
 # 误创建/临时产物
 nul
 tmp_diff_*.txt
+
+# 工作助手记忆文件
+.workbuddy/memory/
 
 # 前端构建产物
 frontend/tsconfig.tsbuildinfo

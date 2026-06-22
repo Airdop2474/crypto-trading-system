@@ -340,3 +340,27 @@ def test_admin_refresh_state(client):
     # 再次请求会重建（测试不报错即说明 reset + rebuild 链路正常）
     r2 = client.get("/account/summary", headers=_TOKEN_HEADER)
     assert r2.status_code == 200
+
+
+def test_emergency_stop_requires_auth(client):
+    """R-急停：POST /admin/emergency-stop 需认证"""
+    resp = client.post("/admin/emergency-stop")
+    assert resp.status_code in (403, 401)
+
+
+def test_emergency_stop(client):
+    """R-急停：POST /admin/emergency-stop 触发 STOPPED + 写信号文件"""
+    # 确保 state 已构建
+    client.get("/account/summary", headers=_TOKEN_HEADER)
+    r = client.post("/admin/emergency-stop", headers=_TOKEN_HEADER)
+    assert r.status_code == 200
+    d = r.json()
+    assert d["ok"] is True
+    assert d["current_state"] == "STOPPED"
+    assert "previous_state" in d
+    # 信号文件应被创建
+    from pathlib import Path
+    signal_file = Path("data/.emergency_stop")
+    assert signal_file.exists(), "急停信号文件未被创建"
+    # 清理信号文件
+    signal_file.unlink(missing_ok=True)

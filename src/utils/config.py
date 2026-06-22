@@ -75,6 +75,8 @@ class Config:
         self.MAX_POSITION_SIZE = float(os.getenv("MAX_POSITION_SIZE", "0.20"))  # 20%
         self.MAX_TOTAL_POSITION = float(os.getenv("MAX_TOTAL_POSITION", "0.60"))  # 60%
         self.MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "5"))
+        self.MAX_TOTAL_DRAWDOWN = float(os.getenv("MAX_TOTAL_DRAWDOWN", "0.15"))  # 15%
+        self.MAX_API_FAILURES = int(os.getenv("MAX_API_FAILURES", "3"))
 
         # ============================================
         # Phase 1 配置
@@ -107,10 +109,17 @@ class Config:
         # ============================================
         # LLM / AI 配置（策略进化用）
         # ============================================
+        # --- 旧变量（向后兼容）---
         self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
         self.OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         self.ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
         self.ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+
+        # --- 统一 LLM 配置（优先级高于上方旧变量）---
+        self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "")       # openai / anthropic / local（空=自动推断）
+        self.LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+        self.LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")       # 空=使用协议默认 URL
+        self.LLM_MODEL = os.getenv("LLM_MODEL", "")             # 空=根据 provider 选默认
 
     def validate(self, strict: bool = False) -> tuple[bool, list[str]]:
         """

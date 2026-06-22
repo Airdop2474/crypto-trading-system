@@ -124,6 +124,8 @@ class PaperTradingDaemon:
             max_daily_loss=_cfg.MAX_DAILY_LOSS,
             max_consecutive_losses=_cfg.MAX_CONSECUTIVE_LOSSES,
             max_total_position=_cfg.MAX_TOTAL_POSITION,
+            max_total_drawdown=_cfg.MAX_TOTAL_DRAWDOWN,
+            max_api_failures=_cfg.MAX_API_FAILURES,
         )
         if self.args.broker == "exchange":
             self.broker, exec_config = self._build_exchange_broker()
@@ -230,9 +232,12 @@ class PaperTradingDaemon:
             },
             "strategy": {
                 "grid_filled": self.strategy.grid_filled,
-                "paused": self.strategy.paused,
-                "consecutive_losses": self.strategy.consecutive_losses,
-                "daily_pnl": self.strategy.daily_pnl,
+                "paused": self.strategy._paused,
+                "paused_reason": getattr(self.strategy, '_paused_reason', None),
+                "consecutive_losses": self.strategy._consecutive_losses,
+                "daily_pnl": self.strategy._daily_pnl,
+                "auto_resume_count": getattr(self.strategy, '_auto_resume_count', 0),
+                "current_day": self.strategy._current_day.isoformat() if getattr(self.strategy, '_current_day', None) else None,
             },
             "risk": {
                 "state": self.risk.state,
@@ -241,8 +246,10 @@ class PaperTradingDaemon:
                 "api_failures": self.risk.api_failures,
                 "cumulative_pnl": self.risk.cumulative_pnl,
                 "peak_equity": self.risk.peak_equity,
+                "current_day": self.risk.current_day.isoformat() if self.risk.current_day else None,
                 "reconcile_failures": self._reconcile_failures,
                 "prev_close": self._prev_close,
+                "last_pause_reason": getattr(self.risk, '_last_pause_reason', None),
             },
             "pending": _ser_pending(self.pending),
         }
@@ -289,9 +296,12 @@ class PaperTradingDaemon:
 
         s = st["strategy"]
         self.strategy.grid_filled = s["grid_filled"]
-        self.strategy.paused = s["paused"]
-        self.strategy.consecutive_losses = s["consecutive_losses"]
-        self.strategy.daily_pnl = s["daily_pnl"]
+        self.strategy._paused = s["paused"]
+        self.strategy._paused_reason = s.get("paused_reason")
+        self.strategy._consecutive_losses = s["consecutive_losses"]
+        self.strategy._daily_pnl = s["daily_pnl"]
+        self.strategy._auto_resume_count = s.get("auto_resume_count", 0)
+        self.strategy._current_day = date.fromisoformat(s["current_day"]) if s.get("current_day") else None
 
         rk = st["risk"]
         self.risk.state = rk["state"]
@@ -300,8 +310,10 @@ class PaperTradingDaemon:
         self.risk.api_failures = rk["api_failures"]
         self.risk.cumulative_pnl = rk.get("cumulative_pnl", 0.0)
         self.risk.peak_equity = rk.get("peak_equity", self.risk.capital_base)
+        self.risk.current_day = date.fromisoformat(rk["current_day"]) if rk.get("current_day") else None
         self._reconcile_failures = rk.get("reconcile_failures", 0)
         self._prev_close = rk.get("prev_close")
+        self.risk._last_pause_reason = rk.get("last_pause_reason")
 
         self.pending = _deser_pending(st["pending"])
         logger.info(f"恢复检查点：day_count={self.day_count}, "
@@ -309,11 +321,14 @@ class PaperTradingDaemon:
 
     # ---- 人工恢复 ----
     def _check_resume(self):
-        if self.resume_flag.exists() and (self.risk.is_paused() or self.strategy.paused):
+        if self.resume_flag.exists() and (self.risk.is_paused() or self.strategy._paused):
             self.risk.resume()
-            # 策略级熔断也一并人工解除（grid 有独立 paused 标志）
-            self.strategy.paused = False
-            self.strategy.consecutive_losses = 0
+            # 策略级熔断也一并人工解除（grid 有独立 _paused 标志）
+            self.strategy._paused = False
+            self.strategy._paused_reason = None
+            self.strategy._consecutive_losses = 0
+            self.strategy._daily_pnl = 0.0
+            self.strategy._auto_resume_count = 0
             self.resume_flag.unlink(missing_ok=True)
             logger.warning("检测到 resume 标志，风控/策略已人工恢复 -> ACTIVE")
 
@@ -366,7 +381,7 @@ class PaperTradingDaemon:
                       f">= {self.args.max_bar_drop_pct:.2%}")
             logger.error(reason)
             self.risk._trip_pause(reason)
-            self.strategy.paused = True
+            self.strategy._trigger_breaker(reason)
 
     # ---- P1-8: 实时数据轻量校验 ----
     @staticmethod
@@ -396,15 +411,48 @@ class PaperTradingDaemon:
             return False
         return True
 
+    # ---- 急停信号文件（API 端点触发）----
+    _EMERGENCY_STOP_FILE = "data/.emergency_stop"
+
+    def _check_emergency_stop_signal(self) -> bool:
+        """检查 API 端点写入的急停信号文件。存在则删除并返回 True。"""
+        p = Path(self._EMERGENCY_STOP_FILE)
+        if p.exists():
+            try:
+                p.unlink()
+            except OSError:
+                pass
+            return True
+        return False
+
     # ---- 单 bar 处理 ----
     def _on_bar(self, bar):
+        try:
+            self._on_bar_inner(bar)
+        except Exception as e:
+            logger.error(
+                f"_on_bar 未预期异常: {type(e).__name__}: {e}", exc_info=True)
+            # 不触发风控暂停——这是代码 bug，不是市场异常
+            # checkpoint 仍然保存，下一根 bar 继续
+
+    def _on_bar_inner(self, bar):
         # P1-8: 实时数据校验——异常 bar 跳过本根，不进入策略
+        # 不触发 record_data_anomaly()：单根坏 bar 是 Binance 瞬态问题，
+        # 不是系统性数据异常，不应导致永久 PAUSED。
         if not self._validate_bar(bar):
-            self.risk.record_data_anomaly("bar validation failed")
             logger.warning(f"跳过异常 bar: ts={bar.get('timestamp', '?')}")
             return
 
+        # 检查 API 端点发出的急停信号
+        if self._check_emergency_stop_signal():
+            self.risk.emergency_stop("remote emergency-stop via API signal file")
+            logger.warning("收到远程急停信号，RiskManager -> STOPPED")
+            return
+
         self._check_resume()
+
+        # 日切检测：重置 daily_pnl，daily-loss PAUSE 可自动恢复
+        self.risk.check_new_day(bar["timestamp"])
 
         # 闪崩保护：在信号生成前检查
         self._check_flash_crash(bar)

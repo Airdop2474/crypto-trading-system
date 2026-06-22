@@ -13,6 +13,7 @@
 
 import glob
 import threading
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -1175,9 +1176,268 @@ def pnl_distribution(state: dict, bins: int = 10) -> dict:
         "win_rate": (len(wins_arr) / len(profits) * 100) if len(profits) else 0.0,
         "avg_profit": float(wins_arr.mean()) if len(wins_arr) else 0.0,
         "avg_loss": float(losses_arr.mean()) if len(losses_arr) else 0.0,
-        "profit_factor": (total_profit / total_loss) if total_loss > 0 else float("inf") if total_profit > 0 else 0.0,
+        "profit_factor": (total_profit / total_loss) if total_loss > 0 else (999.99 if total_profit > 0 else 0.0),
         "best": float(profits.max()) if len(profits) else 0.0,
         "worst": float(profits.min()) if len(profits) else 0.0,
     }
 
     return {"bins": bin_list, "stats": stats}
+
+
+# --------------------------------------------------------------------------
+# 策略注册表 / 创建 / 参数更新
+# --------------------------------------------------------------------------
+
+_STRATEGY_DESCRIPTIONS = {
+    "grid": "震荡市低买高卖，在价格区间内等分网格挂单",
+    "rsi": "RSI 超卖时买入、超买时卖出，可选 EMA 趋势过滤",
+    "ma": "短期均线上穿长期均线金叉买入，死叉卖出",
+    "buyhold": "买入持有基准策略，不做任何交易操作",
+    "donchian": "N 周期最高点突破买入，最低点突破卖出",
+    "structure": "检测市场结构波动突破信号",
+    "supertrend": "基于 ATR 的自适应趋势跟踪，动态止损",
+    "reversal": "在支撑/阻力位出现 Pin Bar 反转信号时交易",
+}
+
+# 风控参数 — 创建对话框中不展示（由 RiskAwareStrategy 基类统一管理）
+_RISK_PARAM_KEYS = {"max_consecutive_losses", "max_daily_loss", "max_drawdown"}
+
+# Python 类型对象 → JSON 可序列化的字符串名称
+_TYPE_NAMES = {int: "int", float: "float", bool: "bool"}
+
+
+def _serialize_schema(schema: dict) -> dict:
+    """将 PARAM_SCHEMA 中的 Python type 对象转为字符串，使其可 JSON 序列化。"""
+    result = {}
+    for key, constraints in schema.items():
+        c = dict(constraints)
+        if "type" in c:
+            c["type"] = _TYPE_NAMES.get(c["type"], str(c["type"]))
+        result[key] = c
+    return result
+
+
+def get_registry(state: dict) -> list[dict]:
+    """返回 8 个策略的注册信息（名称、PARAM_SCHEMA、默认参数、运行状态）。"""
+    from src.strategy.registry import STRATEGY_REGISTRY, _STRATEGY_LABELS
+
+    multi_runner = state.get("_multi_runner")
+    running_ids = set()
+    if multi_runner:
+        running_ids = {slot.config.strategy_id for slot in multi_runner.slots}
+
+    result = []
+    for key, cls in STRATEGY_REGISTRY.items():
+        schema = getattr(cls, "PARAM_SCHEMA", {})
+        # 过滤掉风控参数（前端创建时不展示），并序列化 type 对象
+        user_schema = _serialize_schema(
+            {k: v for k, v in schema.items() if k not in _RISK_PARAM_KEYS}
+        )
+
+        # 提取默认值：实例化策略（无参 / 最小参数）拿 parameters
+        defaults = {}
+        try:
+            if key == "grid":
+                # Grid 需要 lower/upper_price 才能实例化
+                defaults = {
+                    "grid_count": 10,
+                    "position_per_grid": 0.05,
+                    "enable_filters": True,
+                }
+            elif key == "buyhold":
+                defaults = {}
+            else:
+                instance = cls()
+                defaults = {
+                    k: v for k, v in (instance.parameters or {}).items()
+                    if k not in _RISK_PARAM_KEYS
+                }
+        except Exception:
+            pass
+
+        # 当前有多少个此类型的实例在运行
+        instances = sum(1 for sid in running_ids if sid.startswith(f"{key}-"))
+
+        result.append({
+            "key": key,
+            "name": _STRATEGY_LABELS.get(key, key),
+            "description": _STRATEGY_DESCRIPTIONS.get(key, ""),
+            "param_schema": user_schema,
+            "defaults": defaults,
+            "running": instances > 0,
+            "instances": instances,
+        })
+
+    return result
+
+
+def create_strategy(
+    state: dict,
+    strategy_type: str,
+    symbol: str,
+    investment: float,
+    params: dict,
+) -> dict:
+    """通用策略创建（Paper 模式返回策略元数据，实际引擎已运行）。
+
+    注意：当前 Paper Trading 在 _build_state 中已预跑全部 8 个策略，
+    此方法主要返回元数据供前端展示，不做真正的引擎热加载。
+    """
+    from src.strategy.registry import STRATEGY_REGISTRY, _STRATEGY_LABELS
+
+    if strategy_type not in STRATEGY_REGISTRY:
+        raise ValueError(f"未知策略类型: {strategy_type}")
+
+    cls = STRATEGY_REGISTRY[strategy_type]
+    schema = getattr(cls, "PARAM_SCHEMA", {})
+
+    # 参数校验（跳过风控参数）
+    for key, constraints in schema.items():
+        if key in _RISK_PARAM_KEYS:
+            continue
+        if key in params:
+            val = params[key]
+            ptype = constraints.get("type")
+            if ptype and not isinstance(val, ptype):
+                try:
+                    params[key] = ptype(val)
+                except (ValueError, TypeError):
+                    raise ValueError(f"参数 {key} 类型错误，期望 {ptype.__name__}")
+            if "min" in constraints and val < constraints["min"]:
+                raise ValueError(f"参数 {key} 不能小于 {constraints['min']}")
+            if "max" in constraints and val > constraints["max"]:
+                raise ValueError(f"参数 {key} 不能大于 {constraints['max']}")
+
+    symbol_slug = symbol.lower().replace("/", "-")
+    strategy_id = f"{strategy_type}-{symbol_slug}"
+    label = _STRATEGY_LABELS.get(strategy_type, strategy_type)
+
+    return {
+        "id": strategy_id,
+        "name": f"{label} {symbol}",
+        "type": strategy_type,
+        "symbol": symbol,
+        "status": "running",
+        "pnl": 0.0,
+        "pnlPct": 0.0,
+        "investment": investment,
+        "runningDays": 0,
+        "createdAt": datetime.now().isoformat(),
+        "params": params,
+    }
+
+
+def update_strategy_params(state: dict, strategy_id: str, params: dict) -> dict:
+    """更新运行中策略的参数（热替换）。
+
+    通过 multi_runner 找到对应的 slot，更新策略实例参数。
+    """
+    multi_runner = state.get("_multi_runner")
+    if multi_runner is None:
+        raise RuntimeError("引擎未初始化，无法更新参数")
+
+    for slot in multi_runner.slots:
+        if slot.config.strategy_id == strategy_id:
+            strategy = slot.config.strategy
+            schema = getattr(strategy, "PARAM_SCHEMA", {})
+            updated = {}
+            for key, val in params.items():
+                if key in _RISK_PARAM_KEYS:
+                    continue  # 不允许通过此接口修改风控参数
+                if key in schema:
+                    constraints = schema[key]
+                    ptype = constraints.get("type")
+                    if ptype:
+                        try:
+                            val = ptype(val)
+                        except (ValueError, TypeError):
+                            raise ValueError(f"参数 {key} 类型错误")
+                    if "min" in constraints and val < constraints["min"]:
+                        raise ValueError(f"参数 {key} 不能小于 {constraints['min']}")
+                    if "max" in constraints and val > constraints["max"]:
+                        raise ValueError(f"参数 {key} 不能大于 {constraints['max']}")
+                    setattr(strategy, key, val)
+                    updated[key] = val
+
+            logger.info(f"Strategy {strategy_id} params updated: {updated}")
+            return {"strategy_id": strategy_id, "updated": updated}
+
+    raise ValueError(f"未找到策略: {strategy_id}")
+
+
+# --------------------------------------------------------------------------
+# 数据清理
+# --------------------------------------------------------------------------
+
+def cleanup_data(scope: str = "all", keep_latest: bool = False) -> dict:
+    """清理历史测试数据。
+
+    参数：
+        scope: "all" 清理全部 | "runs" 只清运行记录 | "evolutions" 只清进化记录
+        keep_latest: 保留最新一条运行记录
+    """
+    result = {"runs_deleted": 0, "evolutions_deleted": 0, "audit_deleted": 0}
+
+    try:
+        if not db.is_postgres_available():
+            return {"error": "数据库不可用"}
+    except Exception:
+        return {"error": "数据库连接失败"}
+
+    try:
+        from src.repositories.run_repo import RunRepository
+        from src.repositories.audit_repo import AuditRepository
+        from src.repositories.evolution_repo import EvolutionRepository
+
+        with db.get_session() as session:
+            if scope in ("all", "runs"):
+                if keep_latest:
+                    # 删除 7 天前的数据
+                    cutoff = datetime.now() - timedelta(days=7)
+                    result["runs_deleted"] = RunRepository.delete_runs_before(session, cutoff)
+                else:
+                    result["runs_deleted"] = RunRepository.delete_all_runs(session)
+
+            if scope in ("all", "evolutions"):
+                result["evolutions_deleted"] = EvolutionRepository.delete_all(session)
+
+            if scope == "all":
+                result["audit_deleted"] = AuditRepository.delete_all(session)
+
+            session.commit()
+            logger.info(f"Data cleanup completed: {result}")
+    except Exception as e:
+        logger.error(f"Data cleanup failed: {e}")
+        return {"error": str(e)}
+
+    return result
+
+
+# --------------------------------------------------------------------------
+# 运行历史
+# --------------------------------------------------------------------------
+
+def get_run_history(
+    strategy_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """查询策略运行历史（DB 优先，回退空列表）。"""
+    try:
+        if db.is_postgres_available():
+            from src.repositories.run_repo import RunRepository
+            with db.get_session() as session:
+                items, total = RunRepository.get_history(
+                    session, strategy_id=strategy_id, limit=limit, offset=offset,
+                )
+            return {
+                "items": items,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": (offset + limit) < total,
+            }
+    except Exception as e:
+        logger.debug(f"DB run history failed: {e}")
+
+    return {"items": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}

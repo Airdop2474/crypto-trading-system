@@ -364,3 +364,46 @@ class TestEdgeCases:
 
         slot = mr.get_slot("s")
         assert slot.bars_processed == 5
+
+
+class TestCrashIsolation:
+    def test_one_strategy_crash_doesnt_kill_others(self):
+        """一个策略 process_bar 抛异常不影响其他策略继续运行"""
+
+        class CrashingStrategy(Strategy):
+            """在 on_bar 中始终抛异常"""
+            def __init__(self):
+                super().__init__("crash")
+                self.calls = 0
+
+            def on_bar(self, data, current_time):
+                self.calls += 1
+                raise RuntimeError("intentional crash")
+
+        class CountingStrategy(Strategy):
+            """记录 on_bar 调用次数"""
+            def __init__(self):
+                super().__init__("counter")
+                self.calls = 0
+
+            def on_bar(self, data, current_time):
+                self.calls += 1
+                return None
+
+        data = make_data([100, 110, 120, 130])
+        mr, broker = make_multi_runner()
+        mr.register(StrategyConfig("crasher", CrashingStrategy(), "BTC/USDT"))
+        mr.register(StrategyConfig("counter", CountingStrategy(), "BTC/USDT"))
+
+        # run() 应完整跑完不抛异常
+        results = mr.run({"BTC/USDT": data})
+
+        # crasher 策略被调用 4 次（每根 bar）
+        crasher_strat = mr.get_slot("crasher").config.strategy
+        assert crasher_strat.calls == 4
+        assert results["crasher"]["statistics"]["total_trades"] == 0
+
+        # counter 策略也被调用 4 次——crasher 的异常没有中断整个循环
+        counter_strat = mr.get_slot("counter").config.strategy
+        assert counter_strat.calls == 4
+        assert mr.get_slot("counter").bars_processed == 4

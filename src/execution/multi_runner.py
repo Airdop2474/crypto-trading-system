@@ -199,9 +199,20 @@ class MultiStrategyRunner:
                 historical = df.iloc[max(0, bar_idx - 500): bar_idx + 1]
                 pending = pending_map[slot.config.strategy_id]
 
-                new_pending = slot.runner.process_bar(
-                    bar, historical, slot.config.strategy, pending
-                )
+                try:
+                    new_pending = slot.runner.process_bar(
+                        bar, historical, slot.config.strategy, pending
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Strategy '{slot.config.strategy_id}' crashed in run(): "
+                        f"{type(e).__name__}: {e}",
+                        exc_info=True,
+                    )
+                    new_pending = pending  # 保持旧 pending
+                    slot.bars_processed += 1
+                    continue
+
                 pending_map[slot.config.strategy_id] = new_pending
 
                 if new_pending:

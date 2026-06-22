@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/chart"
 
 const config = {
-  pnl: { label: "盈亏" },
+  pnl: { label: "盈亏", color: "hsl(var(--chart-1))" },
 } satisfies ChartConfig
 
 export function StrategyComparison({

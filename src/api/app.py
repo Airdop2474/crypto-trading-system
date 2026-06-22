@@ -472,6 +472,71 @@ def create_grid_strategy(body: CreateGridRequest, _=Security(verify_api_token)):
 
 
 # --------------------------------------------------------------------------
+# 策略注册表 / 通用创建 / 参数更新 / 运行历史
+# --------------------------------------------------------------------------
+
+@app.get("/strategies/registry")
+def strategy_registry(_=Security(verify_api_token)):
+    """返回 8 个策略的注册信息（名称、PARAM_SCHEMA、默认参数、运行状态）"""
+    state = service.get_state()
+    return {"strategies": service.get_registry(state)}
+
+
+class CreateStrategyRequest(BaseModel):
+    type: str
+    symbol: str = "BTC/USDT"
+    investment: float = Field(default=10000.0, ge=100, le=1_000_000)
+    params: dict = {}
+
+
+@app.post("/strategies/create")
+def create_strategy_generic(body: CreateStrategyRequest, _=Security(verify_api_token)):
+    """通用策略创建（支持全部 8 个策略类型）"""
+    try:
+        state = service.get_state()
+        return service.create_strategy(
+            state,
+            strategy_type=body.type,
+            symbol=body.symbol,
+            investment=body.investment,
+            params=body.params,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class UpdateParamsRequest(BaseModel):
+    params: dict
+
+
+@app.patch("/strategies/{strategy_id}/params")
+def update_strategy_params_endpoint(
+    strategy_id: str, body: UpdateParamsRequest, _=Security(verify_api_token),
+):
+    """更新运行中策略的参数"""
+    try:
+        state = service.get_state()
+        return service.update_strategy_params(state, strategy_id, body.params)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
+@app.get("/strategies/history")
+def strategy_run_history(
+    strategy_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    _=Security(verify_api_token),
+):
+    """策略运行历史（分页，支持 strategy_id 过滤）"""
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+    return service.get_run_history(strategy_id=strategy_id, limit=limit, offset=offset)
+
+
+# --------------------------------------------------------------------------
 # AI Agent 分析端点（只分析，不执行）
 # --------------------------------------------------------------------------
 _audit_log = AuditLog()
@@ -665,12 +730,33 @@ def admin_emergency_stop(request: Request, _=Security(verify_api_token)):
     risk_manager.emergency_stop("remote emergency-stop via API")
     logger.warning(f"远程急停已触发：{prev_state} -> STOPPED")
 
+    # 写信号文件通知 daemon 进程（daemon 每根 bar 检查此文件）
+    from pathlib import Path as _Path
+    signal_file = _Path("data/.emergency_stop")
+    try:
+        signal_file.parent.mkdir(parents=True, exist_ok=True)
+        signal_file.write_text("1", encoding="utf-8")
+    except OSError as e:
+        logger.warning(f"急停信号文件写入失败（daemon 可能不会被通知）：{e}")
+
     return {
         "ok": True,
         "previous_state": prev_state,
         "current_state": "STOPPED",
         "message": "全局急停已触发，所有策略交易已停止。需通过 reset() 恢复。",
     }
+
+
+class CleanupRequest(BaseModel):
+    scope: Literal["all", "runs", "evolutions"] = "all"
+    keepLatest: bool = False
+
+
+@app.post("/admin/data/cleanup")
+@limiter.limit("3/minute")
+def admin_data_cleanup(request: Request, body: CleanupRequest, _=Security(verify_api_token)):
+    """清理历史测试数据（运行记录 / 进化记录 / 审计日志）"""
+    return service.cleanup_data(scope=body.scope, keep_latest=body.keepLatest)
 
 
 # --------------------------------------------------------------------------
