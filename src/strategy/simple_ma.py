@@ -29,8 +29,6 @@ class SimpleMAStrategy(RiskAwareStrategy):
     PARAM_SCHEMA = {
         "short_window": {"type": int, "min": 1},
         "long_window": {"type": int, "min": 1},
-        "max_consecutive_losses": {"type": int, "min": 1},
-        "max_daily_loss": {"type": float, "min": 0, "max": 0.1},
     }
 
     def __init__(
@@ -41,16 +39,6 @@ class SimpleMAStrategy(RiskAwareStrategy):
         max_daily_loss: float = 0.02,
         initial_capital: float = 10000.0,
     ):
-        """
-        初始化策略
-
-        参数：
-            short_window: 短期均线窗口
-            long_window: 长期均线窗口
-            max_consecutive_losses: 连亏熔断阈值
-            max_daily_loss: 当日亏损熔断（占初始资金比例）
-            initial_capital: 初始资金（熔断基准）
-        """
         super().__init__(
             name="SimpleMA",
             max_consecutive_losses=max_consecutive_losses,
@@ -60,41 +48,26 @@ class SimpleMAStrategy(RiskAwareStrategy):
         self.short_window = short_window
         self.long_window = long_window
 
+        self._in_position = False
         self._init_ma_state()
         self.set_parameters(short_window=short_window, long_window=long_window)
 
     def _init_ma_state(self) -> None:
-        """初始化/重置 MA 专属运行状态（熔断状态由 RiskAwareStrategy 管理）"""
-        # MA 增量缓存
         self._short_ma: Optional[float] = None
         self._long_ma: Optional[float] = None
         self._prev_short_ma: Optional[float] = None
         self._prev_long_ma: Optional[float] = None
 
     def on_bar(self, data: pd.DataFrame, current_time: datetime) -> Optional[str]:
-        """
-        处理每根 K 线
-
-        参数：
-            data: 历史数据
-            current_time: 当前时间
-
-        返回：
-            信号
-        """
-        # 需要足够的数据计算均线
         if len(data) < self.long_window:
             return None
 
-        # --- 熔断暂停检查（RiskAwareStrategy 统一管理）---
-        if self._is_paused():
+        if self._is_paused(current_time):
             return None
 
         close = data["close"]
 
-        # 增量 MA 计算（避免每根 bar 全量 rolling O(n²)）
         if self._short_ma is None:
-            # 首次：全量初始化（同时计算当前和前一根 MA，支持单次调用）
             if len(close) < self.long_window:
                 return None
             short_ma_series = close.rolling(window=self.short_window).mean()
@@ -110,7 +83,6 @@ class SimpleMAStrategy(RiskAwareStrategy):
                 self._prev_short_ma = None
                 self._prev_long_ma = None
         else:
-            # 增量更新：new_ma = old_ma + (new_price - dropped_price) / window
             new_price = float(close.iloc[-1])
             if len(close) > self.short_window:
                 old_price_short = float(close.iloc[-self.short_window - 1])
@@ -126,19 +98,17 @@ class SimpleMAStrategy(RiskAwareStrategy):
             self._short_ma += (new_price - old_price_short) / self.short_window
             self._long_ma += (new_price - old_price_long) / self.long_window
 
-        # 需要前一根 MA 值才能判断交叉
         if self._prev_short_ma is None or self._prev_long_ma is None:
             return None
 
-        # 检查金叉（买入信号）
-        if (self._prev_short_ma <= self._prev_long_ma
-                and self._short_ma > self._long_ma):
-            return "BUY"
-
-        # 检查死叉（卖出信号）
-        if (self._prev_short_ma >= self._prev_long_ma
-                and self._short_ma < self._long_ma):
-            return "SELL"
+        if not self._in_position:
+            if self._prev_short_ma <= self._prev_long_ma and self._short_ma > self._long_ma:
+                self._in_position = True
+                return "BUY"
+        else:
+            if self._prev_short_ma >= self._prev_long_ma and self._short_ma < self._long_ma:
+                self._in_position = False
+                return "SELL"
 
         return None
 

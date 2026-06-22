@@ -180,7 +180,7 @@ class PaperTradingRunner:
         return {
             "statistics": self.broker.get_statistics(),
             "realized_pnl": self.realized_pnl,
-            "open_lots": {t: lot["amount"] for t, lot in self.lots.items()},
+            "open_lots": {t: {"amount": lot["amount"], "cost_price": lot["cost_price"]} for t, lot in self.lots.items()},
         }
 
     def _execute_signal(self, signal, exec_price, exec_time, strategy) -> None:
@@ -328,7 +328,7 @@ class PaperTradingRunner:
             "statistics": stats,
             "trade_history": self.broker.get_trade_history(),
             "signals": signals_log,
-            "open_lots": {t: lot["amount"] for t, lot in self.lots.items()},
+            "open_lots": {t: {"amount": lot["amount"], "cost_price": lot["cost_price"]} for t, lot in self.lots.items()},
             "realized_pnl": self.realized_pnl,
             "closed_trades": list(self.closed_trades),
         }

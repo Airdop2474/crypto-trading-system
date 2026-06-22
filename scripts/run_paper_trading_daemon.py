@@ -49,6 +49,7 @@ from src.monitor import MetricsCollector, MetricsWriter
 from src.monitor.alert_manager import AlertManager, CRITICAL, WARNING
 from src.strategy.base import Order as StrategyOrder
 from src.strategy.grid_trading import GridTradingStrategy
+from src.api.strategy_config_store import get_strategy_config
 from src.utils.logger import logger, setup_logger
 
 WARMUP = 30  # 预热 bar 数：定网格区间 + 喂指标，不作为交易 bar
@@ -111,13 +112,33 @@ class PaperTradingDaemon:
     # ---- 组件装配（区间来自预热窗口；与 run_paper_trading 一致）----
     def _build(self, lower, upper):
         from src.utils.config import config as _cfg
+        from src.strategy.registry import get_strategy
         initial = self.args.initial
-        self.strategy = GridTradingStrategy(
-            lower_price=lower, upper_price=upper, grid_count=10,
-            initial_capital=initial,
-            max_consecutive_losses=_cfg.MAX_CONSECUTIVE_LOSSES,
-            max_daily_loss=_cfg.MAX_DAILY_LOSS,
-        )
+        strat_name = self.args.strategy
+
+        # 从持久化配置加载已保存的参数
+        saved = get_strategy_config(strat_name) or {}
+        _log_saved = f" (已加载保存配置: {saved})" if saved else ""
+
+        if strat_name == "grid":
+            self.strategy = GridTradingStrategy(
+                lower_price=lower, upper_price=upper, grid_count=10,
+                initial_capital=initial,
+                max_consecutive_losses=_cfg.MAX_CONSECUTIVE_LOSSES,
+                max_daily_loss=_cfg.MAX_DAILY_LOSS,
+            )
+        else:
+            # 用保存的参数覆写默认值
+            kwargs = dict(initial_capital=initial,
+                          max_consecutive_losses=_cfg.MAX_CONSECUTIVE_LOSSES,
+                          max_daily_loss=_cfg.MAX_DAILY_LOSS)
+            # 只传策略模式中存在的参数
+            schema = getattr(get_strategy(strat_name), "PARAM_SCHEMA", {})
+            for k, v in saved.items():
+                if k in schema:
+                    kwargs[k] = v
+            self.strategy = get_strategy(strat_name)(**kwargs)
+        logger.info(f"策略 [{strat_name}] 已构建{_log_saved}")
         # P0-2: 风控参数从 .env / config.py 读取，而非硬编码默认值
         self.risk = RiskManager(
             capital_base=initial,
@@ -220,8 +241,8 @@ class PaperTradingDaemon:
             "day_count": self.day_count,
             "current_day": self.current_day.isoformat() if self.current_day else None,
             "last_bar_ts": self.last_bar_ts,
-            "bounds": {"lower": self.strategy.lower_price,
-                       "upper": self.strategy.upper_price},
+            "bounds": {"lower": getattr(self.strategy, 'lower_price', 0.0),
+                       "upper": getattr(self.strategy, 'upper_price', 0.0)},
             "broker": broker_state,
             "runner": {
                 "lots": {str(k): v for k, v in self.runner.lots.items()},
@@ -231,7 +252,7 @@ class PaperTradingDaemon:
                 "closed_trades_total": len(self.runner.closed_trades),
             },
             "strategy": {
-                "grid_filled": self.strategy.grid_filled,
+                "grid_filled": getattr(self.strategy, 'grid_filled', []),
                 "paused": self.strategy._paused,
                 "paused_reason": getattr(self.strategy, '_paused_reason', None),
                 "consecutive_losses": self.strategy._consecutive_losses,
@@ -295,7 +316,8 @@ class PaperTradingDaemon:
             logger.info(f"恢复时 closed_trades 已归档：保留最近 {len(self.runner.closed_trades)} / 总计 {total}")
 
         s = st["strategy"]
-        self.strategy.grid_filled = s["grid_filled"]
+        if hasattr(self.strategy, 'grid_filled'):
+            self.strategy.grid_filled = s["grid_filled"]
         self.strategy._paused = s["paused"]
         self.strategy._paused_reason = s.get("paused_reason")
         self.strategy._consecutive_losses = s["consecutive_losses"]
@@ -609,6 +631,9 @@ def parse_args(argv=None):
     p.add_argument("--symbol", default="BTC/USDT")
     p.add_argument("--timeframe", default="4h")
     p.add_argument("--initial", type=float, default=10000.0)
+    from src.strategy.registry import STRATEGY_REGISTRY
+    p.add_argument("--strategy", choices=list(STRATEGY_REGISTRY.keys()), action="append", default=[],
+                   help="策略类型（可多次指定以运行多个策略，默认 grid）")
     p.add_argument("--replay", nargs="?", const="generate", default=None,
                    help="回放模式；可选 CSV 路径，缺省用 generate 生成数据")
     p.add_argument("--state-file", default="data/paper_daemon_state.json")
@@ -633,15 +658,38 @@ def parse_args(argv=None):
                    help="单根 bar 跌幅熔断阈值（默认 10%%），超过则 PAUSE")
     p.add_argument("--log-level", default="INFO",
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-                   help="日志级别（默认 INFO）")
-    return p.parse_args(argv)
+                    help="日志级别（默认 INFO）")
+    args = p.parse_args(argv)
+    if not args.strategy:
+        args.strategy = ["grid"]
+    args.strategy = list(dict.fromkeys(args.strategy))
+    return args
 
 
 def main(argv=None) -> int:
+
     args = parse_args(argv)
-    # P1-7: 默认 INFO 级别，生产排障需要看到交易级日志
     setup_logger(log_level=getattr(args, 'log_level', 'INFO'))
-    return PaperTradingDaemon(args).run()
+
+    strategies = args.strategy
+    exit_codes = []
+
+    for i, strat_name in enumerate(strategies):
+        # 每个策略运行自己的 daemon 实例
+        logger.info(f"[{i+1}/{len(strategies)}] 启动策略: {strat_name}")
+        args.strategy = strat_name
+        # 每个策略使用独立 state file
+        orig_state = args.state_file
+        if len(strategies) > 1:
+            base, ext = orig_state.rsplit(".", 1)
+            args.state_file = f"{base}_{strat_name}.{ext}"
+        code = PaperTradingDaemon(args).run()
+        exit_codes.append((strat_name, code))
+        args.state_file = orig_state
+
+    summary = ", ".join(f"{n}={c}" for n, c in exit_codes)
+    logger.info(f"全部策略运行完成: {summary}")
+    return 0 if all(c == 0 for _, c in exit_codes) else 1
 
 
 if __name__ == "__main__":

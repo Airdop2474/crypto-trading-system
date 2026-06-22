@@ -2,9 +2,14 @@
 
 import useSWR from "swr"
 import Link from "next/link"
-import { ArrowUpRight, CandlestickChart, Grid3x3 } from "lucide-react"
+import { ArrowUpRight } from "lucide-react"
 import { api } from "@/lib/api"
 import { fmtPct, fmtSigned, pnlColor } from "@/lib/format"
+import {
+  parseStrategyType,
+  STRATEGY_TYPE_ICON,
+  STRATEGY_FALLBACK_ICON,
+} from "@/lib/strategy-meta"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StrategyStatusBadge } from "@/components/status-badge"
 
@@ -17,7 +22,7 @@ export function ActiveStrategies() {
       <CardHeader className="flex-row items-center justify-between">
         <CardTitle className="text-sm font-medium">运行中策略</CardTitle>
         <Link
-          href="/grid"
+          href="/strategies"
           className="flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
         >
           查看全部 <ArrowUpRight className="size-3" />
@@ -25,11 +30,13 @@ export function ActiveStrategies() {
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         {top.map((s) => {
-          const Icon = s.type === "grid" ? Grid3x3 : CandlestickChart
+          const type = parseStrategyType(s.id)
+          const Icon = type ? STRATEGY_TYPE_ICON[type] : STRATEGY_FALLBACK_ICON
           return (
-            <div
+            <Link
               key={s.id}
-              className="flex items-center justify-between rounded-md border border-border/60 bg-secondary/30 px-3 py-2.5"
+              href={`/strategy/${s.id}`}
+              className="flex items-center justify-between rounded-md border border-border/60 bg-secondary/30 px-3 py-2.5 hover:bg-secondary/60 transition-colors"
             >
               <div className="flex items-center gap-3">
                 <div className="flex size-8 items-center justify-center rounded-md bg-secondary text-muted-foreground">
@@ -51,7 +58,7 @@ export function ActiveStrategies() {
                 </div>
                 <StrategyStatusBadge status={s.status} />
               </div>
-            </div>
+            </Link>
           )
         })}
       </CardContent>

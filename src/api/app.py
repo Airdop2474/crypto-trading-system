@@ -28,6 +28,7 @@ from src.api import service
 from src.api.ws_feed import ws_feed
 from src.api.ws_logs import ws_logs
 from src.api.mode_manager import mode_manager, RunningMode, ModeParams, ModeStatus
+from src.api.strategy_config_store import update_strategy_config, get_all_strategy_configs
 from src.utils.cache import cache
 from src.agent import TradingAnalyzer, AuditLog
 from src.utils.config import config as _cfg
@@ -47,14 +48,10 @@ async def lifespan(app: FastAPI):
     # 1. 启动 WebSocket 行情订阅（异步任务，不阻塞）
     task = asyncio.create_task(ws_feed.start())
 
-    # 2. 后台预热 Paper Trading state（线程池跑，不阻塞事件循环）
-    logger.info("Preheating Paper Trading state in background thread...")
-    preheat_task = asyncio.create_task(asyncio.to_thread(service.get_state))
-
-    # 3. 恢复运行模式状态（检查孤儿进程）
+    # 2. 恢复运行模式状态（检查孤儿进程）
     await mode_manager.recover_on_startup()
 
-    # 4. 自动建表（幂等：已存在的表不会重复创建）
+    # 3. 自动建表（幂等：已存在的表不会重复创建）
     try:
         from src.utils.database import db
         from src.models.base import Base
@@ -68,23 +65,17 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # 5. 优雅停止所有运行模式
+    # 4. 优雅停止所有运行模式
     await mode_manager.stop_all()
 
-    # 6. 关闭 WebSocket
+    # 5. 关闭 WebSocket
     await ws_feed.stop()
     task.cancel()
     try:
         await task
     except asyncio.CancelledError:
         pass
-    # 预热任务若仍在跑（极罕见，说明预热比进程生命周期还长），取消
-    if not preheat_task.done():
-        preheat_task.cancel()
-        try:
-            await preheat_task
-        except (asyncio.CancelledError, Exception):
-            pass
+
 
 
 app = FastAPI(title="Crypto Trading System API", version="1.0", lifespan=lifespan)
@@ -393,6 +384,156 @@ def admin_refresh_state(request: Request, _=Security(verify_api_token)):
     }
 
 
+@app.post("/admin/clear-cache")
+@limiter.limit("5/minute")
+def admin_clear_cache(request: Request, _=Security(verify_api_token)):
+    """全面重置：清空数据库所有表 + Redis 缓存 + 本地数据文件 + 内存 state。
+
+    一键清除全部历史数据，下次请求会重新跑 Paper Trading 并写入全新数据。
+
+    清理范围：
+    - 数据库 7 张 ORM 表 + monitor_metrics
+    - Redis 缓存
+    - 本地数据文件（paper checkpoint、reports、raw data、mode states）
+    - 内存中的 Paper Trading state
+
+    限流：5 次/分钟
+    """
+    import shutil
+    from pathlib import Path as _P
+    from src.utils.cache import cache
+    from sqlalchemy import text as sa_text
+
+    warnings: list[str] = []
+
+    # 1. 清空数据库（7 ORM 表 + monitor_metrics）
+    db_rows_cleared = 0
+    try:
+        from src.models.base import Base
+        from src.utils.database import db as _db
+        if _db.engine is not None:
+            # TRUNCATE 比 drop/create 更快更安全（保留表结构和索引）
+            tables = ["orders", "closed_trades", "open_positions",
+                       "risk_events", "audit_log", "strategy_evolutions",
+                       "strategy_runs"]
+            with _db.engine.connect() as conn:
+                for t in tables:
+                    count = conn.execute(sa_text(f"SELECT COUNT(*) FROM {t}")).scalar()
+                    db_rows_cleared += count
+                # 用 TRUNCATE CASCADE 一次清空（处理外键依赖）
+                conn.execute(sa_text(
+                    "TRUNCATE strategy_runs, orders, closed_trades, "
+                    "open_positions, risk_events, audit_log, "
+                    "strategy_evolutions CASCADE"
+                ))
+                conn.commit()
+            # monitor_metrics 单独处理（hypertable，不在 ORM 里）
+            try:
+                with _db.engine.connect() as conn:
+                    conn.execute(sa_text("TRUNCATE monitor_metrics"))
+                    conn.commit()
+            except Exception:
+                pass
+        else:
+            warnings.append("数据库未初始化（engine is None）")
+    except Exception as e:
+        logger.warning(f"DB truncate failed (non-fatal): {e}")
+        warnings.append(f"数据库清空失败：{type(e).__name__}")
+
+    # 2. 清空 Redis
+    cleared = cache.clear("*")
+
+    # 3. 清理本地数据文件
+    files_cleared = 0
+    data_dir = _P("data")
+    # 要删除的文件（精确路径）
+    files_to_remove = [
+        data_dir / "paper_daemon_state.json",
+        data_dir / "paper_daemon_state.json.tmp",
+    ]
+    for f in files_to_remove:
+        if f.exists():
+            try:
+                f.unlink()
+                files_cleared += 1
+            except OSError as e:
+                warnings.append(f"删除 {f.name} 失败：{e}")
+    # 要清空的目录（保留目录结构，只删文件）
+    dirs_to_clean = [
+        data_dir / "reports" / "paper",
+        data_dir / "reports" / "paper" / "daily",
+        data_dir / "reports" / "backtest",
+        data_dir / "reports" / "test",
+        data_dir / "reports" / "test_paper",
+        data_dir / "reports" / "agent",
+        data_dir / "raw",
+        data_dir / "mode_states",
+    ]
+    for d in dirs_to_clean:
+        if d.is_dir():
+            for f in d.iterdir():
+                if f.is_file():
+                    try:
+                        f.unlink()
+                        files_cleared += 1
+                    except OSError as e:
+                        warnings.append(f"删除 {f.name} 失败：{e}")
+                elif f.is_dir():
+                    try:
+                        shutil.rmtree(f)
+                        files_cleared += 1
+                    except OSError as e:
+                        warnings.append(f"删除目录 {f.name} 失败：{e}")
+    # reports 根目录的散落文件（如 quality_check_report.json）
+    reports_dir = data_dir / "reports"
+    if reports_dir.is_dir():
+        for f in reports_dir.iterdir():
+            if f.is_file():
+                try:
+                    f.unlink()
+                    files_cleared += 1
+                except OSError:
+                    pass
+
+    # 4. 重置内存 state
+    service.reset_state()
+
+    # 构造响应
+    msg_parts = []
+    if db_rows_cleared > 0:
+        msg_parts.append(f"{db_rows_cleared} DB rows")
+    if cleared > 0:
+        msg_parts.append(f"{cleared} cache keys")
+    if files_cleared > 0:
+        msg_parts.append(f"{files_cleared} local files")
+    if not msg_parts:
+        msg_parts.append("nothing to clear (already clean)")
+    message = f"Full reset: {', '.join(msg_parts)} cleared."
+    if warnings:
+        message += f" Warnings: {'; '.join(warnings)}"
+
+    return {
+        "status": "ok" if not warnings else "ok_with_warnings",
+        "cleared_keys": cleared,
+        "db_rows_cleared": db_rows_cleared,
+        "files_cleared": files_cleared,
+        "message": message,
+    }
+
+
+@app.post("/admin/start-trading")
+@limiter.limit("10/minute")
+def admin_start_trading(request: Request, _=Security(verify_api_token)):
+    """手动启动 Paper Trading，生成订单/仓位数据。
+
+    系统启动后默认为空状态，调用此端点后才开始跑 Paper Trading。
+    重置后（/admin/clear-cache）也需要重新调用此端点。
+    """
+    service.activate()
+    service.get_state()
+    return {"status": "ok", "message": "Paper Trading started"}
+
+
 # --------------------------------------------------------------------------
 # 多策略 API
 # --------------------------------------------------------------------------
@@ -486,6 +627,7 @@ class CreateStrategyRequest(BaseModel):
     type: str
     symbol: str = "BTC/USDT"
     investment: float = Field(default=10000.0, ge=100, le=1_000_000)
+    timeframe: str = "4h"
     params: dict = {}
 
 
@@ -500,6 +642,7 @@ def create_strategy_generic(body: CreateStrategyRequest, _=Security(verify_api_t
             symbol=body.symbol,
             investment=body.investment,
             params=body.params,
+            timeframe=body.timeframe,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -513,14 +656,24 @@ class UpdateParamsRequest(BaseModel):
 def update_strategy_params_endpoint(
     strategy_id: str, body: UpdateParamsRequest, _=Security(verify_api_token),
 ):
-    """更新运行中策略的参数"""
+    """更新运行中策略的参数（同时持久化到配置，供守护进程启动时使用）"""
     try:
         state = service.get_state()
-        return service.update_strategy_params(state, strategy_id, body.params)
+        result = service.update_strategy_params(state, strategy_id, body.params)
+        # 持久化策略专属参数（剔除风控参数）
+        strategy_type = strategy_id.split("-")[0]
+        update_strategy_config(strategy_type, body.params)
+        return result
     except ValueError as e:
         raise HTTPException(400, str(e))
     except RuntimeError as e:
         raise HTTPException(503, str(e))
+
+
+@app.get("/strategies/configs")
+def get_strategy_configs(_=Security(verify_api_token)):
+    """读取所有已保存的策略参数配置。"""
+    return get_all_strategy_configs()
 
 
 @app.get("/strategies/history")
@@ -770,6 +923,7 @@ class StartModeRequest(BaseModel):
     pollSeconds: int = Field(default=60, ge=10, le=600)
     replayCsv: str | None = None
     fresh: bool = False
+    strategies: list[str] = ["grid"]
 
 
 @app.get("/modes")

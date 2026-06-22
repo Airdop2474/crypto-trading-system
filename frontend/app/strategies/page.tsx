@@ -2,8 +2,9 @@
 
 import { useState } from "react"
 import useSWR from "swr"
+import Link from "next/link"
 import { api } from "@/lib/api"
-import type { StrategyRegistryEntry } from "@/lib/types"
+import type { StrategyRegistryEntry, MultiStrategyDetail } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { ApiError } from "@/components/api-error"
@@ -12,7 +13,10 @@ import { StrategyCard } from "@/components/strategies/strategy-card"
 import { CreateStrategyDialog } from "@/components/strategies/create-strategy-dialog"
 import { StrategyParamsDialog } from "@/components/strategies/strategy-params-dialog"
 import { RunHistory } from "@/components/strategies/run-history"
-import { Plus } from "lucide-react"
+import { StrategyStatusBadge } from "@/components/status-badge"
+import { fmtSigned, fmtPct, pnlColor, fmtNum } from "@/lib/format"
+import { parseStrategyType, STRATEGY_TYPE_ICON, STRATEGY_FALLBACK_ICON, STRATEGY_TYPE_LABEL, STRATEGY_TYPE_COLOR, STRATEGY_FALLBACK_COLOR } from "@/lib/strategy-meta"
+import { Plus, ArrowUpRight } from "lucide-react"
 
 export default function StrategiesPage() {
   return (
@@ -29,6 +33,8 @@ function StrategiesContent() {
     { revalidateOnFocus: false },
   )
 
+  const { data: instances } = useSWR("multi-details", () => api.getMultiDetails())
+
   // 参数配置对话框状态
   const [configTarget, setConfigTarget] = useState<{
     entry: StrategyRegistryEntry
@@ -36,9 +42,9 @@ function StrategiesContent() {
   } | null>(null)
 
   const strategies = data?.strategies ?? []
+  const runningInstances = (instances ?? []).filter((d) => d.totalTrades > 0 || d.realizedPnl !== 0)
 
   function handleConfigure(entry: StrategyRegistryEntry) {
-    // 使用 entry.key 作为 strategyId（后端通过 type 查找实例）
     setConfigTarget({ entry, strategyId: entry.key })
   }
 
@@ -61,6 +67,55 @@ function StrategiesContent() {
           </CreateStrategyDialog>
         </CardHeader>
       </Card>
+
+      {/* 正在运行的实例 */}
+      {runningInstances.length > 0 && (
+        <Card>
+          <CardHeader className="flex-row items-center justify-between pb-3">
+            <CardTitle className="text-sm font-medium">正在运行的策略实例</CardTitle>
+            <Link
+              href="/"
+              className="flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              总览 <ArrowUpRight className="size-3" />
+            </Link>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            {runningInstances.map((inst) => {
+              const type = parseStrategyType(inst.strategyId)
+              const Icon = type ? STRATEGY_TYPE_ICON[type] : STRATEGY_FALLBACK_ICON
+              return (
+                <Link
+                  key={inst.strategyId}
+                  href={`/strategy/${inst.strategyId}`}
+                  className="flex items-center justify-between rounded-md border border-border/60 bg-secondary/30 px-3 py-2.5 hover:bg-secondary/60 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex size-8 items-center justify-center rounded-md bg-secondary text-muted-foreground">
+                      <Icon className="size-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">{inst.strategyId}</p>
+                      <p className="text-xs text-muted-foreground">{inst.symbol}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 text-right">
+                    <div>
+                      <p className={`font-mono text-sm tabular-nums ${pnlColor(inst.realizedPnl)}`}>
+                        {fmtSigned(inst.realizedPnl)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {inst.totalTrades} 笔 / {fmtNum(inst.winRate * 100, 0)}% 胜率
+                      </p>
+                    </div>
+                    <StrategyStatusBadge status="running" />
+                  </div>
+                </Link>
+              )
+            })}
+          </CardContent>
+        </Card>
+      )}
 
       {/* 错误状态 */}
       {error && (
@@ -109,6 +164,7 @@ function StrategiesContent() {
             <StrategyCard
               key={entry.key}
               entry={entry}
+              instance={instances?.find((d) => d.strategyId === entry.key)}
               onConfigure={() => handleConfigure(entry)}
             />
           ))}
@@ -129,11 +185,12 @@ function StrategiesContent() {
           strategyName={configTarget.entry.name}
           paramSchema={configTarget.entry.param_schema}
           currentParams={configTarget.entry.defaults}
+          defaultParams={configTarget.entry.defaults}
           open={!!configTarget}
           onOpenChange={(open) => {
             if (!open) {
               setConfigTarget(null)
-              mutate() // 刷新注册表
+              mutate()
             }
           }}
         />

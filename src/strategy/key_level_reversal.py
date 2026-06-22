@@ -38,8 +38,6 @@ class KeyLevelReversalStrategy(RiskAwareStrategy):
         "pin_threshold":           {"type": float, "min": 1.0, "max": 5.0, "default": 2.0},
         "stop_atr_mult":           {"type": float, "min": 1.0, "max": 5.0, "default": 2.0},
         "atr_period":              {"type": int,   "min": 2,   "max": 50,  "default": 14},
-        "max_consecutive_losses":  {"type": int,   "min": 1,              "default": 3},
-        "max_daily_loss":          {"type": float, "min": 0,   "max": 0.1, "default": 0.02},
     }
 
     def __init__(
@@ -69,6 +67,11 @@ class KeyLevelReversalStrategy(RiskAwareStrategy):
         self._resistance_zone: Tuple[float, float] = (0.0, 0.0)
         self._entry_price: Optional[float] = None
 
+        # 增量 ATR 状态
+        self._tr_window: list[float] = []
+        self._tr_sum: float = 0.0
+        self._prev_close_atr: Optional[float] = None
+
         self.set_parameters(
             lookback=lookback, pin_threshold=pin_threshold,
             stop_atr_mult=stop_atr_mult, atr_period=atr_period,
@@ -86,6 +89,9 @@ class KeyLevelReversalStrategy(RiskAwareStrategy):
         self._support_zone = (0.0, 0.0)
         self._resistance_zone = (0.0, 0.0)
         self._entry_price = None
+        self._tr_window.clear()
+        self._tr_sum = 0.0
+        self._prev_close_atr = None
 
     # ---- 核心逻辑 ----
 
@@ -93,18 +99,20 @@ class KeyLevelReversalStrategy(RiskAwareStrategy):
         if len(data) < self.lookback:
             return None
 
-        if self._is_paused():
+        if self._is_paused(current_time):
             return None
 
         close = float(data["close"].iloc[-1])
-        atr = self._calc_atr(data, self.atr_period)
+        atr = self._update_atr(
+            float(data["high"].iloc[-1]),
+            float(data["low"].iloc[-1]),
+            close,
+        )
 
-        # 识别 S/R 区域
         sr = self._identify_sr_zones(data)
         self._support_zone = sr["support"]
         self._resistance_zone = sr["resistance"]
 
-        # 检测 pin bar
         pin = self._detect_pin_bar(data)
 
         if not self._in_position:
@@ -178,25 +186,36 @@ class KeyLevelReversalStrategy(RiskAwareStrategy):
         return None
 
     def _check_exit(
-        self, data: pd.DataFrame, close: float, atr: float, pin: Optional[str]
+        self, data: pd.DataFrame, close: float, atr: Optional[float], pin: Optional[str]
     ) -> bool:
-        """检查出场条件。
-
-        出场条件（满足任一即出场）：
-        1. 价格回到阻力区 + 上影线 pin bar（反转确认）
-        2. ATR 止损触发（从入场价下跌超过 stop_atr_mult × ATR）
-        """
-        # 条件1：价格回到阻力区 + 上影线 pin bar
-        if pin == "bearish" and self._in_zone(close, self._resistance_zone, atr):
+        if pin == "bearish" and self._in_zone(close, self._resistance_zone, atr or 0):
             return True
 
-        # 条件2：ATR 固定止损
-        if self._entry_price is not None:
+        if self._entry_price is not None and atr is not None and atr > 0:
             stop_loss = self._entry_price - self.stop_atr_mult * atr
             if close < stop_loss:
                 return True
 
         return False
+
+    def _update_atr(self, high: float, low: float, close: float) -> Optional[float]:
+        """增量 ATR，O(1) per bar。"""
+        if self._prev_close_atr is None:
+            self._prev_close_atr = close
+            return None
+
+        tr = max(high - low, abs(high - self._prev_close_atr), abs(low - self._prev_close_atr))
+        self._prev_close_atr = close
+
+        window_size = self.atr_period
+        if len(self._tr_window) >= window_size:
+            self._tr_sum -= self._tr_window.pop(0)
+        self._tr_window.append(tr)
+        self._tr_sum += tr
+
+        if len(self._tr_window) < window_size:
+            return None
+        return self._tr_sum / window_size
 
     @staticmethod
     def _calc_atr(data: pd.DataFrame, period: int) -> float:

@@ -1,5 +1,6 @@
 "use client"
 
+import { useState, useMemo } from "react"
 import useSWR from "swr"
 import { api } from "@/lib/api"
 import { fmtSigned, fmtUsd, pnlColor } from "@/lib/format"
@@ -12,6 +13,13 @@ import { PnlDistributionChart } from "@/components/positions/pnl-distribution-ch
 import { ApiError } from "@/components/api-error"
 import { ExportButton } from "@/components/export-button"
 import { ErrorBoundary } from "@/components/error-boundary"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import type { CsvColumn } from "@/lib/csv"
 import type { Position, AssetBalance } from "@/lib/types"
 
@@ -42,14 +50,41 @@ export default function PositionsPage() {
   const { data: positions, isLoading: posLoading, error: posError, mutate: reloadPos } = useSWR("positions", api.getPositions)
   const { data: assets, isLoading: assetLoading, error: assetError, mutate: reloadAssets } = useSWR("assets", api.getAssets)
 
+  const [strategyFilter, setStrategyFilter] = useState<string>("all")
+
+  const strategyNames = useMemo(() => {
+    const names = new Set((positions ?? []).map((p) => p.strategyName).filter(Boolean))
+    return ["all", ...Array.from(names).sort()]
+  }, [positions])
+
+  const filteredPositions = useMemo(() => {
+    if (strategyFilter === "all") return positions ?? []
+    return (positions ?? []).filter((p) => p.strategyName === strategyFilter)
+  }, [positions, strategyFilter])
+
   const totalValue = (assets ?? []).reduce((a, x) => a + x.valueUsdt, 0)
-  const totalUnrealized = (positions ?? []).reduce((a, p) => a + p.unrealizedPnl, 0)
-  const totalMargin = (positions ?? []).reduce((a, p) => a + p.margin, 0)
+  const totalUnrealized = filteredPositions.reduce((a, p) => a + p.unrealizedPnl, 0)
+  const totalMargin = filteredPositions.reduce((a, p) => a + p.margin, 0)
 
   return (
     <ErrorBoundary>
     <div className="flex flex-col gap-4 pb-16 md:pb-0">
-      <div className="flex flex-wrap items-center justify-end gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {strategyNames.length > 1 && (
+          <Select value={strategyFilter} onValueChange={(v) => v && setStrategyFilter(v)}>
+            <SelectTrigger className="w-40 h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {strategyNames.map((name) => (
+                <SelectItem key={name} value={name} className="text-xs">
+                  {name === "all" ? "全部策略" : name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        <div className="flex flex-wrap items-center gap-2 ml-auto">
         <ExportButton
           rows={positions ?? []}
           columns={positionColumns}
@@ -64,6 +99,7 @@ export default function PositionsPage() {
           disabled={assetLoading || !assets || assets.length === 0}
           label="导出资产"
         />
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -76,7 +112,7 @@ export default function PositionsPage() {
       {posError ? (
         <ApiError error={posError} onRetry={() => reloadPos()} title="持仓数据加载失败" />
       ) : (
-        <PositionsTable positions={positions ?? []} loading={posLoading} />
+        <PositionsTable positions={filteredPositions} loading={posLoading} />
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">

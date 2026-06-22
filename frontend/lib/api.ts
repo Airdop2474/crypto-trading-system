@@ -317,6 +317,10 @@ export const api = {
   getStrategyRegistry: (): Promise<StrategyRegistryResponse> =>
     get("/strategies/registry"),
 
+  // GET /strategies/configs
+  getStrategyConfigs: (): Promise<Record<string, Record<string, number | boolean>>> =>
+    get("/strategies/configs"),
+
   // POST /strategies/create
   createStrategy: async (params: CreateStrategyParams): Promise<Strategy> => {
     const res = await fetch(`${API_BASE}/strategies/create`, {
@@ -374,6 +378,24 @@ export const api = {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       throw new Error(body.detail || `清理数据失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  clearCache: async (): Promise<{
+    status: string
+    cleared_keys: number
+    db_rows_cleared: number
+    files_cleared: number
+    message: string
+  }> => {
+    const res = await fetch(`${API_BASE}/admin/clear-cache`, {
+      method: "POST",
+      headers: { "X-API-Token": API_TOKEN },
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `清除缓存失败: ${res.status}`)
     }
     return res.json()
   },

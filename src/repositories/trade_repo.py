@@ -3,8 +3,10 @@
 """
 
 import uuid
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
+import numpy as np
+import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -12,6 +14,21 @@ from src.models.order import Order
 from src.models.trade import ClosedTrade
 from src.models.position import OpenPosition
 from src.utils.logger import logger
+
+
+def _to_native(val: Any) -> Any:
+    """numpy/pandas 类型转 Python 原生类型，避免 psycopg2 报 InvalidSchemaName。"""
+    if val is None:
+        return None
+    if isinstance(val, (np.integer,)):
+        return int(val)
+    if isinstance(val, (np.floating,)):
+        return float(val)
+    if isinstance(val, (np.bool_,)):
+        return bool(val)
+    if isinstance(val, pd.Timestamp):
+        return val.to_pydatetime()
+    return val
 
 
 class TradeRepository:
@@ -37,15 +54,15 @@ class TradeRepository:
                 symbol=o.get("symbol", ""),
                 side=o.get("side", "buy"),
                 order_type=o.get("order_type", "market"),
-                amount=o.get("amount"),
-                reference_price=o.get("reference_price") or o.get("price"),
-                actual_price=o.get("actual_price") or o.get("price"),
-                commission=o.get("commission", 0.0),
-                slippage=o.get("slippage", 0.0),
+                amount=_to_native(o.get("amount")),
+                reference_price=_to_native(o.get("reference_price") or o.get("price")),
+                actual_price=_to_native(o.get("actual_price") or o.get("price")),
+                commission=_to_native(o.get("commission", 0.0)),
+                slippage=_to_native(o.get("slippage", 0.0)),
                 status=o.get("status", "filled"),
-                balance_after=o.get("balance_after"),
-                position_after=o.get("position_after"),
-                timestamp=o.get("timestamp"),
+                balance_after=_to_native(o.get("balance_after")),
+                position_after=_to_native(o.get("position_after")),
+                timestamp=_to_native(o.get("timestamp")),
             ))
         session.add_all(rows)
         session.flush()
@@ -69,13 +86,13 @@ class TradeRepository:
                 strategy_id=strategy_id,
                 symbol=t.get("symbol", "BTC/USDT"),
                 tag=t.get("tag"),
-                open_time=t.get("open_time"),
-                close_time=t.get("close_time") or t.get("time"),
-                open_price=t.get("open_price"),
-                close_price=t.get("close_price"),
-                quantity=t.get("quantity"),
-                profit=t.get("profit", 0.0),
-                commission=t.get("commission", 0.0),
+                open_time=_to_native(t.get("open_time")),
+                close_time=_to_native(t.get("close_time") or t.get("time")),
+                open_price=_to_native(t.get("open_price")),
+                close_price=_to_native(t.get("close_price")),
+                quantity=_to_native(t.get("quantity")),
+                profit=_to_native(t.get("profit", 0.0)),
+                commission=_to_native(t.get("commission", 0.0)),
             ))
         session.add_all(rows)
         session.flush()
@@ -99,9 +116,9 @@ class TradeRepository:
                 strategy_id=strategy_id,
                 symbol=p.get("symbol", "BTC/USDT"),
                 tag=p.get("tag"),
-                amount=p.get("amount", 0.0),
-                cost_price=p.get("cost_price", 0.0),
-                opened_at=p.get("opened_at"),
+                amount=_to_native(p.get("amount", 0.0)),
+                cost_price=_to_native(p.get("cost_price", 0.0)),
+                opened_at=_to_native(p.get("opened_at")),
             ))
         session.add_all(rows)
         session.flush()
@@ -117,16 +134,20 @@ class TradeRepository:
         run_id: uuid.UUID,
         limit: int = 100,
         offset: int = 0,
-    ) -> Tuple[list[dict], int]:
-        """分页查询订单，返回 (items, total_count)。"""
-        # 总数
+    ) -> Tuple[list[dict], int, float]:
+        """分页查询订单，返回 (items, total_count, total_fee)。"""
         count_stmt = (
             select(func.count(Order.id))
             .where(Order.run_id == run_id)
         )
         total = session.scalar(count_stmt) or 0
 
-        # 分页数据（最新在前）
+        fee_stmt = (
+            select(func.coalesce(func.sum(Order.commission), 0.0))
+            .where(Order.run_id == run_id)
+        )
+        total_fee = float(session.scalar(fee_stmt) or 0.0)
+
         stmt = (
             select(Order)
             .where(Order.run_id == run_id)
@@ -151,7 +172,7 @@ class TradeRepository:
             }
             for r in rows
         ]
-        return items, total
+        return items, total, total_fee
 
     @staticmethod
     def get_closed_trades(

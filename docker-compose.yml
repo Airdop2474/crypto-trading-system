@@ -74,6 +74,10 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@timescaledb:${POSTGRES_PORT:-5432}/crypto_trading
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:${REDIS_PORT:-6379}/0
+      TIMESCALE_HOST: timescaledb
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
@@ -100,6 +104,10 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@timescaledb:${POSTGRES_PORT:-5432}/crypto_trading
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:${REDIS_PORT:-6379}/0
+      TIMESCALE_HOST: timescaledb
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data

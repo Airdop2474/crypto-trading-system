@@ -46,8 +46,6 @@ class GridTradingStrategy(RiskAwareStrategy):
         "grid_count": {"type": int, "min": 5, "max": 30},
         "position_per_grid": {"type": float, "min": 0.02, "max": 0.15},
         "enable_filters": {"type": bool},
-        "max_consecutive_losses": {"type": int, "min": 1},
-        "max_daily_loss": {"type": float, "min": 0, "max": 0.1},
     }
 
     def __init__(

@@ -39,8 +39,6 @@ class RSIMomentumStrategy(RiskAwareStrategy):
         "overbought": {"type": float, "min": 0, "max": 100},
         "ema_period": {"type": int, "min": 1},
         "enable_trend_filter": {"type": bool},
-        "max_consecutive_losses": {"type": int, "min": 1},
-        "max_daily_loss": {"type": float, "min": 0, "max": 0.1},
     }
 
     def __init__(
@@ -162,16 +160,10 @@ class RSIMomentumStrategy(RiskAwareStrategy):
         return self._ema
 
     def on_bar(self, data: pd.DataFrame, current_time: datetime) -> Optional[str]:
-        """
-        处理每根 K 线
-
-        返回 'BUY' / 'SELL' / None
-        """
         if len(data) < self.rsi_period + 1:
             return None
 
-        # --- 熔断暂停检查（RiskAwareStrategy 统一管理）---
-        if self._is_paused():
+        if self._is_paused(current_time):
             return None
 
         current_price = float(data["close"].iloc[-1])

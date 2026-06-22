@@ -4,13 +4,30 @@
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
+import numpy as np
+import pandas as pd
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from src.models.strategy_run import StrategyRun
 from src.utils.logger import logger
+
+
+def _to_native(val: Any) -> Any:
+    """numpy/pandas 类型转 Python 原生类型。"""
+    if val is None:
+        return None
+    if isinstance(val, (np.integer,)):
+        return int(val)
+    if isinstance(val, (np.floating,)):
+        return float(val)
+    if isinstance(val, (np.bool_,)):
+        return bool(val)
+    if isinstance(val, pd.Timestamp):
+        return val.to_pydatetime()
+    return val
 
 
 class RunRepository:
@@ -58,9 +75,9 @@ class RunRepository:
             return None
         run.status = status
         run.ended_at = datetime.now(timezone.utc)
-        run.final_equity = final_equity
-        run.realized_pnl = realized_pnl
-        run.total_return = total_return
+        run.final_equity = _to_native(final_equity)
+        run.realized_pnl = _to_native(realized_pnl)
+        run.total_return = _to_native(total_return)
         session.flush()
         logger.debug(f"StrategyRun completed: {run_id}")
         return run

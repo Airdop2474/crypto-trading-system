@@ -22,6 +22,7 @@ interface Props {
   strategyName: string
   paramSchema: Record<string, ParamConstraint>
   currentParams: Record<string, number | boolean>
+  defaultParams?: Record<string, number | boolean | null>
   open: boolean
   onOpenChange: (open: boolean) => void
 }
@@ -31,13 +32,13 @@ export function StrategyParamsDialog({
   strategyName,
   paramSchema,
   currentParams,
+  defaultParams,
   open,
   onOpenChange,
 }: Props) {
   const [loading, setLoading] = useState(false)
   const [params, setParams] = useState<Record<string, string>>({})
 
-  // 当对话框打开或 currentParams 变化时，初始化表单
   useEffect(() => {
     if (open) {
       const init: Record<string, string> = {}
@@ -50,6 +51,20 @@ export function StrategyParamsDialog({
 
   function updateParam(key: string, value: string) {
     setParams((prev) => ({ ...prev, [key]: value }))
+  }
+
+  function resetParam(key: string) {
+    const dflt = defaultParams?.[key] ?? currentParams[key]
+    setParams((prev) => ({ ...prev, [key]: dflt != null ? String(dflt) : "" }))
+  }
+
+  function resetAll() {
+    const reset: Record<string, string> = {}
+    for (const key of Object.keys(paramSchema)) {
+      const dflt = defaultParams?.[key] ?? currentParams[key]
+      reset[key] = dflt != null ? String(dflt) : ""
+    }
+    setParams(reset)
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -120,41 +135,64 @@ export function StrategyParamsDialog({
             </p>
           ) : (
             <div className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/30 p-3">
-              {paramEntries.map(([key, constraint]) => (
-                <div key={key} className="flex flex-col gap-1.5">
-                  <Label htmlFor={`sp-${key}`} className="text-xs">
-                    {key}
-                    {currentParams[key] != null && (
-                      <span className="ml-2 text-muted-foreground font-mono">
-                        (当前: {String(currentParams[key])})
+              {paramEntries.map(([key, constraint]) => {
+                const isDefault = params[key] != null && defaultParams?.[key] != null && params[key] === String(defaultParams[key])
+                return (
+                  <div key={key} className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor={`sp-${key}`} className="text-xs">
+                        {key}
+                        {currentParams[key] != null && (
+                          <span className="ml-2 text-muted-foreground font-mono">
+                            (当前: {String(currentParams[key])})
+                          </span>
+                        )}
+                      </Label>
+                      {!isDefault && defaultParams?.[key] != null && (
+                        <button
+                          type="button"
+                          className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                          onClick={() => resetParam(key)}
+                        >
+                          重置默认 {String(defaultParams[key])}
+                        </button>
+                      )}
+                    </div>
+                    <Input
+                      id={`sp-${key}`}
+                      type={constraint.type === "bool" ? "text" : "number"}
+                      placeholder={
+                        constraint.type === "bool"
+                          ? "true / false"
+                          : constraint.min != null && constraint.max != null
+                            ? `${constraint.min} ~ ${constraint.max}`
+                            : undefined
+                      }
+                      min={constraint.min}
+                      max={constraint.max}
+                      step={constraint.type === "int" ? 1 : 0.01}
+                      value={params[key] ?? ""}
+                      onChange={(e) => updateParam(key, e.target.value)}
+                    />
+                    {(constraint.min != null || constraint.max != null) && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {constraint.min != null && `最小: ${constraint.min}`}
+                        {constraint.min != null && constraint.max != null && " | "}
+                        {constraint.max != null && `最大: ${constraint.max}`}
                       </span>
                     )}
-                  </Label>
-                  <Input
-                    id={`sp-${key}`}
-                    type={constraint.type === "bool" ? "text" : "number"}
-                    placeholder={
-                      constraint.type === "bool"
-                        ? "true / false"
-                        : constraint.min != null && constraint.max != null
-                          ? `${constraint.min} ~ ${constraint.max}`
-                          : undefined
-                    }
-                    min={constraint.min}
-                    max={constraint.max}
-                    step={constraint.type === "int" ? 1 : 0.01}
-                    value={params[key] ?? ""}
-                    onChange={(e) => updateParam(key, e.target.value)}
-                  />
-                  {(constraint.min != null || constraint.max != null) && (
-                    <span className="text-[10px] text-muted-foreground">
-                      {constraint.min != null && `最小: ${constraint.min}`}
-                      {constraint.min != null && constraint.max != null && " | "}
-                      {constraint.max != null && `最大: ${constraint.max}`}
-                    </span>
-                  )}
-                </div>
-              ))}
+                  </div>
+                )
+              })}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-1 h-7 text-xs"
+                onClick={resetAll}
+              >
+                重置全部为默认值
+              </Button>
             </div>
           )}
 

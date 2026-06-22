@@ -15,6 +15,7 @@ try:
     from src.strategy.market_structure import MarketStructureStrategy
     from src.strategy.super_trend import SuperTrendStrategy
     from src.strategy.key_level_reversal import KeyLevelReversalStrategy
+    from src.strategy.price_action import PriceActionStrategy
 except ImportError:
     import importlib
     import inspect
@@ -41,6 +42,7 @@ except ImportError:
     MarketStructureStrategy = _loaded.get("market_structure")
     SuperTrendStrategy = _loaded.get("super_trend")
     KeyLevelReversalStrategy = _loaded.get("key_level_reversal")
+    PriceActionStrategy = _loaded.get("price_action")
 
 STRATEGY_REGISTRY: dict[str, type[Strategy]] = {
     "grid":       GridTradingStrategy,
@@ -51,6 +53,7 @@ STRATEGY_REGISTRY: dict[str, type[Strategy]] = {
     "structure":  MarketStructureStrategy,
     "supertrend": SuperTrendStrategy,
     "reversal":   KeyLevelReversalStrategy,
+    "priceaction": PriceActionStrategy,
 }
 
 
@@ -92,6 +95,7 @@ _STRATEGY_LABELS = {
     "structure": "市场结构",
     "supertrend": "SuperTrend",
     "reversal": "关键位反转",
+    "priceaction": "价格行为学",
 }
 
 

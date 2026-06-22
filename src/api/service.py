@@ -12,6 +12,7 @@
 """
 
 import glob
+import random
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,25 +36,34 @@ INITIAL_CAPITAL = 10000.0
 
 _state: Optional[dict] = None
 _lock = threading.Lock()
+_active = False
+
+
+def activate() -> None:
+    """激活 Paper Trading，下次 get_state() 会跑 Paper Trading 生成数据。"""
+    global _active
+    _active = True
+    logger.info("Paper Trading activated")
 
 
 def reset_state() -> None:
-    """重置缓存的 Paper Trading state（用于 /admin/refresh-state）。
+    """重置缓存的 Paper Trading state（用于 /admin/refresh-state 和 /admin/clear-cache）。
 
-    下次 get_state() 调用会重新跑 Paper Trading。
+    同时将 _active 置为 False，系统进入空状态，直到调用 /admin/start-trading。
     线程安全：持锁清空，避免与并发 get_state() 竞争。
     """
-    global _state
+    global _state, _active
     with _lock:
         _state = None
-    logger.info("Paper Trading state reset; will rebuild on next request")
+        _active = False
+    logger.info("Paper Trading state reset; inactive until /admin/start-trading")
 
 
 # --------------------------------------------------------------------------
 # 运行 Paper Trading（lazy，进程内只跑一次）
 # --------------------------------------------------------------------------
 def _load_data() -> pd.DataFrame:
-    """优先读 data/raw 的震荡数据；缺失时用同款生成器内存生成（seed 固定可复现）。"""
+    """优先读 data/raw 的震荡数据；缺失时用同款生成器内存生成（seed 基于时间戳，每次不同）。"""
     files = sorted(glob.glob(str(PROJECT_ROOT / "data" / "raw" / "BTC_USDT_4h_osc_*.csv")))
     if files:
         df = pd.read_csv(files[-1])
@@ -64,7 +74,8 @@ def _load_data() -> pd.DataFrame:
     sys.path.insert(0, str(PROJECT_ROOT))
     from scripts.generate_oscillating_data import generate_oscillating_ohlcv
 
-    df = generate_oscillating_ohlcv()  # 默认 seed=42
+    seed = int(datetime.now().timestamp()) % 100000
+    df = generate_oscillating_ohlcv(seed=seed)
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     return df
 
@@ -129,15 +140,16 @@ def _build_multi_results(
 ) -> tuple:
     """用 MultiStrategyRunner 跑多个策略，返回 (results_dict, aggregate)。
 
-    当前注册 8 个策略（覆盖系统全部策略）：
+    当前注册 9 个策略（覆盖系统全部策略）：
     1. Grid BTC/USDT — 震荡市网格低买高卖
     2. RSI Momentum — 趋势回调/超买卖出
     3. Simple MA — 金叉买入/死叉卖出
     4. Donchian Channel — N周期高低点突破
-    5. Market Structure — 波动结构突破
+    5. Market Structure — 摆动结构突破
     6. SuperTrend — ATR 自适应跟踪止损
     7. Key Level Reversal — 支撑阻力位 pin bar 反转
     8. Buy & Hold — 买入持有基准
+    9. Price Action — 裸K结构 + 供需区 + 流动性评分
 
     所有策略共享同一个 broker（资金池 10000 USDT）。
     """
@@ -210,6 +222,12 @@ def _build_multi_results(
             strategy=get_strategy("buyhold")(),
             symbol=SYMBOL,
             description="买入持有：基准策略",
+        ),
+        StrategyConfig(
+            strategy_id="priceaction-btc-usdt",
+            strategy=get_strategy("priceaction")(),
+            symbol=SYMBOL,
+            description="价格行为学：裸K+供需+流动性评分",
         ),
     ]
     multi_runner.register_many(configs)
@@ -340,8 +358,61 @@ def get_cached_summary() -> Optional[dict]:
         return None
 
 
+_EMPTY_STATE: Optional[dict] = None
+
+
+def _get_empty_state() -> dict:
+    """返回空状态（系统未激活时使用），所有映射函数都能安全处理。"""
+    global _EMPTY_STATE
+    if _EMPTY_STATE is not None:
+        return _EMPTY_STATE
+
+    from src.strategy.grid_trading import GridTradingStrategy
+
+    grid = GridTradingStrategy(
+        lower_price=100, upper_price=200, grid_count=10,
+        initial_capital=INITIAL_CAPITAL,
+    )
+    grid.paused = True  # 空状态网格标记为暂停，避免显示"运行中"
+    _EMPTY_STATE = {
+        "collector": MetricsCollector(),
+        "df": pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"]),
+        "last_price": 0.0,
+        "runner": PaperTradingRunner(PaperBroker(INITIAL_CAPITAL), "EMPTY"),
+        "result": {
+            "symbol": "",
+            "statistics": {"total_trades": 0, "win_rate": 0.0, "total_pnl": 0.0,
+                           "initial_balance": INITIAL_CAPITAL, "current_balance": INITIAL_CAPITAL,
+                           "positions": {}},
+            "trade_history": [],
+            "signals": [],
+            "open_lots": {},
+            "realized_pnl": 0.0,
+            "closed_trades": [],
+        },
+        "report": {
+            "account": {
+                "total_value": INITIAL_CAPITAL, "cash": INITIAL_CAPITAL,
+                "position_value": 0.0, "initial_balance": INITIAL_CAPITAL,
+                "total_return": 0.0,
+            },
+            "pnl": {"total_pnl": 0.0, "realized": 0.0, "unrealized": 0.0},
+        },
+        "strategy": grid,
+        "_multi_runner": None,
+        "_run_id": None,
+        "multi_results": {},
+        "multi_aggregate": {},
+        "risk_manager": None,
+        "_empty": True,
+    }
+    return _EMPTY_STATE
+
+
 def get_state() -> dict:
     global _state
+    if not _active:
+        return _get_empty_state()
     if _state is None:
         with _lock:
             if _state is None:
@@ -503,7 +574,7 @@ def orders(state: dict, limit: int = 100, offset: int = 0) -> dict:
             if db.is_postgres_available():
                 from src.repositories.trade_repo import TradeRepository
                 with db.get_session() as session:
-                    items, total = TradeRepository.get_orders_paginated(
+                    items, total, total_fee = TradeRepository.get_orders_paginated(
                         session, run_id, limit, offset,
                     )
                 name = getattr(state["strategy"], "name", "GridTrading")
@@ -521,7 +592,7 @@ def orders(state: dict, limit: int = 100, offset: int = 0) -> dict:
                         "open_count": 0,
                         "partially_filled_count": 0,
                         "canceled_count": 0,
-                        "total_fee": sum(item.get("fee", 0) for item in items),
+                        "total_fee": total_fee,
                     },
                 }
         except Exception as e:
@@ -587,6 +658,9 @@ def tickers(state: dict) -> List[dict]:
 def _derived_tickers(state: dict) -> List[dict]:
     """从同一份 OHLCV 的最后 6 根（≈24h）派生 BTC/USDT 行情。离线回退用。"""
     df = state["df"]
+    if df.empty:
+        return [{"symbol": SYMBOL, "price": 0.0, "changePct": 0.0,
+                 "volume": 0.0, "high": 0.0, "low": 0.0}]
     window = df.tail(6)
     last_close = float(df.iloc[-1]["close"])
     ref = float(window.iloc[0]["open"])
@@ -798,6 +872,8 @@ def multi_strategy_result(state: dict, strategy_id: str) -> Optional[dict]:
 # --------------------------------------------------------------------------
 def _running_days(state: dict) -> int:
     df = state["df"]
+    if df.empty:
+        return 0
     span = df["timestamp"].max() - df["timestamp"].min()
     return max(1, int(span.days))
 
@@ -806,7 +882,10 @@ def _first_trade_time(state: dict) -> str:
     hist = state["result"]["trade_history"]
     if hist:
         return pd.Timestamp(hist[0]["timestamp"]).isoformat()
-    return pd.Timestamp(state["df"].iloc[0]["timestamp"]).isoformat()
+    df = state["df"]
+    if df.empty:
+        return ""
+    return pd.Timestamp(df.iloc[0]["timestamp"]).isoformat()
 
 
 def get_strategy_slots(state: dict) -> Dict[str, tuple]:
@@ -838,8 +917,9 @@ def _build_equity_curve_df(state: dict) -> "pd.DataFrame":
     """
     snaps = state["collector"].snapshots
     if not snaps:
-        # 回退：用 df 末价构造一条
         df = state["df"]
+        if df.empty:
+            return pd.DataFrame({"time": [], "total_equity": []})
         return pd.DataFrame({
             "time": [df.iloc[-1]["timestamp"]],
             "total_equity": [state["report"]["account"]["total_value"]],
@@ -1277,6 +1357,7 @@ def create_strategy(
     symbol: str,
     investment: float,
     params: dict,
+    timeframe: str = "4h",
 ) -> dict:
     """通用策略创建（Paper 模式返回策略元数据，实际引擎已运行）。
 
@@ -1317,6 +1398,7 @@ def create_strategy(
         "name": f"{label} {symbol}",
         "type": strategy_type,
         "symbol": symbol,
+        "timeframe": timeframe,
         "status": "running",
         "pnl": 0.0,
         "pnlPct": 0.0,

@@ -1,14 +1,16 @@
 "use client"
 
+import { useState } from "react"
 import useSWR from "swr"
 import Link from "next/link"
 import { useParams } from "next/navigation"
-import { ArrowLeft, ExternalLink } from "lucide-react"
+import { ArrowLeft, ExternalLink, Play, Pause, Settings } from "lucide-react"
 import { api } from "@/lib/api"
 import { fmtNum, fmtSigned, fmtUsd, pnlColor } from "@/lib/format"
 import { getStrategyLabelIcon } from "@/lib/strategy-meta"
 import { StatCard } from "@/components/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
   Table,
@@ -76,6 +78,7 @@ export default function StrategyDetailPage() {
   const openLotsEntries = Object.entries(data.open_lots).filter(([, v]) => v > 0)
   const closedTrades: ClosedTrade[] = data.closed_trades
   const tradeHistory: BrokerOrder[] = data.trade_history
+  const signals = data.signals ?? []
 
   // 累计手续费（statistics 已有）
   const totalFee = stats.total_commission + stats.total_slippage
@@ -103,10 +106,22 @@ export default function StrategyDetailPage() {
                 </p>
               </div>
             </div>
-            <Badge variant="outline" className="text-xs">
-              <ExternalLink className="mr-1 size-3" />
-              实时数据
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="text-xs">
+                <ExternalLink className="mr-1 size-3" />
+                实时数据
+              </Badge>
+              <Link href="/strategies">
+                <Button variant="outline" size="sm" className="gap-1.5">
+                  <Settings className="size-3.5" />
+                  参数
+                </Button>
+              </Link>
+              <Button variant="secondary" size="sm" className="gap-1.5">
+                <Pause className="size-3.5" />
+                暂停
+              </Button>
+            </div>
           </div>
         </CardHeader>
       </Card>
@@ -288,21 +303,60 @@ export default function StrategyDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* 6. 信号日志 */}
+      {signals.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">
+              信号日志
+              <Badge variant="secondary" className="ml-2 text-xs">
+                {signals.length} 条
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="max-h-[300px] overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>时间</TableHead>
+                    <TableHead>动作</TableHead>
+                    <TableHead>原因</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {[...signals].reverse().map((sig, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">
+                        {fmtTime(sig.timestamp)}
+                      </TableCell>
+                      <TableCell>
+                        <SideBadge side={sig.action === "hold" ? "buy" : sig.action} />
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {sig.reason ?? "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }
 
 function BackLink({ id }: { id: string }) {
-  // 根据策略类型推断返回的目标列表页
-  const backHref = id.startsWith("grid-") ? "/grid" : "/price-action"
-  const backLabel = id.startsWith("grid-") ? "网格交易" : "价格行为策略"
   return (
     <Link
-      href={backHref}
+      href="/strategies"
       className="inline-flex w-fit items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
     >
       <ArrowLeft className="size-3.5" />
-      返回{backLabel}
+      返回策略总览
     </Link>
   )
 }

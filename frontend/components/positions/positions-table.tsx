@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import type { Position } from "@/lib/types"
 import { fmtNum, fmtPct, fmtSigned, fmtUsd, pnlColor } from "@/lib/format"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -63,7 +64,11 @@ export function PositionsTable({ positions, loading }: { positions: Position[]; 
                         <div>{fmtSigned(p.unrealizedPnl)}</div>
                         <div className="text-xs">{fmtPct(p.unrealizedPnlPct)}</div>
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{p.strategyName}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        <Link href={`/strategy/${p.strategyName}`} className="hover:text-foreground transition-colors">
+                          {p.strategyName}
+                        </Link>
+                      </TableCell>
                     </TableRow>
                   ))}
             </TableBody>

@@ -22,9 +22,14 @@ setup_logger(log_level="ERROR")  # 压低 Paper Trading 运行噪声
 from fastapi.testclient import TestClient
 
 from src.api.app import app
+from src.api import service as svc
 
 
 _TOKEN_HEADER = {"X-API-Token": "test-token"}
+
+# 懒加载：显式激活 Paper Trading，确保数据已生成
+svc.activate()
+svc.get_state()
 
 
 @pytest.fixture(scope="module")
@@ -350,7 +355,9 @@ def test_emergency_stop_requires_auth(client):
 
 def test_emergency_stop(client):
     """R-急停：POST /admin/emergency-stop 触发 STOPPED + 写信号文件"""
-    # 确保 state 已构建
+    # 确保 state 已构建（可能被前序测试 reset_state 清空）
+    svc.activate()
+    svc.get_state()
     client.get("/account/summary", headers=_TOKEN_HEADER)
     r = client.post("/admin/emergency-stop", headers=_TOKEN_HEADER)
     assert r.status_code == 200

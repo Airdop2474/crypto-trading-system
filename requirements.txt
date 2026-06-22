@@ -6,13 +6,13 @@
 ccxt==4.2.75                  # 交易所 API 统一接口
 
 # 数据处理
-pandas==2.2.0                 # 数据分析
-numpy==1.26.3                 # 数值计算
+pandas==2.2.3                 # 数据分析（2.2.3 起提供 Python 3.13 预编译 wheel）
+numpy==2.1.3                  # 数值计算（1.26.x 不支持 Python 3.13，需升至 2.x）
 
 # 数据库
-psycopg2-binary==2.9.9        # PostgreSQL 驱动
+psycopg2-binary==2.9.12       # PostgreSQL 驱动（2.9.12 已提供 Python 3.13/3.14 预编译 wheel）
 redis==5.0.1                  # Redis 客户端
-sqlalchemy==2.0.25            # ORM
+sqlalchemy>=2.0.30            # ORM（2.0.30+ 修复 Python 3.13 兼容性）
 alembic==1.13.1              # 数据库迁移
 
 # ============================================

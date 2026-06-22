@@ -1,11 +1,13 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import useSWR from "swr"
+import useSWR, { mutate as globalMutate } from "swr"
+import Link from "next/link"
 import { toast } from "sonner"
 import {
   Activity,
   Database,
+  Eraser,
   HardDrive,
   OctagonAlert,
   RadioTower,
@@ -16,11 +18,12 @@ import {
   Zap,
 } from "lucide-react"
 import { api } from "@/lib/api"
-import { fmtNum } from "@/lib/format"
+import { fmtNum, fmtSigned, fmtPct, pnlColor } from "@/lib/format"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ApiError } from "@/components/api-error"
+import { StrategyStatusBadge } from "@/components/status-badge"
 import { ModeControls } from "@/components/system/mode-controls"
 import {
   Dialog,
@@ -48,6 +51,10 @@ export default function SystemPage() {
     { revalidateOnFocus: false, refreshInterval: REFRESH_INTERVAL },
   )
 
+  const { data: instances } = useSWR("multi-details", () => api.getMultiDetails(), {
+    refreshInterval: REFRESH_INTERVAL,
+  })
+
   // 上次更新时间（用于显示"X 秒前更新"）
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -57,6 +64,7 @@ export default function SystemPage() {
   const [cleaning, setCleaning] = useState(false)
   const [cleanupScope, setCleanupScope] = useState<"all" | "runs" | "evolutions">("all")
   const [keepLatest, setKeepLatest] = useState(true)
+  const [clearingCache, setClearingCache] = useState(false)
   useEffect(() => {
     if (data) setUpdatedAt(new Date())
   }, [data])
@@ -127,6 +135,31 @@ export default function SystemPage() {
     }
   }
 
+  // 全面重置（DB + 缓存 + 本地文件 + 内存 state）
+  const handleClearCache = async () => {
+    setClearingCache(true)
+    const toastId = toast.loading("正在全面重置…")
+    try {
+      const result = await api.clearCache()
+      const parts: string[] = []
+      if (result.db_rows_cleared > 0) parts.push(`数据库 ${result.db_rows_cleared} 条记录`)
+      if (result.cleared_keys > 0) parts.push(`缓存 ${result.cleared_keys} 个键`)
+      if (result.files_cleared > 0) parts.push(`本地文件 ${result.files_cleared} 个`)
+      const summary = parts.length > 0 ? `已清除：${parts.join("、")}` : "数据已是干净状态"
+      const statusLabel = result.status === "ok_with_warnings" ? "⚠️ 部分完成" : "全面重置完成"
+      toast.success(statusLabel, {
+        id: toastId,
+        description: `${summary}。系统已清空，需要手动启动交易`,
+      })
+      globalMutate(() => true)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "未知错误"
+      toast.error("重置失败", { id: toastId, description: msg })
+    } finally {
+      setClearingCache(false)
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4 pb-16 md:pb-0">
       {/* 顶部状态条 */}
@@ -153,6 +186,16 @@ export default function SystemPage() {
             >
               <RefreshCw className={cn("size-3", refreshing && "animate-spin")} />
               {refreshing ? "重建中…" : "重建引擎"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              onClick={handleClearCache}
+              disabled={clearingCache}
+            >
+              <Eraser className={cn("size-3", clearingCache && "animate-pulse")} />
+              {clearingCache ? "重置中…" : "全面重置"}
             </Button>
             <Button
               variant="destructive"
@@ -264,6 +307,45 @@ export default function SystemPage() {
           {/* 运行模式控制 */}
           <ModeControls />
 
+          {/* 策略运行状态 */}
+          {instances && instances.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                  <Zap className="size-4 text-primary" />
+                  策略运行状态
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-2">
+                {instances.map((inst) => (
+                  <Link
+                    key={inst.strategyId}
+                    href={`/strategy/${inst.strategyId}`}
+                    className="flex items-center justify-between rounded-md border border-border/60 bg-secondary/30 px-3 py-2.5 hover:bg-secondary/60 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div>
+                        <p className="text-sm font-medium">{inst.strategyId}</p>
+                        <p className="text-xs text-muted-foreground">{inst.symbol}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4 text-right">
+                      <div>
+                        <p className={`font-mono text-sm tabular-nums ${pnlColor(inst.realizedPnl)}`}>
+                          {fmtSigned(inst.realizedPnl)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {inst.totalTrades} 笔 / {fmtNum(inst.winRate * 100, 0)}% 胜率
+                        </p>
+                      </div>
+                      <StrategyStatusBadge status="running" />
+                    </div>
+                  </Link>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
           {/* 提示卡片 */}
           {data && !data.ws_connected ? (
             <Card className="border-warning/30 bg-warning/5">
@@ -312,6 +394,9 @@ export default function SystemPage() {
               </p>
               <p>
                 · <strong className="text-foreground">重建引擎</strong> 按钮：清空后端 Paper Trading 缓存，下次请求重跑（限 2 次/分钟）。数据源更新或配置变更后使用，不必重启服务
+              </p>
+              <p>
+                · <strong className="text-foreground">全面重置</strong> 按钮：一键清空数据库全部记录 + Redis 缓存 + 本地数据文件 + 内存 state（限 5 次/分钟）。系统清空后需手动启动交易
               </p>
               <p>
                 · <strong className="text-destructive">全局急停</strong> 按钮：立即停止所有策略交易，RiskManager 进入 STOPPED 状态（限 5 次/分钟）。恢复需调用 reset()

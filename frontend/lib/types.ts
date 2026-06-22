@@ -1,7 +1,7 @@
 // 领域模型类型定义 —— 前后端共享的数据契约
 // 未来对接真实接口时，保持这些类型不变即可让 UI 无缝复用。
 
-export type StrategyType = "grid" | "rsi" | "ma" | "buyhold" | "donchian" | "structure" | "supertrend" | "reversal"
+export type StrategyType = "grid" | "rsi" | "ma" | "buyhold" | "donchian" | "structure" | "supertrend" | "reversal" | "priceaction"
 export type StrategyStatus = "running" | "paused" | "stopped"
 export type Side = "buy" | "sell"
 export type OrderStatus = "filled" | "open" | "partially_filled" | "canceled"
@@ -28,6 +28,7 @@ export interface Strategy {
   investment: number // 投入本金
   runningDays: number
   createdAt: string
+  timeframe?: string
   // 网格参数（type === "grid" 时有效）
   grid?: GridParams
 }
@@ -398,6 +399,7 @@ export interface StartModeParams {
   pollSeconds?: number
   replayCsv?: string
   fresh?: boolean
+  strategies?: string[]
 }
 
 export interface TestnetValidationCheck {
@@ -486,6 +488,7 @@ export interface CreateStrategyParams {
   type: StrategyType
   symbol: string
   investment: number
+  timeframe?: string
   params: Record<string, number | boolean>
 }
 

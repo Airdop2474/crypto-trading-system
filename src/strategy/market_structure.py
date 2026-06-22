@@ -39,8 +39,6 @@ class MarketStructureStrategy(RiskAwareStrategy):
 
     PARAM_SCHEMA = {
         "lookback":               {"type": int,   "min": 3,  "max": 50,  "default": 10},
-        "max_consecutive_losses": {"type": int,   "min": 1,             "default": 3},
-        "max_daily_loss":         {"type": float, "min": 0,  "max": 0.1, "default": 0.02},
     }
 
     def __init__(
@@ -80,7 +78,7 @@ class MarketStructureStrategy(RiskAwareStrategy):
         if len(data) < self.lookback:
             return None
 
-        if self._is_paused():
+        if self._is_paused(current_time):
             return None
 
         close = float(data["close"].iloc[-1])

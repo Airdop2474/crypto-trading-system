@@ -2,15 +2,16 @@
 """
 Paper Trading 运行脚本（Phase 4 收尾）
 
-端到端串起：数据加载 → 网格策略 → PaperBroker 模拟成交 → 报告生成。
+端到端串起：数据加载 → 策略（默认网格，支持 8 种） → PaperBroker 模拟成交 → 报告生成。
 可复现地模拟一段连续行情下的 Paper Trading，并与回测路径对账。
 
 用法：
-    python scripts/run_paper_trading.py
+    python scripts/run_paper_trading.py --strategy grid
 
 前置：先运行 scripts/generate_oscillating_data.py 生成震荡数据。
 """
 
+import argparse
 import sys
 import glob
 from pathlib import Path
@@ -27,7 +28,15 @@ from src.execution import (
 )
 from src.monitor import MetricsCollector, MetricsWriter
 from src.strategy.grid_trading import GridTradingStrategy
+from src.strategy.registry import get_strategy, STRATEGY_REGISTRY
 from src.utils.logger import setup_logger
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description="Paper Trading 回放运行脚本")
+    p.add_argument("--strategy", choices=list(STRATEGY_REGISTRY.keys()),
+                   default="grid", help="策略类型（默认 grid）")
+    return p.parse_args(argv)
 
 
 def load_data() -> pd.DataFrame:
@@ -42,6 +51,7 @@ def load_data() -> pd.DataFrame:
 
 
 def main() -> int:
+    args = parse_args()
     setup_logger(log_level="WARNING")
 
     print("=" * 60)
@@ -58,17 +68,22 @@ def main() -> int:
     lower, upper = lo + pr * 0.1, hi - pr * 0.1
     initial = 10000.0
 
-    strategy = GridTradingStrategy(
-        lower_price=lower, upper_price=upper, grid_count=10,
-        initial_capital=initial,
-    )
+    if args.strategy == "grid":
+        strategy = GridTradingStrategy(
+            lower_price=lower, upper_price=upper, grid_count=10,
+            initial_capital=initial,
+        )
+        print(f"\n[2] Grid: range [{lower:.0f}, {upper:.0f}], 10 grids")
+    else:
+        strategy = get_strategy(args.strategy)()
+        print(f"\n[2] Strategy: {args.strategy}")
+
     # 网格多档需放开 Broker 仓位上限（默认 60% 会拒部分档位）
     broker = PaperBroker(
         initial, commission=0.001, slippage={"BTC/USDT": 0.0005},
         max_position_per_trade=1.0, max_total_position=1.0,
     )
 
-    print(f"\n[2] Grid: range [{lower:.0f}, {upper:.0f}], 10 grids")
     print("    Broker: PaperBroker, commission 0.1%, slippage 0.05%")
 
     # 运行（接入指标采集：逐根快照）
@@ -83,7 +98,6 @@ def main() -> int:
     print(f"    Cash:          ${stats['current_balance']:,.2f}")
     print(f"    Open lots:     {len(result['open_lots'])}")
     print(f"    Realized PnL:  ${result['realized_pnl']:,.2f}")
-    print(f"    Paused:        {strategy.paused}")
 
     # 报告
     gen = PaperTradingReportGenerator()

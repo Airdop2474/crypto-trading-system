@@ -1,27 +1,25 @@
 "use client"
 
-import type { StrategyRegistryEntry } from "@/lib/types"
+import type { StrategyRegistryEntry, MultiStrategyDetail, StrategyType } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Settings } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { fmtSigned, fmtNum, pnlColor } from "@/lib/format"
+import { STRATEGY_TYPE_COLOR, STRATEGY_FALLBACK_COLOR } from "@/lib/strategy-meta"
 
 interface Props {
   entry: StrategyRegistryEntry
+  instance?: MultiStrategyDetail
   onConfigure: () => void
 }
 
-/** 是否为风控类参数（创建时排除，由系统统一管理） */
-function isRiskParam(key: string): boolean {
-  const riskKeywords = ["stop_loss", "max_drawdown", "risk", "trailing_stop", "max_position"]
-  return riskKeywords.some((kw) => key.toLowerCase().includes(kw))
-}
-
-export function StrategyCard({ entry, onConfigure }: Props) {
-  const userParams = Object.entries(entry.param_schema).filter(
-    ([key]) => !isRiskParam(key),
-  )
+export function StrategyCard({ entry, instance, onConfigure }: Props) {
+  const userParams = Object.entries(entry.param_schema)
+  const colorClass = entry.key in STRATEGY_TYPE_COLOR
+    ? STRATEGY_TYPE_COLOR[entry.key as StrategyType]
+    : STRATEGY_FALLBACK_COLOR
 
   return (
     <Card>
@@ -29,9 +27,9 @@ export function StrategyCard({ entry, onConfigure }: Props) {
         <div className="flex flex-col gap-1">
           <CardTitle className="flex items-center gap-2 text-sm font-medium">
             {entry.name}
-            <Badge variant="outline" className="text-[10px] font-mono">
+            <span className={cn("rounded-md px-1.5 py-0.5 text-[11px] font-semibold leading-none", colorClass)}>
               {entry.key}
-            </Badge>
+            </span>
           </CardTitle>
           <p className="text-xs text-muted-foreground leading-relaxed">
             {entry.description}
@@ -59,10 +57,34 @@ export function StrategyCard({ entry, onConfigure }: Props) {
           </span>
         </div>
 
+        {/* PnL / 性能数据 */}
+        {instance && (
+          <div className="grid grid-cols-3 gap-3 rounded-md border border-border/50 bg-muted/25 px-3 py-2">
+            <div>
+              <p className="text-[10px] text-muted-foreground">累计盈亏</p>
+              <p className={`font-mono text-xs tabular-nums ${pnlColor(instance.realizedPnl)}`}>
+                {fmtSigned(instance.realizedPnl)}
+              </p>
+            </div>
+            <div className="text-center">
+              <p className="text-[10px] text-muted-foreground">交易笔数</p>
+              <p className="font-mono text-xs tabular-nums text-foreground">
+                {instance.totalTrades}
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] text-muted-foreground">胜率</p>
+              <p className="font-mono text-xs tabular-nums text-foreground">
+                {fmtNum(instance.winRate * 100, 0)}%
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* 参数概要 */}
-        {userParams.length > 0 && (
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">参数:</span>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">参数:</span>
+          {userParams.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">
               {userParams.map(([key, constraint]) => (
                 <Badge
@@ -81,8 +103,10 @@ export function StrategyCard({ entry, onConfigure }: Props) {
                 </Badge>
               ))}
             </div>
-          </div>
-        )}
+          ) : (
+            <span className="text-[10px] text-muted-foreground/60 italic leading-5">无参数</span>
+          )}
+        </div>
 
         {/* 配置按钮 */}
         <Button

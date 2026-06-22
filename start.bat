@@ -1,4 +1,5 @@
 @echo off
+chcp 936>nul
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
@@ -197,7 +198,8 @@ REM  Step 4: 启动基础设施（Docker，可选）
 REM ========================================================================
 echo [4/6] 基础设施 ...
 if "!DOCKER_OK!"=="1" (
-    docker compose up -d 2>nul
+    docker compose stop trading_system paper_daemon 2>nul
+    docker compose up -d timescaledb redis grafana 2>nul
     if not errorlevel 1 (
         echo   TimescaleDB + Redis + Grafana 已启动
     ) else (
@@ -216,10 +218,10 @@ set "PYTHONPATH=%~dp0"
 
 REM 先杀掉可能残留的旧进程
 for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":8000.*LISTENING"') do (
-    taskkill /PID %%p /F >nul 2>nul
+    tasklist /FI "PID eq %%p" 2>nul | findstr /I "python" >nul && taskkill /PID %%p /F >nul 2>nul
 )
 for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":3001.*LISTENING"') do (
-    taskkill /PID %%p /F >nul 2>nul
+    tasklist /FI "PID eq %%p" 2>nul | findstr /I "node" >nul && taskkill /PID %%p /F >nul 2>nul
 )
 
 REM 启动后端

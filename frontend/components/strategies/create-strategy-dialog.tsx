@@ -30,51 +30,48 @@ interface Props {
   children: React.ReactNode
 }
 
-const SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"] as const
-
-/** 是否为风控类参数（创建时排除，由系统统一管理） */
-function isRiskParam(key: string): boolean {
-  const riskKeywords = ["stop_loss", "max_drawdown", "risk", "trailing_stop", "max_position"]
-  return riskKeywords.some((kw) => key.toLowerCase().includes(kw))
-}
+const TIMEFRAMES = ["1h", "4h", "1d"]
 
 export function CreateStrategyDialog({ children }: Props) {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  // 加载注册表以获取策略类型列表和参数 schema
   const { data: registry } = useSWR(
     open ? "strategy-registry" : null,
     () => api.getStrategyRegistry(),
   )
 
+  const { data: tickers } = useSWR(
+    open ? "tickers" : null,
+    () => api.getTickers(),
+  )
+
   const strategies = registry?.strategies ?? []
+  const symbols = tickers ? [...new Set(tickers.map((t) => t.symbol))].sort() : []
 
   const [selectedType, setSelectedType] = useState<StrategyType | "">("")
-  const [symbol, setSymbol] = useState<string>("BTC/USDT")
+  const [symbol, setSymbol] = useState<string>("")
+  const [timeframe, setTimeframe] = useState("4h")
   const [investment, setInvestment] = useState("10000")
   const [params, setParams] = useState<Record<string, string>>({})
 
-  // 当前选中策略的注册信息
   const activeEntry = strategies.find((s) => s.key === selectedType)
 
-  // 用户可配参数（排除风控参数）
   const userParams: [string, ParamConstraint][] = activeEntry
-    ? Object.entries(activeEntry.param_schema).filter(([key]) => !isRiskParam(key))
+    ? Object.entries(activeEntry.param_schema)
     : []
 
   function handleTypeChange(type: string) {
     setSelectedType(type as StrategyType)
-    // 用默认值填充参数
     const entry = strategies.find((s) => s.key === type)
     if (entry) {
       const defaults: Record<string, string> = {}
       Object.entries(entry.param_schema).forEach(([key, constraint]) => {
-        if (!isRiskParam(key) && entry.defaults[key] != null) {
+        if (entry.defaults[key] != null) {
           defaults[key] = String(entry.defaults[key])
-        } else if (!isRiskParam(key) && constraint.min != null) {
+        } else if (constraint.min != null) {
           defaults[key] = String(constraint.min)
-        } else if (!isRiskParam(key)) {
+        } else {
           defaults[key] = ""
         }
       })
@@ -92,6 +89,10 @@ export function CreateStrategyDialog({ children }: Props) {
       toast.error("请选择策略类型")
       return
     }
+    if (!symbol) {
+      toast.error("请选择交易对")
+      return
+    }
 
     const investNum = parseFloat(investment)
     if (isNaN(investNum) || investNum <= 0) {
@@ -99,7 +100,6 @@ export function CreateStrategyDialog({ children }: Props) {
       return
     }
 
-    // 解析参数
     const parsedParams: Record<string, number | boolean> = {}
     for (const [key, constraint] of userParams) {
       const raw = params[key]
@@ -133,15 +133,16 @@ export function CreateStrategyDialog({ children }: Props) {
         type: selectedType,
         symbol,
         investment: investNum,
+        timeframe,
         params: parsedParams,
       })
       toast.success(`策略 "${result.name}" 已创建`, {
-        description: `${symbol} | ${investNum.toLocaleString()} USDT`,
+        description: `${symbol} | ${investNum.toLocaleString()} USDT | ${timeframe}`,
       })
       setOpen(false)
-      // 重置表单
       setSelectedType("")
-      setSymbol("BTC/USDT")
+      setSymbol("")
+      setTimeframe("4h")
       setInvestment("10000")
       setParams({})
     } catch (err) {
@@ -163,7 +164,6 @@ export function CreateStrategyDialog({ children }: Props) {
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          {/* 策略类型 */}
           <div className="flex flex-col gap-2">
             <Label>策略类型</Label>
             <Select
@@ -183,7 +183,6 @@ export function CreateStrategyDialog({ children }: Props) {
             </Select>
           </div>
 
-          {/* 交易对 */}
           <div className="flex flex-col gap-2">
             <Label>交易对</Label>
             <Select
@@ -191,10 +190,10 @@ export function CreateStrategyDialog({ children }: Props) {
               onValueChange={(v) => v && setSymbol(v)}
             >
               <SelectTrigger className="w-full">
-                <SelectValue />
+                <SelectValue placeholder={symbols.length === 0 ? "加载中..." : "请选择交易对"} />
               </SelectTrigger>
               <SelectContent>
-                {SYMBOLS.map((s) => (
+                {symbols.map((s) => (
                   <SelectItem key={s} value={s}>
                     {s}
                   </SelectItem>
@@ -203,21 +202,37 @@ export function CreateStrategyDialog({ children }: Props) {
             </Select>
           </div>
 
-          {/* 投入本金 */}
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="create-investment">投入本金 (USDT)</Label>
-            <Input
-              id="create-investment"
-              type="number"
-              placeholder="10000"
-              min={1}
-              required
-              value={investment}
-              onChange={(e) => setInvestment(e.target.value)}
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-2">
+              <Label>时间周期</Label>
+              <Select value={timeframe} onValueChange={(v) => v && setTimeframe(v)}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {TIMEFRAMES.map((tf) => (
+                    <SelectItem key={tf} value={tf}>
+                      {tf}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="create-investment">投入本金 (USDT)</Label>
+              <Input
+                id="create-investment"
+                type="number"
+                placeholder="10000"
+                min={1}
+                required
+                value={investment}
+                onChange={(e) => setInvestment(e.target.value)}
+              />
+            </div>
           </div>
 
-          {/* 动态参数 */}
           {userParams.length > 0 && (
             <div className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/30 p-3">
               <span className="text-xs font-medium text-muted-foreground">
@@ -256,7 +271,6 @@ export function CreateStrategyDialog({ children }: Props) {
             </div>
           )}
 
-          {/* 策略描述 */}
           {activeEntry && (
             <div className="rounded-md bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
               {activeEntry.description}
@@ -272,7 +286,7 @@ export function CreateStrategyDialog({ children }: Props) {
             >
               取消
             </Button>
-            <Button type="submit" disabled={loading || !selectedType}>
+            <Button type="submit" disabled={loading || !selectedType || !symbol}>
               {loading && <Loader2 className="mr-1.5 size-4 animate-spin" />}
               {loading ? "创建中..." : "创建策略"}
             </Button>

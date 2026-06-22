@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useCallback } from "react"
+import useSWR from "swr"
 import { Play, Square, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, XCircle, Loader2 } from "lucide-react"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -74,6 +75,16 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
   const isTradeMode = mode !== "data_download"
   const startDisabled = isRunning || (isTradeMode && tradingModeRunning)
 
+  // 策略注册表（用于启动参数选策略）
+  const { data: registryData } = useSWR("strategy-registry", () => api.getStrategyRegistry(), {
+    revalidateOnFocus: false,
+    dedupingInterval: 60_000,
+  })
+  const strategyLabels: Record<string, string> = Object.fromEntries(
+    (registryData?.strategies ?? []).map((e) => [e.key, e.name])
+  )
+  const [selectedStrategies, setSelectedStrategies] = useState<string[]>([])
+
   const handleStart = useCallback(async () => {
     setLoading(true)
     try {
@@ -86,6 +97,7 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
       if (defaults.showPollSeconds) params.pollSeconds = pollSeconds
       if (defaults.showReplayCsv) params.replayCsv = replayCsv || undefined
       if (fresh) params.fresh = true
+      if (selectedStrategies.length > 0) params.strategies = selectedStrategies
 
       await api.startMode(mode, params)
       toast.success(`${MODE_LABEL[mode]} 已启动`)
@@ -317,6 +329,31 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
                   value={replayCsv}
                   onChange={(e) => setReplayCsv(e.target.value)}
                 />
+              </div>
+            )}
+            {/* 策略选择 */}
+            {isTradeMode && (
+              <div className="col-span-2 space-y-1">
+                <Label className="text-[11px]">运行策略</Label>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {Object.entries(strategyLabels).map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-1.5 cursor-pointer text-xs">
+                      <input
+                        type="checkbox"
+                        checked={selectedStrategies.includes(key)}
+                        onChange={(e) => {
+                          setSelectedStrategies((prev) =>
+                            e.target.checked
+                              ? [...prev, key]
+                              : prev.filter((s) => s !== key)
+                          )
+                        }}
+                        className="size-3 rounded border-border"
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
               </div>
             )}
             <div className="col-span-2 flex items-center gap-2">

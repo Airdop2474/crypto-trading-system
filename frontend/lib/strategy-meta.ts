@@ -33,6 +33,7 @@ export const STRATEGY_TYPE_LABEL: Record<StrategyType, string> = {
   structure: "市场结构",
   supertrend: "SuperTrend",
   reversal: "关键位反转",
+  priceaction: "价格行为学",
 }
 
 /** 策略类型 → 图标 */
@@ -45,6 +46,7 @@ export const STRATEGY_TYPE_ICON: Record<StrategyType, LucideIcon> = {
   structure: Building2,
   supertrend: Zap,
   reversal: RefreshCw,
+  priceaction: BarChart3,
 }
 
 /** 策略类型 → Tailwind 配色类（用于 Badge / 标签底色） */
@@ -57,6 +59,7 @@ export const STRATEGY_TYPE_COLOR: Record<StrategyType, string> = {
   structure: "bg-rose-500/20 text-rose-400",
   supertrend: "bg-indigo-500/20 text-indigo-400",
   reversal: "bg-orange-500/20 text-orange-400",
+  priceaction: "bg-slate-500/20 text-slate-400",
 }
 
 /** fallback（未知 strategy_id 时） */

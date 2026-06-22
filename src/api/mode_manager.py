@@ -66,6 +66,7 @@ class ModeParams(BaseModel):
     poll_seconds: int = Field(default=60, ge=10, le=600)
     replay_csv: str | None = None
     fresh: bool = False
+    strategies: list[str] = ["grid"]
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +287,10 @@ class ModeManager:
 
         if params.fresh:
             args.append("--fresh")
+
+        # 多策略支持：传递所有选中的策略类型
+        for s in params.strategies:
+            args.extend(["--strategy", s])
 
         return base + args
 
