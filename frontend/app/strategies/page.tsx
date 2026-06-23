@@ -1,12 +1,13 @@
 "use client"
 
 import { useState } from "react"
-import useSWR from "swr"
+import useSWR, { mutate as globalMutate } from "swr"
 import Link from "next/link"
 import { api } from "@/lib/api"
 import type { StrategyRegistryEntry, MultiStrategyDetail } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { ApiError } from "@/components/api-error"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { StrategyCard } from "@/components/strategies/strategy-card"
@@ -14,9 +15,11 @@ import { CreateStrategyDialog } from "@/components/strategies/create-strategy-di
 import { StrategyParamsDialog } from "@/components/strategies/strategy-params-dialog"
 import { RunHistory } from "@/components/strategies/run-history"
 import { StrategyStatusBadge } from "@/components/status-badge"
-import { fmtSigned, fmtPct, pnlColor, fmtNum } from "@/lib/format"
-import { parseStrategyType, STRATEGY_TYPE_ICON, STRATEGY_FALLBACK_ICON, STRATEGY_TYPE_LABEL, STRATEGY_TYPE_COLOR, STRATEGY_FALLBACK_COLOR } from "@/lib/strategy-meta"
-import { Plus, ArrowUpRight } from "lucide-react"
+import { fmtSigned, pnlColor, fmtNum } from "@/lib/format"
+import { parseStrategyType, STRATEGY_TYPE_ICON, STRATEGY_FALLBACK_ICON, STRATEGY_TYPE_LABEL, getParamLabel } from "@/lib/strategy-meta"
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
+import { Plus, ArrowUpRight, Trash2, Pencil, Check, X } from "lucide-react"
+import { toast } from "sonner"
 
 export default function StrategiesPage() {
   return (
@@ -184,18 +187,11 @@ function StrategiesContent() {
             <CardTitle className="text-sm font-medium">已保存的策略参数</CardTitle>
           </CardHeader>
           <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-            {Object.entries(configs).map(([key, params]) => (
-              <div key={key} className="rounded-md border border-border/60 bg-muted/20 p-3">
-                <p className="text-xs font-medium text-foreground mb-1.5">{key}</p>
-                <div className="space-y-0.5">
-                  {Object.entries(params).map(([k, v]) => (
-                    <p key={k} className="text-[11px] text-muted-foreground">
-                      {k}: <span className="font-mono text-foreground/80">{String(v)}</span>
-                    </p>
-                  ))}
-                </div>
-              </div>
-            ))}
+            <TooltipProvider>
+              {Object.entries(configs).map(([key, params]) => (
+                <SavedConfigCard key={key} configKey={key} params={params} />
+              ))}
+            </TooltipProvider>
           </CardContent>
         </Card>
       )}
@@ -224,6 +220,127 @@ function StrategiesContent() {
           }}
         />
       )}
+    </div>
+  )
+}
+
+/** 已保存策略配置卡片：hover 显示参数，支持删除和重命名 */
+function SavedConfigCard({
+  configKey,
+  params,
+}: {
+  configKey: string
+  params: Record<string, number | boolean>
+}) {
+  const [renaming, setRenaming] = useState(false)
+  const [newName, setNewName] = useState(configKey)
+  const [deleting, setDeleting] = useState(false)
+
+  const displayName = (() => {
+    const t = parseStrategyType(configKey)
+    return t ? STRATEGY_TYPE_LABEL[t] : configKey
+  })()
+
+  const paramCount = Object.keys(params).length
+
+  async function handleDelete() {
+    setDeleting(true)
+    try {
+      await api.deleteStrategyConfig(configKey)
+      toast.success(`已删除 "${displayName}" 的配置`)
+      globalMutate("strategy-configs")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "删除失败")
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  async function handleRename() {
+    const trimmed = newName.trim()
+    if (!trimmed || trimmed === configKey) {
+      setRenaming(false)
+      return
+    }
+    try {
+      await api.renameStrategyConfig(configKey, trimmed)
+      toast.success(`已重命名为 "${trimmed}"`)
+      globalMutate("strategy-configs")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "重命名失败")
+    } finally {
+      setRenaming(false)
+    }
+  }
+
+  return (
+    <div className="group relative rounded-md border border-border/60 bg-muted/20 p-3">
+      <div className="flex items-center justify-between gap-2">
+        {renaming ? (
+          <div className="flex items-center gap-1 flex-1">
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleRename()
+                if (e.key === "Escape") setRenaming(false)
+              }}
+              className="h-6 text-xs"
+              autoFocus
+            />
+            <Button size="icon" variant="ghost" className="size-6" onClick={handleRename}>
+              <Check className="size-3" />
+            </Button>
+            <Button size="icon" variant="ghost" className="size-6" onClick={() => setRenaming(false)}>
+              <X className="size-3" />
+            </Button>
+          </div>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <p className="text-xs font-medium text-foreground cursor-help truncate">
+                  {displayName}
+                  <span className="ml-1.5 text-[10px] text-muted-foreground">({paramCount} 个参数)</span>
+                </p>
+              }
+            />
+            <TooltipContent side="bottom" className="max-w-sm">
+              <div className="space-y-0.5 text-left">
+                {Object.entries(params).map(([k, v]) => (
+                  <p key={k} className="text-[11px]">
+                    {getParamLabel(k)}: <span className="font-mono">{v === true ? "是" : v === false ? "否" : String(v)}</span>
+                  </p>
+                ))}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        {!renaming && (
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-6"
+              onClick={() => { setNewName(configKey); setRenaming(true) }}
+              title="重命名"
+            >
+              <Pencil className="size-3" />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-6 hover:text-destructive"
+              onClick={handleDelete}
+              disabled={deleting}
+              title="删除"
+            >
+              <Trash2 className="size-3" />
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -79,6 +79,12 @@ const PAGE_SIZE_OPTIONS = [
   { value: "100", label: "100 条" },
 ]
 
+const THEME_LABEL_MAP: Record<string, string> = {
+  dark: "深色",
+  light: "浅色",
+  system: "跟随系统",
+}
+
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme()
   const [prefs, setPrefs] = useState<UiPrefs>(DEFAULT_PREFS)
@@ -89,8 +95,9 @@ export default function SettingsPage() {
     setMounted(true)
   }, [])
 
-  // theme 在 mounted 前可能为 undefined（next-themes 行为），统一兜底
+  // theme 在 mounted 前可能为 undefined，mounted 后才渲染 Select
   const themeValue: string = theme ?? "dark"
+  const themeLabel = THEME_LABEL_MAP[themeValue] ?? "深色"
 
   const update = (patch: Partial<UiPrefs>) => {
     const next = { ...prefs, ...patch }
@@ -132,15 +139,15 @@ export default function SettingsPage() {
               <p className="text-xs text-muted-foreground">深色 / 浅色 / 跟随系统</p>
             </div>
             <Select
-              value={themeValue as string}
+              value={themeValue}
               onValueChange={(v: string | null) => {
                 if (!v) return
                 setTheme(v)
-                toast.success(`主题切换为：${v === "dark" ? "深色" : v === "light" ? "浅色" : "跟随系统"}`)
+                toast.success(`主题切换为：${THEME_LABEL_MAP[v] ?? v}`)
               }}
             >
               <SelectTrigger className="w-40">
-                <SelectValue />
+                <SelectValue>{themeLabel}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="dark">深色</SelectItem>

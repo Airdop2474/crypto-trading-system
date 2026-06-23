@@ -12,7 +12,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select"
 
 const TASK_OPTIONS: { value: AgentTask; label: string }[] = [
@@ -22,6 +21,14 @@ const TASK_OPTIONS: { value: AgentTask; label: string }[] = [
   { value: "param_sensitivity", label: "参数敏感性" },
   { value: "weekly_review", label: "周报" },
 ]
+
+const TASK_LABEL: Record<AgentTask, string> = {
+  backtest: "回测分析",
+  trade_attribution: "交易归因",
+  risk_checklist: "风险清单",
+  param_sensitivity: "参数敏感性",
+  weekly_review: "周报",
+}
 
 export function AnalysisReport() {
   const [task, setTask] = useState<AgentTask>("backtest")
@@ -57,13 +64,9 @@ export function AnalysisReport() {
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-3">
-            <Select
-              value={task}
-              onValueChange={(v) => v && setTask(v as AgentTask)}
-              disabled={loading}
-            >
+            <Select value={task} onValueChange={(v) => setTask(v as AgentTask)} disabled={loading}>
               <SelectTrigger className="w-40">
-                <SelectValue placeholder="选择分析类型" />
+                {TASK_LABEL[task]}
               </SelectTrigger>
               <SelectContent>
                 {TASK_OPTIONS.map((opt) => (
@@ -111,9 +114,20 @@ export function AnalysisReport() {
                 <Brain className="size-3.5 text-purple-400" />
                 推理过程
               </h4>
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-                {result.reasoning}
-              </p>
+              <div className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+                {typeof result.reasoning === "string"
+                  ? result.reasoning
+                  : Object.entries(result.reasoning).map(([k, v]) => (
+                      <div key={k} className="mb-2">
+                        <span className="font-medium text-foreground">{k}:</span>{" "}
+                        {v == null
+                          ? "无"
+                          : typeof v === "object"
+                            ? JSON.stringify(v, null, 2)
+                            : String(v)}
+                      </div>
+                    ))}
+              </div>
             </section>
 
             {/* 建议 */}

@@ -121,12 +121,18 @@ class PaperTradingDaemon:
         _log_saved = f" (已加载保存配置: {saved})" if saved else ""
 
         if strat_name == "grid":
-            self.strategy = GridTradingStrategy(
+            # grid 也从 saved 配置加载参数（grid_count / position_per_grid / enable_filters）
+            grid_kwargs = dict(
                 lower_price=lower, upper_price=upper, grid_count=10,
                 initial_capital=initial,
                 max_consecutive_losses=_cfg.MAX_CONSECUTIVE_LOSSES,
                 max_daily_loss=_cfg.MAX_DAILY_LOSS,
             )
+            grid_schema = getattr(GridTradingStrategy, "PARAM_SCHEMA", {})
+            for k, v in saved.items():
+                if k in grid_schema:
+                    grid_kwargs[k] = v
+            self.strategy = GridTradingStrategy(**grid_kwargs)
         else:
             # 用保存的参数覆写默认值
             kwargs = dict(initial_capital=initial,
@@ -137,6 +143,16 @@ class PaperTradingDaemon:
             for k, v in saved.items():
                 if k in schema:
                     kwargs[k] = v
+            # 回放模式：强制关闭趋势过滤等限制性过滤器
+            # 模拟数据无明显趋势，趋势过滤会阻止 RSI 超卖买入等信号
+            if getattr(self.args, "replay", None):
+                if "enable_trend_filter" in schema:
+                    kwargs["enable_trend_filter"] = False
+            # 只传策略 __init__ 实际接受的参数（如 BuyAndHold 不接受 initial_capital）
+            import inspect
+            sig_params = set(inspect.signature(get_strategy(strat_name).__init__).parameters.keys())
+            sig_params.discard("self")
+            kwargs = {k: v for k, v in kwargs.items() if k in sig_params}
             self.strategy = get_strategy(strat_name)(**kwargs)
         logger.info(f"策略 [{strat_name}] 已构建{_log_saved}")
         # P0-2: 风控参数从 .env / config.py 读取，而非硬编码默认值
@@ -152,10 +168,17 @@ class PaperTradingDaemon:
             self.broker, exec_config = self._build_exchange_broker()
         else:
             # P0-3: 仓位限制从 config 读取，不再设为 100%
+            # 回放模式放宽仓位限制：模拟验证策略逻辑，不受实盘仓位管控约束
+            if getattr(self.args, "replay", None):
+                max_per_trade = 1.0
+                max_total = 1.0
+            else:
+                max_per_trade = _cfg.MAX_POSITION_SIZE
+                max_total = _cfg.MAX_TOTAL_POSITION
             self.broker = PaperBroker(
                 initial, commission=0.001, slippage={self.symbol: 0.0005},
-                max_position_per_trade=_cfg.MAX_POSITION_SIZE,
-                max_total_position=_cfg.MAX_TOTAL_POSITION,
+                max_position_per_trade=max_per_trade,
+                max_total_position=max_total,
             )
             exec_config = None  # None → runner 从 PaperBroker 快照（行为不变）
         # runner 持有 risk → process_bar 内 _execute_signal 自动按 can_trade() 门控
@@ -201,8 +224,20 @@ class PaperTradingDaemon:
         src = self.args.replay
         if src == "generate" or not src:
             sys.path.insert(0, str(project_root))
-            from scripts.generate_oscillating_data import generate_oscillating_ohlcv
-            df = generate_oscillating_ohlcv()
+            market_type = getattr(self.args, "market_type", "oscillating") or "oscillating"
+            from scripts.generate_mock_data import generate_mock_ohlcv
+            from datetime import datetime, timedelta
+            end = datetime.now()
+            # 使用用户指定的天数，而非硬编码 30 天
+            days = max(1, int(self.args.days or 30))
+            start = end - timedelta(days=days)
+            df = generate_mock_ohlcv(
+                start_date=start.strftime("%Y-%m-%d"),
+                end_date=end.strftime("%Y-%m-%d"),
+                timeframe=self.args.timeframe or "4h",
+                initial_price=50000.0,
+                market_type=market_type,
+            )
         else:
             df = pd.read_csv(src)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
@@ -238,6 +273,8 @@ class PaperTradingDaemon:
             }
         st = {
             "version": 1, "symbol": self.symbol,
+            "strategy_name": self.args.strategy,
+            "initial_capital": self.args.initial,
             "day_count": self.day_count,
             "current_day": self.current_day.isoformat() if self.current_day else None,
             "last_bar_ts": self.last_bar_ts,
@@ -618,6 +655,27 @@ class PaperTradingDaemon:
         signal.signal(signal.SIGTERM, _graceful_exit)
 
     def _finish(self):
+        # 回放模式：强制平仓所有未平仓位，使盈亏计入 closed_trades
+        if self.args.replay:
+            pos = self.broker.get_position(self.symbol)
+            if pos and pos > 0:
+                last_bar = self._history.iloc[-1]
+                close_price = float(last_bar["close"])
+                ts = last_bar["timestamp"]
+                runner = self.runner
+                # 遍历所有 tag 的 lots 逐个平仓（grid 等多 tag 策略的 lots
+                # 存在网格索引 tag 下，_execute_signal("SELL") 用 LEGACY_TAG 找不到）
+                if runner.lots:
+                    for tag, lot in list(runner.lots.items()):
+                        if lot["amount"] > 0:
+                            runner._sell(tag, lot["amount"], close_price, ts, self.strategy)
+                else:
+                    # 无 lots 记账（如 BuyAndHold 返回字符串信号），用 LEGACY_TAG 平仓
+                    runner._sell(runner.LEGACY_TAG, pos, close_price, ts, self.strategy)
+                logger.info(f"回放结束强制平仓: {pos:.6f} @ {close_price:.2f}")
+                # 平仓后必须写 state 文件，否则前端读不到平仓结果
+                self._checkpoint()
+
         print(f"完成：累计 {self.day_count} 天日报，检查点 {self.state_file}")
         crits = self.alert_mgr.critical_alerts()
         if crits:
@@ -636,6 +694,9 @@ def parse_args(argv=None):
                    help="策略类型（可多次指定以运行多个策略，默认 grid）")
     p.add_argument("--replay", nargs="?", const="generate", default=None,
                    help="回放模式；可选 CSV 路径，缺省用 generate 生成数据")
+    p.add_argument("--market-type", default="oscillating",
+                   choices=["oscillating", "trending", "black_swan", "random"],
+                   help="生成数据的市场类型（仅 --replay generate 时生效）")
     p.add_argument("--state-file", default="data/paper_daemon_state.json")
     p.add_argument("--report-dir", default="data/reports/paper/daily")
     p.add_argument("--poll-seconds", type=int, default=60)

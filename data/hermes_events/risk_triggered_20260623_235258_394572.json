@@ -1,0 +1,1 @@
+{"source": "crypto_trading_system", "kind": "risk_triggered", "payload": {"type": "PAUSE", "reason": "total drawdown 22.34% >= 15.00%", "state": "PAUSED"}, "timestamp": "2026-06-23T15:52:58.394572+00:00"}

@@ -17,6 +17,7 @@ from datetime import date as DateType
 from typing import Optional
 
 import pandas as pd
+import numpy as np
 
 from src.strategy.base import Strategy
 from src.utils.logger import logger
@@ -245,6 +246,99 @@ class RiskAwareStrategy(Strategy):
     @daily_pnl.setter
     def daily_pnl(self, value: float) -> None:
         self._daily_pnl = value
+
+    # ------------------------------------------------------------------
+    # ADX 趋势过滤器
+    # ------------------------------------------------------------------
+    _adx_period: int = 14
+    _adx_high_buffer: list = []
+    _adx_low_buffer: list = []
+    _adx_close_buffer: list = []
+    _adx_value: Optional[float] = None
+    _adx_trend_direction: Optional[str] = None
+    _adx_initialized: bool = False
+
+    def _init_adx(self, period: int = 14) -> None:
+        """初始化 ADX 状态。"""
+        self._adx_period = period
+        self._adx_high_buffer.clear()
+        self._adx_low_buffer.clear()
+        self._adx_close_buffer.clear()
+        self._adx_value = None
+        self._adx_trend_direction = None
+        self._adx_initialized = False
+
+    def _update_adx(self, high: float, low: float, close: float) -> None:
+        """增量更新 ADX。
+
+        计算：+DM, -DM, TR → 平滑 → +DI, -DI → DX → ADX(平滑)
+        """
+        self._adx_high_buffer.append(high)
+        self._adx_low_buffer.append(low)
+        self._adx_close_buffer.append(close)
+
+        n = self._adx_period
+        if len(self._adx_high_buffer) < n + 1:
+            return
+
+        # 只保留需要的数据
+        h = self._adx_high_buffer[-(n + 1):]
+        l_vals = self._adx_low_buffer[-(n + 1):]
+        c = self._adx_close_buffer[-(n + 1):]
+        self._adx_high_buffer = h
+        self._adx_low_buffer = l_vals
+        self._adx_close_buffer = c
+
+        # 计算 +DM, -DM, TR
+        plus_dm = []
+        minus_dm = []
+        tr = []
+        for i in range(1, len(h)):
+            up_move = h[i] - h[i - 1]
+            down_move = l_vals[i - 1] - l_vals[i]
+            p = up_move if up_move > down_move and up_move > 0 else 0
+            m = down_move if down_move > up_move and down_move > 0 else 0
+            plus_dm.append(p)
+            minus_dm.append(m)
+            tr.append(max(h[i] - l_vals[i], abs(h[i] - c[i - 1]), abs(l_vals[i] - c[i - 1])))
+
+        if not plus_dm:
+            return
+
+        # Wilder 平滑
+        def wilder_smooth(values):
+            result = [values[0]]
+            for v in values[1:]:
+                result.append(result[-1] * (n - 1) / n + v / n)
+            return result
+
+        smooth_plus = wilder_smooth(plus_dm)
+        smooth_minus = wilder_smooth(minus_dm)
+        smooth_tr = wilder_smooth(tr)
+
+        plus_di = 100 * smooth_plus[-1] / smooth_tr[-1] if smooth_tr[-1] > 0 else 0
+        minus_di = 100 * smooth_minus[-1] / smooth_tr[-1] if smooth_tr[-1] > 0 else 0
+
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di) if (plus_di + minus_di) > 0 else 0
+
+        if self._adx_value is None:
+            self._adx_value = dx
+        else:
+            self._adx_value = (self._adx_value * (n - 1) + dx) / n
+
+        self._adx_trend_direction = "up" if plus_di > minus_di else "down"
+        self._adx_initialized = True
+
+    def _is_trending(self, threshold: float = 25.0) -> bool:
+        """ADX > threshold → 趋势市。"""
+        return self._adx_initialized and (self._adx_value or 0) > threshold
+
+    def _is_ranging(self, threshold: float = 20.0) -> bool:
+        """ADX < threshold → 震荡市。"""
+        return self._adx_initialized and (self._adx_value or 0) < threshold
+
+    def _get_adx(self) -> Optional[float]:
+        return self._adx_value
 
 
 __all__ = ["RiskAwareStrategy", "CircuitBreaker"]

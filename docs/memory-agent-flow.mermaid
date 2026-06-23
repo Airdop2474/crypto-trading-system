@@ -1,0 +1,44 @@
+sequenceDiagram
+    participant F as 前端
+    participant API as API /agent/analyze
+    participant CB as ContextBuilder
+    participant MS as MemoryStore (pgvector)
+    participant LLM as LLM Client
+    participant AL as AuditLog
+    participant FB as Feedback
+
+    Note over F,FB: 路径 A：分析 + 记忆注入（读取路径）
+
+    F->>API: POST /agent/analyze {task, strategy_id}
+    API->>CB: build_context(task, strategy_id)
+    CB->>MS: search(query="similar analyses", kind="analysis", limit=5)
+    CB->>MS: search(query=task, kind="trade_result", limit=10)
+    CB->>MS: search(query=strategy_id, kind="feedback", limit=5)
+    MS-->>CB: 返回相关记忆列表（含 embedding 相似度评分）
+    CB-->>API: 返回 {{记忆摘要}, {当前输入}}
+    API->>LLM: 调用（prompt = 记忆上下文 + 当前分析请求）
+    LLM-->>API: 分析结果
+    API->>MS: store(kind="analysis", content=结果, tags=[task, strategy_id])
+    API->>AL: record(task, input, output)
+    API-->>F: 返回分析结果 + memory_refs[]
+
+    Note over F,FB: 路径 B：人类反馈（学习路径）
+
+    F->>API: POST /agent/feedback {memory_id, score(1-5), note}
+    API->>MS: feedback(memory_id, score, note)
+    MS-->>F: ok
+
+    Note over F,FB: 路径 C：主动检索（知识查询路径）
+
+    F->>API: POST /agent/memory/search {query, kind?, limit?}
+    API->>MS: search(query, kind, limit, min_score=0.6)
+    MS-->>API: [{content, score, timestamp, tags}, ...]
+    API-->>F: {results: [...], total}
+
+    Note over F,FB: 路径 D：定时记忆维护
+
+    loop 每天/每周
+        MS->>MS: 降权过时记忆（score *= 0.95）
+        MS->>MS: 删除 score < 0.1 的噪声记忆
+        MS->>MS: 合并相似度 > 0.95 的重复记忆
+    end

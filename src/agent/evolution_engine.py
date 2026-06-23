@@ -15,6 +15,7 @@ from loguru import logger
 from src.agent.param_grid_builder import ParamGridBuilder
 from src.agent.evolution_guardrails import EvolutionGuardrails, EvolutionThresholds
 from src.agent.llm_client import LLMClient
+from src.agent.memory import ContextBuilder, MemoryKind, get_memory_store
 from src.backtest.param_scanner import ParameterScanner
 from src.strategy.registry import STRATEGY_REGISTRY
 from src.utils.config import config as _cfg
@@ -101,6 +102,10 @@ class EvolutionEngine:
             commission=0.001,
             slippage=0.001,
         )
+
+        # 记忆系统
+        self._memory = get_memory_store()
+        self._ctx = ContextBuilder()
 
     # ------------------------------------------------------------------
     # 公共 API
@@ -194,7 +199,7 @@ class EvolutionEngine:
             risk_manager_state=risk_manager_state,
         )
 
-        # 5. LLM 解读
+        # 5. LLM 解读（注入历史进化记忆）
         wf_summary = {
             "n_windows": len(wf_df),
             "oos_sharpes": wf_df["out_sample_sharpe"].tolist(),
@@ -202,6 +207,11 @@ class EvolutionEngine:
             "oos_trades": wf_df["out_sample_trades"].tolist(),
             "best_params": best_params,
         }
+
+        # 检索同类历史进化作为上下文
+        evolution_ctx = self._ctx.build_evolution_context(strategy_id, strategy_key)
+        if evolution_ctx:
+            wf_summary["evolution_history"] = evolution_ctx
 
         llm_result = self.llm_client.interpret_evolution(
             strategy_name=strategy_name,
@@ -241,6 +251,25 @@ class EvolutionEngine:
 
         # 8. 持久化到 DB
         self._persist_to_db(result)
+
+        # 9. 写入记忆系统
+        try:
+            self._memory.store(
+                MemoryKind.EVOLUTION,
+                content={
+                    "strategy_id": strategy_id,
+                    "old_params": current_params,
+                    "new_params": best_params,
+                    "old_sharpe": current_metrics.get("sharpe_ratio", 0),
+                    "new_sharpe": best_metrics.get("sharpe_ratio", 0),
+                    "guardrail_passed": passed,
+                    "applied": applied,
+                },
+                tags=[strategy_key, strategy_id, "evolution"],
+                source="evolution_engine",
+            )
+        except Exception as e:
+            logger.debug(f"进化记忆写入失败（非致命）: {e}")
 
         logger.info(
             f"[进化] {strategy_id} 完成: passed={passed}, applied={applied}, "

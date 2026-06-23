@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
 import type { ParamConstraint } from "@/lib/types"
+import { getParamLabel } from "@/lib/param-labels"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -81,17 +82,17 @@ export function StrategyParamsDialog({
       } else {
         const num = Number(raw)
         if (isNaN(num)) {
-          toast.error(`参数 ${key} 必须为数字`)
+          toast.error(`参数 ${getParamLabel(key)} 必须为数字`)
           setLoading(false)
           return
         }
         if (constraint.min != null && num < constraint.min) {
-          toast.error(`参数 ${key} 不能小于 ${constraint.min}`)
+          toast.error(`参数 ${getParamLabel(key)} 不能小于 ${constraint.min}`)
           setLoading(false)
           return
         }
         if (constraint.max != null && num > constraint.max) {
-          toast.error(`参数 ${key} 不能大于 ${constraint.max}`)
+          toast.error(`参数 ${getParamLabel(key)} 不能大于 ${constraint.max}`)
           setLoading(false)
           return
         }
@@ -121,27 +122,27 @@ export function StrategyParamsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-md flex flex-col max-h-[80vh]">
+        <DialogHeader className="flex-shrink-0">
           <DialogTitle>配置策略参数</DialogTitle>
           <DialogDescription>
             修改 {strategyName} 的运行参数。仅调整需要变更的值，留空则保持原值。
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4 flex-1 overflow-hidden">
           {paramEntries.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center">
               该策略无可调参数
             </p>
           ) : (
-            <div className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/30 p-3">
+            <div className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/30 p-3 overflow-y-auto flex-1">
               {paramEntries.map(([key, constraint]) => {
                 const isDefault = params[key] != null && defaultParams?.[key] != null && params[key] === String(defaultParams[key])
                 return (
                   <div key={key} className="flex flex-col gap-1.5">
                     <div className="flex items-center justify-between">
                       <Label htmlFor={`sp-${key}`} className="text-xs">
-                        {key}
+                        {getParamLabel(key)}
                         {currentParams[key] != null && (
                           <span className="ml-2 text-muted-foreground font-mono">
                             (当前: {String(currentParams[key])})
@@ -196,7 +197,7 @@ export function StrategyParamsDialog({
             </div>
           )}
 
-          <DialogFooter>
+          <DialogFooter className="flex-shrink-0">
             <Button
               type="button"
               variant="ghost"

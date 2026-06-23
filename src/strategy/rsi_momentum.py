@@ -90,6 +90,7 @@ class RSIMomentumStrategy(RiskAwareStrategy):
             oversold=oversold,
             overbought=overbought,
             ema_period=ema_period,
+            enable_trend_filter=enable_trend_filter,
         )
 
         logger.info(

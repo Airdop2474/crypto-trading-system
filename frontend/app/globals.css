@@ -135,3 +135,20 @@
     @apply font-sans;
   }
 }
+
+@layer utilities {
+  .compact-mode [class*="gap-"] {
+    gap: 0.375rem !important;
+  }
+  .compact-mode .p-4 {
+    padding: 0.5rem !important;
+  }
+  .compact-mode .px-4 {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+  }
+  .compact-mode .py-2 {
+    padding-top: 0.25rem !important;
+    padding-bottom: 0.25rem !important;
+  }
+}

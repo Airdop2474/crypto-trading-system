@@ -17,9 +17,14 @@ echo [0/6] 检查环境 ...
 
 where python >nul 2>nul
 if errorlevel 1 (
-    echo   [X] Python 未找到。请安装 Python 3.11+ 并勾选 "Add to PATH"
-    echo       https://www.python.org/downloads/
-    pause & exit /b 1
+    REM try Hermes venv Python
+    if exist "%USERPROFILE%\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe" (
+        set "PATH=%USERPROFILE%\AppData\Local\hermes\hermes-agent\venv\Scripts;%PATH%"
+    ) else (
+        echo   [X] Python 未找到。请安装 Python 3.11+ 并勾选 "Add to PATH"
+        echo       https://www.python.org/downloads/
+        pause & exit /b 1
+    )
 )
 for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do set PYVER=%%v
 echo   Python %PYVER% OK

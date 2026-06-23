@@ -15,7 +15,7 @@ import { StrategyStatusBadge } from "@/components/status-badge"
 
 export function ActiveStrategies() {
   const { data } = useSWR("strategies", api.getStrategies)
-  const top = (data ?? []).filter((s) => s.status === "running").slice(0, 5)
+  const top = (data ?? []).filter((s) => s.status === "running")
 
   return (
     <Card className="h-full">

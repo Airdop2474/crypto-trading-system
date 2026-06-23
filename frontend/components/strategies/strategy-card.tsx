@@ -3,7 +3,6 @@
 import type { StrategyRegistryEntry, MultiStrategyDetail, StrategyType } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { Settings } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { fmtSigned, fmtNum, pnlColor } from "@/lib/format"
@@ -16,7 +15,6 @@ interface Props {
 }
 
 export function StrategyCard({ entry, instance, onConfigure }: Props) {
-  const userParams = Object.entries(entry.param_schema)
   const colorClass = entry.key in STRATEGY_TYPE_COLOR
     ? STRATEGY_TYPE_COLOR[entry.key as StrategyType]
     : STRATEGY_FALLBACK_COLOR
@@ -80,33 +78,6 @@ export function StrategyCard({ entry, instance, onConfigure }: Props) {
             </div>
           </div>
         )}
-
-        {/* 参数概要 */}
-        <div className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">参数:</span>
-          {userParams.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {userParams.map(([key, constraint]) => (
-                <Badge
-                  key={key}
-                  variant="secondary"
-                  className="text-[10px] font-mono"
-                >
-                  {key}
-                  {constraint.min != null && constraint.max != null
-                    ? ` [${constraint.min}~${constraint.max}]`
-                    : constraint.min != null
-                      ? ` [>=${constraint.min}]`
-                      : constraint.max != null
-                        ? ` [<=${constraint.max}]`
-                        : ""}
-                </Badge>
-              ))}
-            </div>
-          ) : (
-            <span className="text-[10px] text-muted-foreground/60 italic leading-5">无参数</span>
-          )}
-        </div>
 
         {/* 配置按钮 */}
         <Button

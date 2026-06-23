@@ -140,6 +140,11 @@ class RiskManager:
         self.state = PAUSED
         self._last_pause_reason = reason
         self._log_event("PAUSE", reason)
+        try:
+            from src.agent.hermes_bridge import push_risk_event
+            push_risk_event("PAUSE", reason, self.state)
+        except Exception:
+            pass
 
     # ---- 日切恢复（守护进程每根 bar 调用）----
 
@@ -277,6 +282,11 @@ class RiskManager:
                 return
             self.state = STOPPED
             self._log_event("EMERGENCY_STOP", reason)
+            try:
+                from src.agent.hermes_bridge import push_risk_event
+                push_risk_event("EMERGENCY_STOP", reason, self.state)
+            except Exception:
+                pass
 
     def reset(self) -> None:
         """完全重置到 ACTIVE（清空所有状态，含 STOPPED）。

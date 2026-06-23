@@ -143,11 +143,18 @@ class TestE2EPipeline:
     def test_registry_consistency(self):
         """Registry 导出与策略列表一致。"""
         strategies = list_strategies()
-        assert len(strategies) == 8
+        assert len(strategies) == 11
         assert "grid" in strategies
         assert "rsi" in strategies
         assert "ma" in strategies
         assert "buyhold" in strategies
+        assert "donchian" in strategies
+        assert "structure" in strategies
+        assert "supertrend" in strategies
+        assert "reversal" in strategies
+        assert "priceaction" in strategies
+        assert "bollinger" in strategies
+        assert "macd" in strategies
 
         for name in strategies:
             cls = get_strategy(name)

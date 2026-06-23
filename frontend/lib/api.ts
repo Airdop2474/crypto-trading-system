@@ -26,6 +26,7 @@ import type {
   EvolutionHistoryResponse,
   EvolutionStats,
   EvolveRequest,
+  HermesStatus,
   MultiStrategyDetail,
   MultiStrategyResult,
   MultiStrategySummary,
@@ -42,6 +43,7 @@ import type {
   StrategyRunHistoryResponse,
   Ticker,
   WinRateTrendPoint,
+  ModeResult,
   ModeState,
   StartModeParams,
   RunningMode,
@@ -260,22 +262,13 @@ export const api = {
   getModeLogs: (mode: RunningMode, limit: number = 200): Promise<string[]> =>
     get(`/modes/${mode}/logs?limit=${limit}`),
 
+  // GET /modes/{mode}/result
+  getModeResult: (mode: RunningMode): Promise<ModeResult> =>
+    get(`/modes/${mode}/result`),
+
   // --------------------------------------------------------------------------
   // 管理 / 急停
   // --------------------------------------------------------------------------
-  // POST /admin/start-trading
-  startTrading: async (): Promise<{ ok: boolean; message: string }> => {
-    const res = await fetch(`${API_BASE}/admin/start-trading`, {
-      method: "POST",
-      headers: { "X-API-Token": API_TOKEN },
-    })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      throw new Error(body.detail || `启动交易引擎失败: ${res.status}`)
-    }
-    return res.json()
-  },
-
   // POST /admin/emergency-stop
   emergencyStop: async (): Promise<{
     ok: boolean
@@ -324,6 +317,13 @@ export const api = {
     get("/agent/evolution-stats"),
 
   // --------------------------------------------------------------------------
+  // Hermes 外部 Agent
+  // --------------------------------------------------------------------------
+  // GET /agent/hermes/status
+  getHermesStatus: (): Promise<HermesStatus> =>
+    get("/agent/hermes/status"),
+
+  // --------------------------------------------------------------------------
   // 策略注册表 / 通用创建 / 参数更新 / 运行历史
   // --------------------------------------------------------------------------
   // GET /strategies/registry
@@ -365,6 +365,34 @@ export const api = {
     return res.json()
   },
 
+  // DELETE /strategies/configs/{strategy_type}
+  deleteStrategyConfig: async (strategyType: string): Promise<void> => {
+    const res = await fetch(`${API_BASE}/strategies/configs/${strategyType}`, {
+      method: "DELETE",
+      headers: { "X-API-Token": API_TOKEN },
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `删除配置失败: ${res.status}`)
+    }
+  },
+
+  // PUT /strategies/configs/{strategy_type}/rename
+  renameStrategyConfig: async (
+    strategyType: string,
+    newName: string,
+  ): Promise<void> => {
+    const res = await fetch(`${API_BASE}/strategies/configs/${strategyType}/rename`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify({ new_name: newName }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `重命名失败: ${res.status}`)
+    }
+  },
+
   // GET /strategies/history?strategy_id=&limit=&offset=
   getStrategyHistory: (
     strategyId?: string,
@@ -402,7 +430,7 @@ export const api = {
     files_cleared: number
     message: string
   }> => {
-    const res = await fetch(`${API_BASE}/admin/clear-cache`, {
+    const res = await fetch(`${API_BASE}/admin/clear-cache?confirm=true`, {
       method: "POST",
       headers: { "X-API-Token": API_TOKEN },
     })
@@ -422,6 +450,20 @@ export const api = {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       throw new Error(body.detail || `刷新状态失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // POST /admin/generate-data
+  generateData: async (marketType: string = "oscillating"): Promise<{ ok: boolean; message: string }> => {
+    const res = await fetch(`${API_BASE}/admin/generate-data`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify({ marketType }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `数据生成失败: ${res.status}`)
     }
     return res.json()
   },

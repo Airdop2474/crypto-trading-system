@@ -31,6 +31,7 @@ import numpy as np
 
 from src.utils.logger import logger
 from src.agent.audit_log import AuditLog
+from src.agent.memory import ContextBuilder, MemoryKind, get_memory_store
 
 
 class TradingAnalyzer:
@@ -38,6 +39,8 @@ class TradingAnalyzer:
 
     def __init__(self, audit_log: Optional[AuditLog] = None):
         self.audit_log = audit_log or AuditLog()
+        self._ctx = ContextBuilder()
+        self._memory = get_memory_store()
 
     # ------------------------------------------------------------------
     # 1. 回测报告解释
@@ -72,6 +75,10 @@ class TradingAnalyzer:
         kelly = metrics.get("kelly_criterion", 0.0)
         profit_factor = metrics.get("profit_factor", 0.0)
 
+        # 注入历史记忆上下文
+        memory_ctx = self._ctx.build_analysis_context(strategy_name, "backtest")
+        has_memory = bool(memory_ctx)
+
         # 收益来源分析
         source = self._analyze_return_source(trades, total_return)
 
@@ -84,6 +91,21 @@ class TradingAnalyzer:
         # 综合判断
         confidence = self._calculate_backtest_confidence(metrics, total_trades)
 
+        # 写入记忆
+        self._memory.store(
+            MemoryKind.ANALYSIS,
+            content={
+                "strategy": strategy_name,
+                "total_return": total_return,
+                "win_rate": win_rate,
+                "sharpe": sharpe,
+                "max_drawdown": max_dd,
+                "total_trades": total_trades,
+            },
+            tags=[strategy_name, "backtest"],
+            source="analyzer",
+        )
+
         report = {
             "task": "backtest_analysis",
             "strategy_name": strategy_name,
@@ -93,6 +115,7 @@ class TradingAnalyzer:
             "reasoning": {
                 "return_source": source,
                 "drawdown_analysis": dd_analysis,
+                "memory_context": memory_ctx if has_memory else None,
                 "key_metrics": {
                     "total_return": total_return,
                     "win_rate": win_rate,
@@ -439,6 +462,10 @@ class TradingAnalyzer:
         total_trades = trades_info.get("total", 0)
         total_cost = cost.get("total_cost", 0.0)
 
+        # 注入近期日结记忆
+        memory_ctx = self._ctx.build_daily_context()
+        has_memory = bool(memory_ctx)
+
         # 表现评估
         performance = self._assess_weekly_performance(
             total_return, realized, total_trades, total_cost
@@ -449,6 +476,20 @@ class TradingAnalyzer:
 
         # 关注重点
         focus_points = self._identify_focus_points(paper_report, performance)
+
+        # 写入记忆
+        self._memory.store(
+            MemoryKind.DAILY,
+            content={
+                "total_return": total_return,
+                "realized_pnl": realized,
+                "total_trades": total_trades,
+                "rating": performance.get("rating", ""),
+                "total_cost": total_cost,
+            },
+            tags=["weekly_review"],
+            source="analyzer",
+        )
 
         risks = []
         if anomalies:

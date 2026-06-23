@@ -65,34 +65,14 @@ export default function SystemPage() {
   const [cleanupScope, setCleanupScope] = useState<"all" | "runs" | "evolutions">("all")
   const [keepLatest, setKeepLatest] = useState(true)
   const [clearingCache, setClearingCache] = useState(false)
-  const [startingTrading, setStartingTrading] = useState(false)
   useEffect(() => {
     if (data) setUpdatedAt(new Date())
   }, [data])
 
-  // 启动交易引擎
-  const handleStartTrading = async () => {
-    setStartingTrading(true)
-    const toastId = toast.loading("正在启动交易引擎…")
-    try {
-      const result = await api.startTrading()
-      toast.success("交易引擎已启动", {
-        id: toastId,
-        description: result.message,
-      })
-      mutate()
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "未知错误"
-      toast.error("启动失败", { id: toastId, description: msg })
-    } finally {
-      setStartingTrading(false)
-    }
-  }
-
   // 触发后端重建 Paper Trading state
   const handleRebuildState = async () => {
     setRefreshing(true)
-    const toastId = toast.loading("正在重建 Paper Trading 引擎…")
+    const toastId = toast.loading("正在重建模拟盘引擎…")
     try {
       await api.refreshState()
       toast.success("引擎已重建，下次请求将使用新数据", { id: toastId })
@@ -198,16 +178,6 @@ export default function SystemPage() {
             >
               <RefreshCw className={cn("size-3", refreshing && "animate-spin")} />
               {refreshing ? "重建中…" : "重建引擎"}
-            </Button>
-            <Button
-              variant="default"
-              size="sm"
-              className="h-7 gap-1.5 text-xs"
-              onClick={handleStartTrading}
-              disabled={startingTrading}
-            >
-              <Zap className={cn("size-3", startingTrading && "animate-pulse")} />
-              {startingTrading ? "启动中…" : "启动交易"}
             </Button>
             <Button
               variant="outline"

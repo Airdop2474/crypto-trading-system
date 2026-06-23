@@ -13,6 +13,7 @@ import {
   ShieldAlert,
   Sparkles,
   Wallet,
+  FlaskConical,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -26,6 +27,7 @@ const navGroups: { label: string; items: NavItem[] }[] = [
       { href: "/strategies", label: "全部策略", icon: Layers },
       { href: "/positions", label: "持仓与资产", icon: Wallet },
       { href: "/orders", label: "订单与成交", icon: ListOrdered },
+      { href: "/paper", label: "Paper 结果", icon: FlaskConical },
     ],
   },
   {
@@ -49,7 +51,7 @@ export function AppSidebar() {
   const pathname = usePathname()
 
   return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-sidebar md:flex">
+    <aside className="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-border bg-sidebar md:flex">
       <div className="flex h-14 items-center gap-2 border-b border-border px-5">
         <div className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <Activity className="size-4" />

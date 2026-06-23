@@ -1,0 +1,1 @@
+{"source": "crypto_trading_system", "kind": "risk_triggered", "payload": {"type": "PAUSE", "reason": "daily loss 11.81%", "state": "PAUSED"}, "timestamp": "2026-06-23T17:42:41.053141+00:00"}

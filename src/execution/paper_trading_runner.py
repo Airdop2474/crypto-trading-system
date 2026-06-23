@@ -107,6 +107,11 @@ class PaperTradingRunner:
         self.closed_trades = []
         signals_log = []
 
+        # 模拟盘批量回放时不推送 Hermes 事件（避免生成数据产生大量无意义事件）
+        from src.agent.hermes_bridge import set_events_enabled, events_enabled
+        _was_enabled = events_enabled()
+        set_events_enabled(False)
+
         # 无前视：bar t 的信号在 bar t+1 开盘成交。用 pending 串接，逐 bar 推进，
         # 与守护进程（run_paper_trading_daemon）共用同一 process_bar 逻辑。
         pending = None
@@ -117,6 +122,7 @@ class PaperTradingRunner:
             if pending:
                 signals_log.append({"time": bar["timestamp"], "signal": pending})
 
+        set_events_enabled(_was_enabled)
         return self._build_result(signals_log)
 
     def process_bar(self, bar, historical, strategy, pending_signal):
@@ -288,6 +294,12 @@ class PaperTradingRunner:
             profit = proceeds - cost_basis
             self.realized_pnl += profit
             self.closed_trades.append({"tag": tag, "time": time, "profit": profit})
+            # Hermes 事件推送
+            try:
+                from src.agent.hermes_bridge import push_trade_closed
+                push_trade_closed({"tag": tag, "time": time, "profit": profit})
+            except Exception:
+                pass
         self.lots.pop(tag, None)
         self._notify_fill(strategy, result, "sell", tag, time, profit=profit)
 
@@ -295,7 +307,10 @@ class PaperTradingRunner:
         """用全部现金可买的数量（含滑点+手续费余量）"""
         slip = self.exec_cfg.slippage.get(self.symbol, 0.0005)
         unit_cost = price * (1 + slip) * (1 + self.exec_cfg.commission)
-        return self.broker.get_balance() / unit_cost if unit_cost > 0 else 0.0
+        if unit_cost <= 0:
+            return 0.0
+        # 留 0.1% 余量，避免浮点精度导致 cost > balance 被拒
+        return (self.broker.get_balance() * 0.999) / unit_cost
 
     def _fraction_amount(self, fraction: float, price: float) -> float:
         """按初始资金比例可买的数量"""

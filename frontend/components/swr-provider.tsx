@@ -1,7 +1,8 @@
 "use client"
 
 import { SWRConfig } from "swr"
-import { type ReactNode, useCallback } from "react"
+import { type ReactNode, useCallback, useMemo } from "react"
+import { getPref } from "@/lib/prefs"
 
 /** Default fetch timeout (ms) */
 const DEFAULT_TIMEOUT = 10_000
@@ -44,20 +45,28 @@ export function SWRProvider({ children }: { children: ReactNode }) {
     []
   )
 
+  const refreshInterval = useMemo(() => {
+    try {
+      return getPref("refreshInterval") * 1000
+    } catch {
+      return 30_000
+    }
+  }, [])
+
   return (
     <SWRConfig
       value={{
         fetcher,
-        refreshInterval: 30_000,      // Auto-refresh every 30s
-        revalidateOnFocus: true,       // Refetch when tab regains focus
-        revalidateOnReconnect: true,   // Refetch on network reconnect
-        errorRetryCount: 3,            // Retry failed requests 3 times
-        errorRetryInterval: 5_000,    // 5s between retries
-        dedupingInterval: 2_000,       // Dedupe identical requests within 2s
+        refreshInterval,
+        revalidateOnFocus: true,
+        revalidateOnReconnect: true,
+        errorRetryCount: 3,
+        errorRetryInterval: 5_000,
+        dedupingInterval: 2_000,
         shouldRetryOnError: true,
         revalidateIfStale: true,
         revalidateOnMount: true,
-        keepPreviousData: true,        // Show stale data while revalidating
+        keepPreviousData: true,
       }}
     >
       {children}

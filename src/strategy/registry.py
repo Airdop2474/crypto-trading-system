@@ -16,6 +16,10 @@ try:
     from src.strategy.super_trend import SuperTrendStrategy
     from src.strategy.key_level_reversal import KeyLevelReversalStrategy
     from src.strategy.price_action import PriceActionStrategy
+    from src.strategy.bollinger_bands import BollingerBandsStrategy
+    from src.strategy.macd import MACDStrategy
+    from src.strategy.composite_trend import CompositeTrendStrategy
+    from src.strategy.composite_trend import CompositeTrendStrategy
 except ImportError:
     import importlib
     import inspect
@@ -43,6 +47,10 @@ except ImportError:
     SuperTrendStrategy = _loaded.get("super_trend")
     KeyLevelReversalStrategy = _loaded.get("key_level_reversal")
     PriceActionStrategy = _loaded.get("price_action")
+    BollingerBandsStrategy = _loaded.get("bollinger_bands")
+    MACDStrategy = _loaded.get("macd")
+    CompositeTrendStrategy = _loaded.get("composite_trend")
+    CompositeTrendStrategy = _loaded.get("composite_trend")
 
 STRATEGY_REGISTRY: dict[str, type[Strategy]] = {
     "grid":       GridTradingStrategy,
@@ -54,6 +62,9 @@ STRATEGY_REGISTRY: dict[str, type[Strategy]] = {
     "supertrend": SuperTrendStrategy,
     "reversal":   KeyLevelReversalStrategy,
     "priceaction": PriceActionStrategy,
+    "bollinger":  BollingerBandsStrategy,
+    "macd":       MACDStrategy,
+    "composite":  CompositeTrendStrategy,
 }
 
 
@@ -93,9 +104,12 @@ _STRATEGY_LABELS = {
     "buyhold": "买入持有",
     "donchian": "唐奇安通道",
     "structure": "市场结构",
-    "supertrend": "SuperTrend",
+    "supertrend": "超级趋势",
     "reversal": "关键位反转",
     "priceaction": "价格行为学",
+    "bollinger": "布林带均值回归",
+    "macd": "MACD 趋势跟踪",
+    "composite": "复合趋势",
 }
 
 

@@ -52,6 +52,10 @@ class SuperTrendStrategy(RiskAwareStrategy):
         self._tr_sum: float = 0.0
         self._prev_close_atr: Optional[float] = None
 
+        # SuperTrend band 携带状态（关键：不能每根重算，需向前携带）
+        self._prev_upper: Optional[float] = None
+        self._prev_lower: Optional[float] = None
+
         self.set_parameters(period=period, multiplier=multiplier)
         self._init_risk_state()
         logger.info(f"SuperTrend initialized: period={period}, multiplier={multiplier}")
@@ -63,6 +67,8 @@ class SuperTrendStrategy(RiskAwareStrategy):
         self._tr_window.clear()
         self._tr_sum = 0.0
         self._prev_close_atr = None
+        self._prev_upper = None
+        self._prev_lower = None
 
     def _update_atr(self, high: float, low: float, close: float) -> Optional[float]:
         """增量 ATR，O(1) per bar。"""
@@ -101,8 +107,28 @@ class SuperTrendStrategy(RiskAwareStrategy):
 
         hl2 = (current_high + current_low) / 2.0
 
-        upper_band = hl2 + self.multiplier * atr
-        lower_band = hl2 - self.multiplier * atr
+        # 原始 band
+        raw_upper = hl2 + self.multiplier * atr
+        raw_lower = hl2 - self.multiplier * atr
+
+        # SuperTrend 核心：band 向前携带，只在有利方向更新
+        if self._prev_upper is None:
+            self._prev_upper = raw_upper
+            self._prev_lower = raw_lower
+        else:
+            # lower band：趋势向上时只上移（收紧），趋势向下时用原始值
+            if self._trend_up is not None and self._trend_up:
+                self._prev_lower = max(raw_lower, self._prev_lower) if current_close > self._prev_lower else raw_lower
+            else:
+                self._prev_lower = raw_lower
+            # upper band：趋势向下时只下移（收紧），趋势向上时用原始值
+            if self._trend_up is not None and not self._trend_up:
+                self._prev_upper = min(raw_upper, self._prev_upper) if current_close < self._prev_upper else raw_upper
+            else:
+                self._prev_upper = raw_upper
+
+        upper_band = self._prev_upper
+        lower_band = self._prev_lower
 
         if self._trend_up is None:
             self._trend_up = current_close > lower_band

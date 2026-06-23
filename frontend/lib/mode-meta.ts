@@ -1,12 +1,10 @@
 // ============================================================================
 // 运行模式元信息（共用映射）
 // ----------------------------------------------------------------------------
-// 四种运行模式的标签、描述、图标、配色统一定义在此，
-// 遵循 strategy-meta.ts 集中管理模式。
+// 三种运行模式的标签、描述、图标、配色统一定义在此。
 // ============================================================================
 
 import {
-  Download,
   FastForward,
   Radio,
   FlaskConical,
@@ -17,7 +15,6 @@ import type { RunningMode } from "./types"
 
 /** 模式 → 中文短标签 */
 export const MODE_LABEL: Record<RunningMode, string> = {
-  data_download: "数据下载",
   replay_paper: "回放纸盘",
   live_paper: "实时纸盘",
   testnet_live: "Testnet 实盘",
@@ -25,15 +22,13 @@ export const MODE_LABEL: Record<RunningMode, string> = {
 
 /** 模式 → 描述 */
 export const MODE_DESCRIPTION: Record<RunningMode, string> = {
-  data_download: "从 Binance 下载 OHLCV 数据并生成质量报告",
-  replay_paper: "使用历史数据加速回放纸盘交易",
+  replay_paper: "使用历史数据加速回放纸盘交易（自动生成数据）",
   live_paper: "实时轮询 Binance 行情，模拟纸盘交易",
   testnet_live: "在 Binance Testnet 上下真实市价单",
 }
 
 /** 模式 → 图标 */
 export const MODE_ICON: Record<RunningMode, LucideIcon> = {
-  data_download: Download,
   replay_paper: FastForward,
   live_paper: Radio,
   testnet_live: FlaskConical,
@@ -41,7 +36,6 @@ export const MODE_ICON: Record<RunningMode, LucideIcon> = {
 
 /** 模式 → 配色 (Tailwind class) */
 export const MODE_COLOR: Record<RunningMode, string> = {
-  data_download: "bg-blue-500/20 text-blue-400 border-blue-500/30",
   replay_paper: "bg-amber-500/20 text-amber-400 border-amber-500/30",
   live_paper: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
   testnet_live: "bg-rose-500/20 text-rose-400 border-rose-500/30",
@@ -67,7 +61,7 @@ export const STATUS_LABEL: Record<string, string> = {
 export const TRADING_MODES: RunningMode[] = ["replay_paper", "live_paper", "testnet_live"]
 
 /** 全部模式列表（有序） */
-export const ALL_MODES: RunningMode[] = ["data_download", "replay_paper", "live_paper", "testnet_live"]
+export const ALL_MODES: RunningMode[] = ["replay_paper", "live_paper", "testnet_live"]
 
 /** 模式 → 可配置参数默认值 */
 export const MODE_DEFAULTS: Record<RunningMode, {
@@ -78,16 +72,8 @@ export const MODE_DEFAULTS: Record<RunningMode, {
   pollSeconds: number
   showPollSeconds: boolean
   showReplayCsv: boolean
+  showMarketType: boolean
 }> = {
-  data_download: {
-    symbol: "BTC/USDT",
-    timeframe: "4h",
-    days: 7,
-    initialCapital: 10000,
-    pollSeconds: 60,
-    showPollSeconds: false,
-    showReplayCsv: false,
-  },
   replay_paper: {
     symbol: "BTC/USDT",
     timeframe: "4h",
@@ -96,6 +82,7 @@ export const MODE_DEFAULTS: Record<RunningMode, {
     pollSeconds: 60,
     showPollSeconds: false,
     showReplayCsv: true,
+    showMarketType: true,
   },
   live_paper: {
     symbol: "BTC/USDT",
@@ -105,6 +92,7 @@ export const MODE_DEFAULTS: Record<RunningMode, {
     pollSeconds: 60,
     showPollSeconds: true,
     showReplayCsv: false,
+    showMarketType: false,
   },
   testnet_live: {
     symbol: "BTC/USDT",
@@ -114,5 +102,6 @@ export const MODE_DEFAULTS: Record<RunningMode, {
     pollSeconds: 60,
     showPollSeconds: true,
     showReplayCsv: false,
+    showMarketType: false,
   },
 }

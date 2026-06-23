@@ -4,6 +4,8 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
   Bot,
+  CandlestickChart,
+  FlaskConical,
   Grid3x3,
   LayoutDashboard,
   LineChart,
@@ -18,8 +20,11 @@ import { cn } from "@/lib/utils"
 const nav = [
   { href: "/", label: "总览", icon: LayoutDashboard },
   { href: "/strategies", label: "策略", icon: Grid3x3 },
+  { href: "/grid", label: "网格", icon: Grid3x3 },
+  { href: "/price-action", label: "价格行为", icon: CandlestickChart },
   { href: "/positions", label: "持仓", icon: Wallet },
   { href: "/orders", label: "订单", icon: ListOrdered },
+  { href: "/paper", label: "Paper", icon: FlaskConical },
   { href: "/analytics", label: "收益", icon: LineChart },
   { href: "/risk", label: "风控", icon: Scale },
   { href: "/agent", label: "AI", icon: Bot },

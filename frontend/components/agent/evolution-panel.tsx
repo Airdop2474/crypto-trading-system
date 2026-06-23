@@ -29,6 +29,10 @@ const ALL_STRATEGIES = [
   { id: "structure-btc-usdt", label: "市场结构", type: "structure" },
   { id: "supertrend-btc-usdt", label: "SuperTrend", type: "supertrend" },
   { id: "reversal-btc-usdt", label: "关键位反转", type: "reversal" },
+  { id: "priceaction-btc-usdt", label: "价格行为学", type: "priceaction" },
+  { id: "bollinger-btc-usdt", label: "布林带均值回归", type: "bollinger" },
+  { id: "macd-btc-usdt", label: "MACD 趋势跟踪", type: "macd" },
+  { id: "composite-btc-usdt", label: "复合趋势", type: "composite" },
 ] as const
 
 export function EvolutionPanel() {
@@ -91,7 +95,7 @@ export function EvolutionPanel() {
         {/* 策略选择器 */}
         <div>
           <div className="text-xs text-muted-foreground mb-2">
-            选择要优化的策略（BuyHold 基准策略不参与进化）
+            选择要优化的策略（买入持有基准策略不参与进化）
           </div>
           <div className="flex flex-wrap gap-2">
             {ALL_STRATEGIES.map((s) => (
@@ -133,7 +137,7 @@ export function EvolutionPanel() {
             {loading ? (
               <>
                 <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-                Walk-Forward 搜索中...
+                参数搜索中...
               </>
             ) : (
               <>
@@ -149,7 +153,7 @@ export function EvolutionPanel() {
           <div className="text-center py-6 space-y-2">
             <Loader2 className="h-6 w-6 mx-auto animate-spin text-purple-400" />
             <p className="text-sm text-muted-foreground">
-              正在执行 Walk-Forward 参数搜索，预计需要 10-30 秒...
+              正在执行参数搜索，预计需要 10-30 秒...
             </p>
           </div>
         )}
@@ -322,7 +326,7 @@ function ResultCard({
 
           {/* 元信息 */}
           <div className="text-xs text-muted-foreground pt-1 border-t border-border/30">
-            {result.walk_forward_windows} 个 Walk-Forward 窗口 ·{" "}
+            {result.walk_forward_windows} 个验证窗口 ·{" "}
             {new Date(result.timestamp).toLocaleString("zh-CN")}
           </div>
         </div>

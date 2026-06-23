@@ -121,7 +121,7 @@ class Config:
         self.LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")       # 空=使用协议默认 URL
         self.LLM_MODEL = os.getenv("LLM_MODEL", "")             # 空=根据 provider 选默认
 
-    def validate(self, strict: bool = False) -> tuple[bool, list[str]]:
+    def validate(self, strict: bool = True) -> tuple[bool, list[str]]:
         """
         验证配置
 
@@ -133,10 +133,20 @@ class Config:
         """
         errors: List[str] = []
         critical: List[str] = []
+        warnings: List[str] = []
 
         # API Token 必须设置（任何环境都需要前端 API 认证）
         if not self.API_TOKEN:
             critical.append("API_TOKEN 未设置 - API 认证不可用")
+
+        # 检查默认密码（.env.example 自带占位值，警告但不阻止启动）
+        _default_passwords = {
+            "TIMESCALE_PASSWORD": ("your_secure_password", self.TIMESCALE_PASSWORD),
+            "REDIS_PASSWORD": ("CHANGE_ME_NOW", self.REDIS_PASSWORD),
+        }
+        for pname, (default, actual) in _default_passwords.items():
+            if actual == default:
+                warnings.append(f"{pname} 仍为默认值 `{default}`，请修改")
 
         # 检查必需的配置
         if self.ENVIRONMENT == "production":
@@ -146,8 +156,6 @@ class Config:
                 critical.append("BINANCE_SECRET 未设置")
             if not self.TIMESCALE_PASSWORD:
                 critical.append("TIMESCALE_PASSWORD 未设置")
-            if self.TIMESCALE_PASSWORD == "your_secure_password":
-                critical.append("TIMESCALE_PASSWORD 仍为默认值")
 
         # 检查风控参数范围
         if not 0 < self.MAX_DAILY_LOSS <= 0.10:
@@ -162,6 +170,12 @@ class Config:
         # 安全检查
         if self.LIVE_TRADING_ENABLED and self.ENVIRONMENT == "development":
             critical.append("⚠️  开发环境不应启用实盘交易！")
+
+        # 打印警告（不阻止启动）
+        if warnings:
+            import logging
+            for warn in warnings:
+                logging.getLogger(__name__).warning(f"[CONFIG] {warn}")
 
         # 关键错误应立即阻止启动
         if critical:

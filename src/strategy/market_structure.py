@@ -60,8 +60,6 @@ class MarketStructureStrategy(RiskAwareStrategy):
         self.lookback = lookback
 
         self._in_position = False
-        self._swing_high: Optional[float] = None
-        self._swing_low: Optional[float] = None
 
         self.set_parameters(lookback=lookback)
         self._init_risk_state()
@@ -71,8 +69,6 @@ class MarketStructureStrategy(RiskAwareStrategy):
     def reset(self):
         super().reset()
         self._in_position = False
-        self._swing_high = None
-        self._swing_low = None
 
     def on_bar(self, data: pd.DataFrame, current_time: datetime) -> Optional[str]:
         if len(data) < self.lookback:
@@ -83,30 +79,20 @@ class MarketStructureStrategy(RiskAwareStrategy):
 
         close = float(data["close"].iloc[-1])
 
-        # 初始化 swing points（用 lookback 窗口的极值）
-        if self._swing_high is None:
-            window = data.iloc[-self.lookback:]
-            self._swing_high = float(window["high"].max())
-            self._swing_low = float(window["low"].min())
+        # 滚动窗口：用前 lookback 根 bar 的极值（排除当前 bar，否则 close 永远 <= swing_high）
+        window = data.iloc[-(self.lookback + 1):-1]
+        swing_high = float(window["high"].max())
+        swing_low = float(window["low"].min())
 
-        # ---- 关键修正：先判断入场/出场，再更新 swing points ----
-        # 原稿中存在顺序 bug：如果先更新 swing_high = close，
-        # 再判断 close > swing_high，则永远为 False，信号永远不会触发。
         signal: Optional[str] = None
 
         if not self._in_position:
-            if close > self._swing_high:
+            if close > swing_high:
                 self._in_position = True
                 signal = "BUY"
         else:
-            if close < self._swing_low:
+            if close < swing_low:
                 self._in_position = False
                 signal = "SELL"
-
-        # 更新 swing points（只在创新高/新低时更新）
-        if close > self._swing_high:
-            self._swing_high = close
-        if close < self._swing_low:
-            self._swing_low = close
 
         return signal

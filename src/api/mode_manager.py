@@ -42,7 +42,6 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 # 枚举
 # ---------------------------------------------------------------------------
 class RunningMode(str, Enum):
-    DATA_DOWNLOAD = "data_download"
     REPLAY_PAPER = "replay_paper"
     LIVE_PAPER = "live_paper"
     TESTNET_LIVE = "testnet_live"
@@ -67,6 +66,7 @@ class ModeParams(BaseModel):
     replay_csv: str | None = None
     fresh: bool = False
     strategies: list[str] = ["grid"]
+    market_type: str = "oscillating"
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +83,11 @@ class _ModeState:
     params: dict | None = None
     _reader_task: asyncio.Task | None = None
     _waiter_task: asyncio.Task | None = None
+    # 多策略并行：每个策略一个子进程
+    processes: list[asyncio.subprocess.Process] = field(default_factory=list)
+    pids: list[int] = field(default_factory=list)
+    _reader_tasks: list[asyncio.Task] = field(default_factory=list)
+    _waiter_tasks: list[asyncio.Task] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -122,25 +127,42 @@ class ModeManager:
             if not config.BINANCE_SECRET or config.BINANCE_SECRET == "your_binance_testnet_secret":
                 return {"error": "BINANCE_SECRET 未配置或仍为占位符"}
 
-        # 构建命令
-        cmd = self._build_command(mode, params)
+        # 构建命令（每策略一条）
+        commands = self._build_commands(mode, params)
 
-        # 启动子进程
+        # 启动子进程（每策略一个，并行运行）
+        st.processes = []
+        st.pids = []
+        st._reader_tasks = []
+        st._waiter_tasks = []
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=str(PROJECT_ROOT),
-            )
+            for cmd in commands:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    cwd=str(PROJECT_ROOT),
+                )
+                st.processes.append(proc)
+                st.pids.append(proc.pid)
+                st._reader_tasks.append(asyncio.create_task(self._read_output(proc, mode)))
+                st._waiter_tasks.append(asyncio.create_task(self._wait_for_exit(proc, mode)))
+                logger.info(f"模式 [{key}] 策略子进程已启动, PID={proc.pid}, 命令={' '.join(cmd)}")
         except Exception as e:
             logger.error(f"启动子进程失败 [{key}]: {e}")
+            # 清理已启动的进程
+            for p in st.processes:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+            st.processes = []
             return {"error": f"启动子进程失败: {e}"}
 
-        # 更新状态
+        # 更新状态（兼容旧字段：process/pid 指向第一个子进程）
         st.status = ModeStatus.RUNNING
-        st.process = proc
-        st.pid = proc.pid
+        st.process = st.processes[0] if st.processes else None
+        st.pid = st.pids[0] if st.pids else None
         st.started_at = datetime.now(timezone.utc)
         st.exit_code = None
         st.last_log_line = None
@@ -149,11 +171,6 @@ class ModeManager:
         # 持久化
         self._save_mode_state(key)
 
-        # 启动日志读取 + 进程等待协程
-        st._reader_task = asyncio.create_task(self._read_output(proc, mode))
-        st._waiter_task = asyncio.create_task(self._wait_for_exit(proc, mode))
-
-        logger.info(f"模式 [{key}] 已启动, PID={proc.pid}, 命令={' '.join(cmd)}")
         return self._status_dict(key)
 
     async def stop_mode(self, mode: RunningMode) -> dict:
@@ -161,31 +178,35 @@ class ModeManager:
         key = mode.value
         st = self._modes[key]
 
-        if st.status != ModeStatus.RUNNING or st.process is None:
+        if st.status != ModeStatus.RUNNING or not st.processes:
             return {"error": f"模式 '{key}' 当前未在运行"}
 
         st.status = ModeStatus.STOPPING
-        logger.info(f"模式 [{key}] 正在停止, PID={st.pid}")
+        logger.info(f"模式 [{key}] 正在停止, PIDs={st.pids}")
 
-        # 发送终止信号
-        try:
-            st.process.terminate()
-        except ProcessLookupError:
-            pass
-
-        # 等待退出
-        try:
-            await asyncio.wait_for(st.process.wait(), timeout=_STOP_TIMEOUT)
-        except asyncio.TimeoutError:
-            logger.warning(f"模式 [{key}] 超时未退出, 强制终止")
+        # 终止所有子进程
+        for proc in st.processes:
             try:
-                st.process.kill()
+                proc.terminate()
             except ProcessLookupError:
                 pass
+
+        # 等待所有子进程退出
+        for proc in st.processes:
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=_STOP_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(f"模式 [{key}] 子进程超时未退出, 强制终止")
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
 
         st.status = ModeStatus.IDLE
         st.process = None
         st.pid = None
+        st.processes = []
+        st.pids = []
         st.started_at = None
         self._clear_mode_state(key)
 
@@ -197,6 +218,171 @@ class ModeManager:
 
     def get_all_status(self) -> list[dict]:
         return [self._status_dict(m.value) for m in RunningMode]
+
+    def get_result(self, mode: RunningMode) -> dict:
+        """读取某模式最近一次运行的結果摘要（来自 daemon 检查点文件）。
+
+        daemon 子进程每根 bar 都会原子写入 data/paper_daemon_state_{mode}[_{strategy}].json，
+        本方法聚合这些文件，返回收益/交易数/胜率/天数/风控状态等前端可展示的指标。
+        """
+        key = mode.value
+        st = self._modes[key]
+        status_dict = self._status_dict(key)
+
+        # glob 匹配该 mode 的所有检查点（单策略 + 多策略各一个文件）
+        data_dir = PROJECT_ROOT / "data"
+        state_files = sorted(data_dir.glob(f"paper_daemon_state_{key}*.json"))
+
+        if not state_files:
+            # 无检查点：从启动参数取默认值（停止后 params 可能已清空）
+            initial = 10000.0
+            symbol = "BTC/USDT"
+            if st.params:
+                try:
+                    initial = float(st.params.get("initial_capital", 10000.0))
+                except (TypeError, ValueError):
+                    pass
+                symbol = st.params.get("symbol", "BTC/USDT")
+            return {
+                "mode": key,
+                "mode_status": status_dict["status"],
+                "exit_code": status_dict["exitCode"],
+                "available": False,
+                "symbol": symbol,
+                "initial_capital": initial,
+                "realized_pnl": 0.0,
+                "total_return_pct": 0.0,
+                "final_balance": initial,
+                "total_trades": 0,
+                "win_count": 0,
+                "loss_count": 0,
+                "win_rate": 0.0,
+                "day_count": 0,
+                "last_bar_ts": None,
+                "risk_state": "unknown",
+                "strategy_paused": False,
+                "strategies": [],
+                "recent_trades": [],
+            }
+
+        strategies: list[dict] = []
+        recent_trades: list[dict] = []
+        total_realized = 0.0
+        total_balance = 0.0
+        total_trades = 0
+        total_wins = 0
+        total_losses = 0
+        total_initial = 0.0  # 所有策略初始资金之和
+        day_count = 0
+        latest_ts: str | None = None
+        # 模式已停止时，state 文件中的 risk.state 仍是 ACTIVE，需覆盖为 STOPPED
+        risk_state = "STOPPED" if st.status not in (ModeStatus.RUNNING, ModeStatus.STOPPING) else "unknown"
+        strategy_paused = False
+        # symbol 从第一个 state 文件取（同一 mode 下一致）
+        symbol = "BTC/USDT"
+        initial = 10000.0
+
+        prefix = f"paper_daemon_state_{key}"
+        for sf in state_files:
+            try:
+                raw = json.loads(sf.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            # 跳过没有 strategy_name 的旧格式文件（避免显示 default 策略）
+            if not raw.get("strategy_name"):
+                continue
+
+            # symbol 从第一个 state 文件取
+            if sf is state_files[0]:
+                symbol = raw.get("symbol", symbol)
+
+            # 每个策略的初始资金累加（各策略独立 10000，汇总需相加）
+            s_initial = 10000.0
+            try:
+                s_initial = float(raw.get("initial_capital", 10000.0))
+            except (TypeError, ValueError):
+                pass
+            total_initial += s_initial
+
+            runner = raw.get("runner", {})
+            broker = raw.get("broker", {})
+            risk = raw.get("risk", {})
+            strat = raw.get("strategy", {})
+            closed = runner.get("closed_trades", []) or []
+            realized = float(runner.get("realized_pnl", 0.0))
+            balance = float(broker.get("balance", 0.0))
+            wins = sum(1 for t in closed if float(t.get("profit", 0)) > 0)
+            losses = sum(1 for t in closed if float(t.get("profit", 0)) < 0)
+            s_day = int(raw.get("day_count", 0))
+            s_ts = raw.get("last_bar_ts")
+
+            # 策略名：state 文件 strategy_name 字段（已由上方 continue 保证非空）
+            strat_name = raw.get("strategy_name", "default")
+
+            # 模式已停止时，state 文件中的 risk.state 仍是 ACTIVE，需覆盖为 STOPPED
+            mode_stopped = st.status not in (ModeStatus.RUNNING, ModeStatus.STOPPING)
+            s_risk_state = "STOPPED" if mode_stopped else risk.get("state", "unknown")
+
+            strategies.append({
+                "strategy": strat_name,
+                "initial_capital": round(s_initial, 2),
+                "realized_pnl": round(realized, 2),
+                "return_pct": round(realized / s_initial * 100, 2) if s_initial else 0.0,
+                "total_trades": len(closed),
+                "win_count": wins,
+                "loss_count": losses,
+                "win_rate": round(wins / len(closed) * 100, 2) if closed else 0.0,
+                "final_balance": round(balance, 2),
+                "day_count": s_day,
+                "last_bar_ts": s_ts,
+                "risk_state": s_risk_state,
+                "strategy_paused": bool(strat.get("paused", False)),
+            })
+
+            total_realized += realized
+            total_balance += balance
+            total_trades += len(closed)
+            total_wins += wins
+            total_losses += losses
+            day_count = max(day_count, s_day)
+            if s_ts and (latest_ts is None or str(s_ts) > str(latest_ts)):
+                latest_ts = str(s_ts)
+            if not mode_stopped and risk.get("state"):
+                risk_state = risk.get("state", risk_state)
+            strategy_paused = strategy_paused or bool(strat.get("paused", False))
+
+            for t in closed[-5:]:
+                recent_trades.append({
+                    "strategy": strat_name,
+                    "tag": str(t.get("tag", "")),
+                    "time": str(t.get("time", "")),
+                    "profit": round(float(t.get("profit", 0.0)), 2),
+                })
+
+        recent_trades = recent_trades[-10:]
+
+        return {
+            "mode": key,
+            "mode_status": status_dict["status"],
+            "exit_code": status_dict["exitCode"],
+            "available": True,
+            "symbol": symbol,
+            "initial_capital": round(total_initial, 2),
+            "realized_pnl": round(total_realized, 2),
+            "total_return_pct": round(total_realized / total_initial * 100, 2) if total_initial else 0.0,
+            "final_balance": round(total_balance, 2),
+            "total_trades": total_trades,
+            "win_count": total_wins,
+            "loss_count": total_losses,
+            "win_rate": round(total_wins / total_trades * 100, 2) if total_trades else 0.0,
+            "day_count": day_count,
+            "last_bar_ts": latest_ts,
+            "risk_state": risk_state,
+            "strategy_paused": strategy_paused,
+            "strategies": strategies,
+            "recent_trades": recent_trades,
+        }
 
     async def recover_on_startup(self):
         """API 启动时恢复：检查磁盘上的状态文件，标记孤儿进程。"""
@@ -256,43 +442,39 @@ class ModeManager:
                 return f"交易模式 '{m}' 正在运行中，请先停止它"
         return None
 
-    def _build_command(self, mode: RunningMode, params: ModeParams) -> list[str]:
+    def _build_commands(self, mode: RunningMode, params: ModeParams) -> list[list[str]]:
+        """为每个策略构建一条独立命令（多策略并行，避免串行阻塞）。"""
         py = sys.executable
         scripts = PROJECT_ROOT / "scripts"
-
-        if mode == RunningMode.DATA_DOWNLOAD:
-            return [py, str(scripts / "run_data_pipeline.py")]
-
         base = [py, str(scripts / "run_paper_trading_daemon.py")]
-        state_file = str(PROJECT_ROOT / "data" / f"paper_daemon_state_{mode.value}.json")
 
-        args = [
+        common_args = [
             "--symbol", params.symbol,
             "--timeframe", params.timeframe,
             "--days", str(params.days),
             "--initial", str(params.initial_capital),
-            "--state-file", state_file,
         ]
 
+        mode_args: list[str] = []
         if mode == RunningMode.REPLAY_PAPER:
             csv_arg = params.replay_csv or "generate"
-            args.extend(["--replay", csv_arg])
+            mode_args.extend(["--replay", csv_arg, "--market-type", params.market_type])
+            mode_args.extend(["--max-bar-drop-pct", "0.50"])
+            mode_args.append("--fresh")
         elif mode == RunningMode.LIVE_PAPER:
-            args.extend(["--poll-seconds", str(params.poll_seconds)])
+            mode_args.extend(["--poll-seconds", str(params.poll_seconds)])
         elif mode == RunningMode.TESTNET_LIVE:
-            args.extend([
-                "--broker", "exchange",
-                "--poll-seconds", str(params.poll_seconds),
-            ])
+            mode_args.extend(["--broker", "exchange", "--poll-seconds", str(params.poll_seconds)])
 
-        if params.fresh:
-            args.append("--fresh")
+        if params.fresh and mode != RunningMode.REPLAY_PAPER:
+            mode_args.append("--fresh")
 
-        # 多策略支持：传递所有选中的策略类型
-        for s in params.strategies:
-            args.extend(["--strategy", s])
-
-        return base + args
+        commands: list[list[str]] = []
+        for strat in params.strategies:
+            state_file = str(PROJECT_ROOT / "data" / f"paper_daemon_state_{mode.value}_{strat}.json")
+            args = common_args + ["--state-file", state_file] + mode_args + ["--strategy", strat]
+            commands.append(base + args)
+        return commands
 
     async def _read_output(self, proc: asyncio.subprocess.Process, mode: RunningMode):
         """逐行读取子进程 stdout，广播到日志系统。"""
@@ -313,20 +495,30 @@ class ModeManager:
             logger.debug(f"[{key}] 日志读取异常: {e}")
 
     async def _wait_for_exit(self, proc: asyncio.subprocess.Process, mode: RunningMode):
-        """等待子进程退出，更新状态。"""
+        """等待子进程退出，所有子进程退出后才更新状态。"""
         key = mode.value
         try:
             code = await proc.wait()
             st = self._modes[key]
+            # 从进程列表中移除已退出的进程
+            if proc in st.processes:
+                idx = st.processes.index(proc)
+                st.processes.remove(proc)
+                if idx < len(st.pids):
+                    st.pids.pop(idx)
             # 只在未被 stop_mode 主动停止时更新状态
             if st.status == ModeStatus.RUNNING:
-                st.status = ModeStatus.IDLE if code == 0 else ModeStatus.ERROR
-                st.exit_code = code
-                st.process = None
-                st.pid = None
-                st.started_at = None
-                self._clear_mode_state(key)
-                logger.info(f"模式 [{key}] 子进程退出, code={code}")
+                if not st.processes:
+                    # 所有子进程已退出
+                    st.status = ModeStatus.IDLE if code == 0 else ModeStatus.ERROR
+                    st.exit_code = code
+                    st.process = None
+                    st.pid = None
+                    st.started_at = None
+                    self._clear_mode_state(key)
+                    logger.info(f"模式 [{key}] 所有子进程已退出, 最后 code={code}")
+                else:
+                    logger.info(f"模式 [{key}] 子进程退出 (剩余 {len(st.processes)}), code={code}")
         except asyncio.CancelledError:
             pass
 
@@ -338,7 +530,7 @@ class ModeManager:
         return {
             "mode": key,
             "status": st.status.value,
-            "pid": st.pid,
+            "pid": st.pids if st.pids else st.pid,
             "startedAt": st.started_at.isoformat() if st.started_at else None,
             "uptimeSeconds": uptime,
             "exitCode": st.exit_code,

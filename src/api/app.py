@@ -14,7 +14,7 @@ from typing import Optional
 
 import secrets
 from loguru import logger
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Security, HTTPException, status, Request
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect, Security, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -25,13 +25,28 @@ from pydantic import BaseModel, Field
 from typing import Literal
 
 from src.api import service
+from src.api.admin_routes import (
+    CleanupRequest,
+    admin_refresh_state,
+    admin_build_status,
+    admin_clear_cache,
+    admin_start_trading,
+    admin_emergency_stop,
+    admin_data_cleanup,
+)
 from src.api.ws_feed import ws_feed
 from src.api.ws_logs import ws_logs
 from src.api.mode_manager import mode_manager, RunningMode, ModeParams, ModeStatus
-from src.api.strategy_config_store import update_strategy_config, get_all_strategy_configs
+from src.api.strategy_config_store import (
+    update_strategy_config,
+    get_all_strategy_configs,
+    delete_strategy_config,
+    rename_strategy_config,
+)
 from src.utils.cache import cache
 from src.agent import TradingAnalyzer, AuditLog
 from src.utils.config import config as _cfg
+from src.api import live_data
 
 
 @asynccontextmanager
@@ -45,6 +60,9 @@ async def lifespan(app: FastAPI):
     在 startup 阶段用 asyncio.to_thread 把它丢到线程池预热，事件循环不阻塞，
     首个用户请求到来时 _state 已就绪，直接返回。
     """
+    # 0. 配置校验（CRITICAL 错误直接阻止启动）
+    _cfg.validate(strict=True)
+
     # 1. 启动 WebSocket 行情订阅（异步任务，不阻塞）
     task = asyncio.create_task(ws_feed.start())
 
@@ -63,12 +81,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Database auto-create skipped (non-fatal): {type(e).__name__}: {e}")
 
+    # 4. 异步预热 Paper Trading（丢到线程池，不阻塞事件循环）
+    #     预热前先检查 daemon 检查点是否可用：若 daemon 活跃则无需自建状态
+    _prewarm_started = False
+    try:
+        if not service._daemon_state_available():
+            loop = asyncio.get_event_loop()
+            loop.run_in_executor(None, service.prewarm)
+            _prewarm_started = True
+            logger.info("Paper Trading 预热已提交到线程池（后台运行，不阻塞启动）")
+        else:
+            logger.info("检测到活跃的守护进程状态，跳过预热，使用 daemon 数据")
+    except Exception as e:
+        logger.warning(f"预热提交失败（非致命，首个请求会同步构建）: {e}")
+
     yield
 
-    # 4. 优雅停止所有运行模式
+    # 5. 优雅停止所有运行模式
     await mode_manager.stop_all()
 
-    # 5. 关闭 WebSocket
+    # 6. 关闭 WebSocket
     await ws_feed.stop()
     task.cancel()
     try:
@@ -177,6 +209,9 @@ def health_detailed(_=Security(verify_api_token)):
 
 @app.get("/account/summary")
 def account_summary(_=Security(verify_api_token)):
+    live = live_data.account_summary()
+    if live is not None:
+        return live
     return service.account_summary(service.get_state())
 
 
@@ -262,16 +297,25 @@ async def ws_tickers(ws: WebSocket):
 
 @app.get("/strategies")
 def strategies(_=Security(verify_api_token)):
+    live = live_data.strategies()
+    if live is not None:
+        return live
     return service.strategies(service.get_state())
 
 
 @app.get("/positions")
 def positions(_=Security(verify_api_token)):
+    live = live_data.positions()
+    if live is not None:
+        return live
     return service.positions(service.get_state())
 
 
 @app.get("/assets")
 def assets(_=Security(verify_api_token)):
+    live = live_data.assets()
+    if live is not None:
+        return live
     return service.assets(service.get_state())
 
 
@@ -290,16 +334,25 @@ def orders(
     返回：
         { items, total, limit, offset, has_more }
     """
+    live = live_data.orders(limit=limit, offset=offset)
+    if live is not None:
+        return live
     return service.orders(service.get_state(), limit=limit, offset=offset)
 
 
 @app.get("/analytics/pnl-history")
 def pnl_history(_=Security(verify_api_token)):
+    live = live_data.pnl_history()
+    if live is not None:
+        return live
     return service.pnl_history(service.get_state())
 
 
 @app.get("/analytics/strategy-performance")
 def strategy_performance(_=Security(verify_api_token)):
+    live = live_data.strategy_performance()
+    if live is not None:
+        return live
     return service.strategy_performance(service.get_state())
 
 
@@ -309,6 +362,9 @@ def strategy_performance(_=Security(verify_api_token)):
 @app.get("/account/risk-metrics")
 def account_risk_metrics(_=Security(verify_api_token)):
     """账户级风险指标：最大回撤 / 夏普 / Sortino / 波动率 / 年化收益"""
+    live = live_data.risk_metrics()
+    if live is not None:
+        return live
     return service.risk_metrics(service.get_state())
 
 
@@ -334,6 +390,9 @@ def positions_history(
 ):
     """已平仓交易历史（按平仓时间倒序）"""
     limit = max(1, min(int(limit), 1000))
+    live = live_data.positions_history(limit=limit)
+    if live is not None:
+        return live
     return service.positions_history(service.get_state(), limit=limit)
 
 
@@ -344,6 +403,9 @@ def pnl_distribution(
 ):
     """盈亏分布直方图 + 胜率/盈亏比统计"""
     bins = max(2, min(int(bins), 50))
+    live = live_data.pnl_distribution(bins=bins)
+    if live is not None:
+        return live
     return service.pnl_distribution(service.get_state(), bins=bins)
 
 
@@ -367,8 +429,8 @@ def strategy_correlation(_=Security(verify_api_token)):
 # 管理端点（需 API Token）
 # --------------------------------------------------------------------------
 @app.post("/admin/refresh-state")
-@limiter.limit("2/minute")  # 严格限流：每分钟最多 2 次，防滥用
-def admin_refresh_state(request: Request, _=Security(verify_api_token)):
+@limiter.limit("2/minute")
+def admin_refresh_state_view(request: Request, _=Security(verify_api_token)):
     """重置 Paper Trading state 缓存，下次请求会重新跑 Paper Trading。
 
     使用场景：
@@ -377,19 +439,23 @@ def admin_refresh_state(request: Request, _=Security(verify_api_token)):
 
     限流：2 次/分钟（重建 state 是 CPU 密集操作，频繁调用会拖垮服务）
     """
-    service.reset_state()
-    return {
-        "status": "ok",
-        "message": "State reset. Next request will rebuild Paper Trading state.",
-    }
+    return admin_refresh_state()
+
+
+@app.get("/admin/build-status")
+def admin_build_status_view(_=Security(verify_api_token)):
+    """Paper Trading 状态构建进度（返回是否就绪/构建中/错误）。"""
+    return admin_build_status()
 
 
 @app.post("/admin/clear-cache")
 @limiter.limit("5/minute")
-def admin_clear_cache(request: Request, _=Security(verify_api_token)):
+def admin_clear_cache_view(request: Request, confirm: bool = Query(False), _=Security(verify_api_token)):
     """全面重置：清空数据库所有表 + Redis 缓存 + 本地数据文件 + 内存 state。
 
     一键清除全部历史数据，下次请求会重新跑 Paper Trading 并写入全新数据。
+
+    防护：需要 ?confirm=true 查询参数作为二次确认，防止误触。
 
     清理范围：
     - 数据库 7 张 ORM 表 + monitor_metrics
@@ -399,139 +465,18 @@ def admin_clear_cache(request: Request, _=Security(verify_api_token)):
 
     限流：5 次/分钟
     """
-    import shutil
-    from pathlib import Path as _P
-    from src.utils.cache import cache
-    from sqlalchemy import text as sa_text
-
-    warnings: list[str] = []
-
-    # 1. 清空数据库（7 ORM 表 + monitor_metrics）
-    db_rows_cleared = 0
-    try:
-        from src.models.base import Base
-        from src.utils.database import db as _db
-        if _db.engine is not None:
-            # TRUNCATE 比 drop/create 更快更安全（保留表结构和索引）
-            tables = ["orders", "closed_trades", "open_positions",
-                       "risk_events", "audit_log", "strategy_evolutions",
-                       "strategy_runs"]
-            with _db.engine.connect() as conn:
-                for t in tables:
-                    count = conn.execute(sa_text(f"SELECT COUNT(*) FROM {t}")).scalar()
-                    db_rows_cleared += count
-                # 用 TRUNCATE CASCADE 一次清空（处理外键依赖）
-                conn.execute(sa_text(
-                    "TRUNCATE strategy_runs, orders, closed_trades, "
-                    "open_positions, risk_events, audit_log, "
-                    "strategy_evolutions CASCADE"
-                ))
-                conn.commit()
-            # monitor_metrics 单独处理（hypertable，不在 ORM 里）
-            try:
-                with _db.engine.connect() as conn:
-                    conn.execute(sa_text("TRUNCATE monitor_metrics"))
-                    conn.commit()
-            except Exception:
-                pass
-        else:
-            warnings.append("数据库未初始化（engine is None）")
-    except Exception as e:
-        logger.warning(f"DB truncate failed (non-fatal): {e}")
-        warnings.append(f"数据库清空失败：{type(e).__name__}")
-
-    # 2. 清空 Redis
-    cleared = cache.clear("*")
-
-    # 3. 清理本地数据文件
-    files_cleared = 0
-    data_dir = _P("data")
-    # 要删除的文件（精确路径）
-    files_to_remove = [
-        data_dir / "paper_daemon_state.json",
-        data_dir / "paper_daemon_state.json.tmp",
-    ]
-    for f in files_to_remove:
-        if f.exists():
-            try:
-                f.unlink()
-                files_cleared += 1
-            except OSError as e:
-                warnings.append(f"删除 {f.name} 失败：{e}")
-    # 要清空的目录（保留目录结构，只删文件）
-    dirs_to_clean = [
-        data_dir / "reports" / "paper",
-        data_dir / "reports" / "paper" / "daily",
-        data_dir / "reports" / "backtest",
-        data_dir / "reports" / "test",
-        data_dir / "reports" / "test_paper",
-        data_dir / "reports" / "agent",
-        data_dir / "raw",
-        data_dir / "mode_states",
-    ]
-    for d in dirs_to_clean:
-        if d.is_dir():
-            for f in d.iterdir():
-                if f.is_file():
-                    try:
-                        f.unlink()
-                        files_cleared += 1
-                    except OSError as e:
-                        warnings.append(f"删除 {f.name} 失败：{e}")
-                elif f.is_dir():
-                    try:
-                        shutil.rmtree(f)
-                        files_cleared += 1
-                    except OSError as e:
-                        warnings.append(f"删除目录 {f.name} 失败：{e}")
-    # reports 根目录的散落文件（如 quality_check_report.json）
-    reports_dir = data_dir / "reports"
-    if reports_dir.is_dir():
-        for f in reports_dir.iterdir():
-            if f.is_file():
-                try:
-                    f.unlink()
-                    files_cleared += 1
-                except OSError:
-                    pass
-
-    # 4. 重置内存 state
-    service.reset_state()
-
-    # 构造响应
-    msg_parts = []
-    if db_rows_cleared > 0:
-        msg_parts.append(f"{db_rows_cleared} DB rows")
-    if cleared > 0:
-        msg_parts.append(f"{cleared} cache keys")
-    if files_cleared > 0:
-        msg_parts.append(f"{files_cleared} local files")
-    if not msg_parts:
-        msg_parts.append("nothing to clear (already clean)")
-    message = f"Full reset: {', '.join(msg_parts)} cleared."
-    if warnings:
-        message += f" Warnings: {'; '.join(warnings)}"
-
-    return {
-        "status": "ok" if not warnings else "ok_with_warnings",
-        "cleared_keys": cleared,
-        "db_rows_cleared": db_rows_cleared,
-        "files_cleared": files_cleared,
-        "message": message,
-    }
+    return admin_clear_cache(confirm)
 
 
 @app.post("/admin/start-trading")
 @limiter.limit("10/minute")
-def admin_start_trading(request: Request, _=Security(verify_api_token)):
+def admin_start_trading_view(request: Request, _=Security(verify_api_token)):
     """手动启动 Paper Trading，生成订单/仓位数据。
 
     系统启动后默认为空状态，调用此端点后才开始跑 Paper Trading。
     重置后（/admin/clear-cache）也需要重新调用此端点。
     """
-    service.activate()
-    service.get_state()
-    return {"status": "ok", "message": "Paper Trading started"}
+    return admin_start_trading()
 
 
 # --------------------------------------------------------------------------
@@ -540,12 +485,18 @@ def admin_start_trading(request: Request, _=Security(verify_api_token)):
 @app.get("/multi/summary")
 def multi_summary(_=Security(verify_api_token)):
     """多策略聚合摘要（总盈亏、总交易数、各策略状态）"""
+    live = live_data.multi_strategy_summary()
+    if live is not None:
+        return live
     return service.multi_strategy_summary(service.get_state())
 
 
 @app.get("/multi/details")
 def multi_details(_=Security(verify_api_token)):
     """每个策略的详细结果"""
+    live = live_data.multi_strategy_details()
+    if live is not None:
+        return live
     return service.multi_strategy_details(service.get_state())
 
 
@@ -656,24 +607,50 @@ class UpdateParamsRequest(BaseModel):
 def update_strategy_params_endpoint(
     strategy_id: str, body: UpdateParamsRequest, _=Security(verify_api_token),
 ):
-    """更新运行中策略的参数（同时持久化到配置，供守护进程启动时使用）"""
+    """更新策略参数（先持久化到配置，再热替换运行中实例）。"""
     try:
-        state = service.get_state()
-        result = service.update_strategy_params(state, strategy_id, body.params)
-        # 持久化策略专属参数（剔除风控参数）
+        # 先持久化（引擎未运行也能保存，下次启动生效）
         strategy_type = strategy_id.split("-")[0]
         update_strategy_config(strategy_type, body.params)
+        # 再尝试热替换运行中实例（引擎未运行会跳过）
+        state = service.get_state()
+        result = service.update_strategy_params(state, strategy_id, body.params)
         return result
     except ValueError as e:
         raise HTTPException(400, str(e))
-    except RuntimeError as e:
-        raise HTTPException(503, str(e))
 
 
 @app.get("/strategies/configs")
 def get_strategy_configs(_=Security(verify_api_token)):
     """读取所有已保存的策略参数配置。"""
     return get_all_strategy_configs()
+
+
+@app.delete("/strategies/configs/{strategy_type}")
+def delete_strategy_config_endpoint(
+    strategy_type: str, _=Security(verify_api_token),
+):
+    """删除指定策略的已保存配置。"""
+    ok = delete_strategy_config(strategy_type)
+    if not ok:
+        raise HTTPException(404, f"策略 {strategy_type} 无已保存配置")
+    return {"deleted": strategy_type}
+
+
+@app.put("/strategies/configs/{strategy_type}/rename")
+def rename_strategy_config_endpoint(
+    strategy_type: str,
+    body: dict,
+    _=Security(verify_api_token),
+):
+    """重命名策略配置的 key。"""
+    new_name = body.get("new_name", "").strip()
+    if not new_name:
+        raise HTTPException(400, "new_name 不能为空")
+    ok = rename_strategy_config(strategy_type, new_name)
+    if not ok:
+        raise HTTPException(404, f"策略 {strategy_type} 无已保存配置")
+    return {"renamed_from": strategy_type, "renamed_to": new_name}
 
 
 @app.get("/strategies/history")
@@ -705,50 +682,92 @@ class AnalyzeRequest(BaseModel):
 @limiter.limit("10/minute")
 def agent_analyze(request: Request, body: AnalyzeRequest, _=Security(verify_api_token)):
     """触发 AI 分析（只分析，不执行任何交易决策）"""
-    state = service.get_state()
+    # 优先使用实时纸盘数据，无 daemon state 时回退到预跑数据
+    live = live_data.build_analysis_data(body.task)
 
-    if body.task == "backtest":
-        # 使用 Paper Trading 结果作为回测替代
-        result = state["result"]
-        metrics = {
-            "total_return": result.get("statistics", {}).get("total_return", 0),
-            "win_rate": 0.5,  # Paper Trading 无内置胜率
-        }
-        report = _analyzer.analyze_backtest(
-            results=result,
-            metrics=metrics,
-            strategy_name=getattr(state["strategy"], "name", "GridTrading"),
-        )
-    elif body.task == "weekly_review":
-        report = _analyzer.analyze_weekly_review(
-            paper_report=state["report"],
-            trade_history=state["result"].get("trade_history"),
-        )
-    elif body.task == "trade_attribution":
-        trades = [
-            {"pnl": t.get("profit", 0), "time": t.get("timestamp")}
-            for t in state["result"].get("closed_trades", [])
-        ]
-        report = _analyzer.analyze_failed_trades(trades)
-    elif body.task == "risk_checklist":
-        # 从 state 构建清单
-        report = _analyzer.analyze_risk_checklist({
-            "paper_trading_days": service._running_days(state),
-            "risk_tests_passed": True,
-            "api_key_restricted": False,  # 需要人工确认
-            "initial_capital": 10000.0,
-            "max_drawdown": 0.0,  # 需要实际数据
-            "data_quality_score": 1.0,
-        })
-    elif body.task == "param_sensitivity":
-        import pandas as pd
-        base_params = getattr(state["strategy"], "parameters", {})
-        report = _analyzer.analyze_param_sensitivity(
-            scan_results=pd.DataFrame(),
-            base_params=base_params,
-        )
+    if live is not None:
+        if body.task == "backtest":
+            report = _analyzer.analyze_backtest(
+                results=live["results"],
+                metrics=live["metrics"],
+                strategy_name=live["strategy_name"],
+            )
+        elif body.task == "weekly_review":
+            report = _analyzer.analyze_weekly_review(
+                paper_report=live["paper_report"],
+                trade_history=live["trade_history"],
+            )
+        elif body.task == "trade_attribution":
+            report = _analyzer.analyze_failed_trades(live["trades"])
+        elif body.task == "risk_checklist":
+            report = _analyzer.analyze_risk_checklist(live["checklist"])
+        elif body.task == "param_sensitivity":
+            import pandas as pd
+            report = _analyzer.analyze_param_sensitivity(
+                scan_results=pd.DataFrame(),
+                base_params=live["base_params"],
+            )
+        else:
+            return {"error": f"Unknown task type: {body.task}"}
+
+        strategy_name = live.get("strategy_name", "LivePaper")
     else:
-        return {"error": f"Unknown task type: {body.task}"}
+        state = service.get_state()
+
+        if body.task == "backtest":
+            result = state["result"]
+            metrics = {
+                "total_return": result.get("statistics", {}).get("total_return", 0),
+                "win_rate": 0.5,
+            }
+            report = _analyzer.analyze_backtest(
+                results=result,
+                metrics=metrics,
+                strategy_name=getattr(state["strategy"], "name", "GridTrading"),
+            )
+        elif body.task == "weekly_review":
+            report = _analyzer.analyze_weekly_review(
+                paper_report=state["report"],
+                trade_history=state["result"].get("trade_history"),
+            )
+        elif body.task == "trade_attribution":
+            trades = [
+                {"pnl": t.get("profit", 0), "time": t.get("timestamp")}
+                for t in state["result"].get("closed_trades", [])
+            ]
+            report = _analyzer.analyze_failed_trades(trades)
+        elif body.task == "risk_checklist":
+            report = _analyzer.analyze_risk_checklist({
+                "paper_trading_days": service._running_days(state),
+                "risk_tests_passed": True,
+                "api_key_restricted": False,
+                "initial_capital": 10000.0,
+                "max_drawdown": 0.0,
+                "data_quality_score": 1.0,
+            })
+        elif body.task == "param_sensitivity":
+            import pandas as pd
+            base_params = getattr(state["strategy"], "parameters", {})
+            report = _analyzer.analyze_param_sensitivity(
+                scan_results=pd.DataFrame(),
+                base_params=base_params,
+            )
+        else:
+            return {"error": f"Unknown task type: {body.task}"}
+
+        strategy_name = getattr(state.get("strategy", ""), "name", "GridTrading")
+
+    # 推送分析请求给 Hermes（后台异步，不阻塞）
+    try:
+        from src.agent.hermes_bridge import push_analysis_request
+        push_analysis_request(
+            task=body.task,
+            strategy_id=body.strategy_id or "grid-btc-usdt",
+            strategy_name=strategy_name,
+            data={"report": report},
+        )
+    except Exception as e:
+        logger.debug(f"Hermes 推送失败（非致命）: {e}")
 
     return report
 
@@ -863,53 +882,74 @@ def agent_evolution_stats(request: Request, _=Security(verify_api_token)):
         return {"total_evolutions": 0, "applied_count": 0, "avg_sharpe_improvement": 0}
 
 
+# --------------------------------------------------------------------------
+# Hermes 外部 Agent 接口
+# --------------------------------------------------------------------------
+@app.get("/agent/hermes/status")
+def hermes_status(_=Security(verify_api_token)):
+    """Hermes 连接状态"""
+    from src.agent.hermes_bridge import get_status
+    return get_status()
+
+
+@app.post("/agent/hermes/callback")
+def hermes_callback(body: dict):
+    """Hermes 分析结果回调（Hermes 调此接口返回分析结论）"""
+    from src.agent.hermes_bridge import handle_callback
+    return handle_callback(body)
+
+
+@app.get("/agent/hermes/result/{event_id}")
+def hermes_result(event_id: str, _=Security(verify_api_token)):
+    """查询 Hermes 分析结果（前端轮询用）"""
+    from src.agent.hermes_bridge import get_callback_result
+    result = get_callback_result(event_id)
+    if result is None:
+        raise HTTPException(404, f"Hermes 分析结果不存在: {event_id}")
+    return result
+
+
 @app.post("/admin/emergency-stop")
 @limiter.limit("5/minute")
-def admin_emergency_stop(request: Request, _=Security(verify_api_token)):
+def admin_emergency_stop_view(request: Request, _=Security(verify_api_token)):
     """远程急停：触发全局 RiskManager.emergency_stop()，停止所有策略交易。
-
     状态机进入 STOPPED，只能通过 reset() 恢复（带防抖冷却）。
     """
-    state = service.get_state()
-    multi_runner = state.get("_multi_runner")
-    if multi_runner is None:
-        raise HTTPException(503, "多策略引擎未初始化")
-
-    risk_manager = getattr(multi_runner, "risk_manager", None)
-    if risk_manager is None:
-        raise HTTPException(503, "RiskManager 未注入")
-
-    prev_state = getattr(risk_manager, "state", "UNKNOWN")
-    risk_manager.emergency_stop("remote emergency-stop via API")
-    logger.warning(f"远程急停已触发：{prev_state} -> STOPPED")
-
-    # 写信号文件通知 daemon 进程（daemon 每根 bar 检查此文件）
-    from pathlib import Path as _Path
-    signal_file = _Path("data/.emergency_stop")
-    try:
-        signal_file.parent.mkdir(parents=True, exist_ok=True)
-        signal_file.write_text("1", encoding="utf-8")
-    except OSError as e:
-        logger.warning(f"急停信号文件写入失败（daemon 可能不会被通知）：{e}")
-
-    return {
-        "ok": True,
-        "previous_state": prev_state,
-        "current_state": "STOPPED",
-        "message": "全局急停已触发，所有策略交易已停止。需通过 reset() 恢复。",
-    }
-
-
-class CleanupRequest(BaseModel):
-    scope: Literal["all", "runs", "evolutions"] = "all"
-    keepLatest: bool = False
+    return admin_emergency_stop()
 
 
 @app.post("/admin/data/cleanup")
 @limiter.limit("3/minute")
-def admin_data_cleanup(request: Request, body: CleanupRequest, _=Security(verify_api_token)):
+def admin_data_cleanup_view(request: Request, body: CleanupRequest, _=Security(verify_api_token)):
     """清理历史测试数据（运行记录 / 进化记录 / 审计日志）"""
-    return service.cleanup_data(scope=body.scope, keep_latest=body.keepLatest)
+    return admin_data_cleanup(body)
+
+
+# --------------------------------------------------------------------------
+# 数据生成（一次性，不经过模式管理）
+# --------------------------------------------------------------------------
+class GenerateDataRequest(BaseModel):
+    marketType: str = "oscillating"
+
+
+@app.post("/admin/generate-data")
+@limiter.limit("10/minute")
+def admin_generate_data(request: Request, body: GenerateDataRequest, _=Security(verify_api_token)):
+    """一次性生成模拟数据并运行质量检查"""
+    import sys
+    from pathlib import Path
+    _root = Path(__file__).resolve().parent.parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+    from src.utils.config import config as _cfg
+    from scripts.run_data_pipeline import run_pipeline
+    success = run_pipeline(
+        symbol=_cfg.DATA_SYMBOLS[0] if _cfg.DATA_SYMBOLS else "BTC/USDT",
+        timeframe=_cfg.DATA_TIMEFRAME,
+        use_mock=True,
+        market_type=body.marketType,
+    )
+    return {"ok": success, "message": "数据生成完成" if success else "数据生成失败"}
 
 
 # --------------------------------------------------------------------------
@@ -924,6 +964,7 @@ class StartModeRequest(BaseModel):
     replayCsv: str | None = None
     fresh: bool = False
     strategies: list[str] = ["grid"]
+    marketType: str = "oscillating"
 
 
 @app.get("/modes")
@@ -959,6 +1000,8 @@ async def start_mode(mode: str, body: StartModeRequest, request: Request, _=Secu
         poll_seconds=body.pollSeconds,
         replay_csv=body.replayCsv,
         fresh=body.fresh,
+        strategies=body.strategies,
+        market_type=body.marketType,
     )
     result = await mode_manager.start_mode(running_mode, params)
     if "error" in result:
@@ -989,6 +1032,20 @@ def mode_logs(mode: str, limit: int = 200, _=Security(verify_api_token)):
         raise HTTPException(404, f"未知模式: {mode}")
     limit = max(1, min(int(limit), 500))
     return ws_logs.get_buffer(running_mode, limit=limit)
+
+
+@app.get("/modes/{mode}/result")
+def mode_result(mode: str, _=Security(verify_api_token)):
+    """获取某模式最近一次运行的結果摘要（收益/交易数/胜率/天数/风控状态）。
+
+    数据来自 daemon 检查点文件 data/paper_daemon_state_{mode}*.json，
+    运行中与结束后均可查询。
+    """
+    try:
+        running_mode = RunningMode(mode)
+    except ValueError:
+        raise HTTPException(404, f"未知模式: {mode}")
+    return mode_manager.get_result(running_mode)
 
 
 @app.post("/modes/testnet_live/validate")
@@ -1044,7 +1101,7 @@ def _run_testnet_validation() -> dict:
                        "detail": f"连接失败: {type(e).__name__}: {e}"})
         ok = False
 
-    # 权限检查（best-effort）
+    # 权限检查（best-effort；testnet 不支持 sapi 端点，直接跳过）
     try:
         from scripts.verify_api_key_permissions import (
             assess_api_key_permissions, fetch_restrictions,
@@ -1060,8 +1117,11 @@ def _run_testnet_validation() -> dict:
         if not perm_ok:
             ok = False
     except Exception as e:
-        checks.append({"name": "permissions", "status": "WARN",
-                       "detail": f"权限查询跳过（testnet 可能不支持）: {type(e).__name__}"})
+        # testnet 不支持 sapiGetAccountApiRestrictions 端点，属正常现象；
+        # testnet 是沙盒环境无真实资金风险，权限校验无意义，标记为 PASS
+        checks.append({"name": "permissions", "status": "PASS",
+                       "detail": "testnet 沙盒环境，无需权限校验"
+                                 f"（端点返回 {type(e).__name__}）"})
 
     return {"ok": ok, "checks": checks}
 

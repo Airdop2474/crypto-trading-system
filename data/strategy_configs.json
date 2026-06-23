@@ -1,0 +1,21 @@
+{
+  "grid": {
+    "lower_price": 50000,
+    "upper_price": 80000,
+    "grid_count": 30,
+    "position_per_grid": 0.05,
+    "enable_filters": true
+  },
+  "rsi": {
+    "rsi_period": 14,
+    "oversold": 30,
+    "overbought": 70,
+    "ema_period": 50
+  },
+  "macd": {
+    "fast_period": 12,
+    "slow_period": 26,
+    "signal_period": 9,
+    "position_fraction": 0.5
+  }
+}

@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react"
 import useSWR from "swr"
-import { Play, Square, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, XCircle, Loader2 } from "lucide-react"
+import { Play, Square, ChevronDown, ChevronUp, CheckCircle, AlertTriangle, XCircle, Loader2, Database } from "lucide-react"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -13,7 +13,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
@@ -27,6 +26,14 @@ import {
   STATUS_LABEL,
   MODE_DEFAULTS,
 } from "@/lib/mode-meta"
+
+/** 市场类型 → 中文标签（key 须与后端 app.py 一致：oscillating / trending / black_swan / random） */
+const MARKET_TYPE_LABEL: Record<string, string> = {
+  random: "随机",
+  oscillating: "震荡",
+  trending: "趋势",
+  black_swan: "黑天鹅",
+}
 import { ModeLogViewer } from "./mode-log-viewer"
 import type { ModeState, RunningMode, StartModeParams, TestnetValidationResult } from "@/lib/types"
 
@@ -63,6 +70,7 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
   const [pollSeconds, setPollSeconds] = useState(defaults.pollSeconds)
   const [replayCsv, setReplayCsv] = useState("")
   const [fresh, setFresh] = useState(false)
+  const [marketType, setMarketType] = useState("oscillating")
 
   // UI 状态
   const [showParams, setShowParams] = useState(false)
@@ -72,8 +80,7 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
   const [validation, setValidation] = useState<TestnetValidationResult | null>(null)
 
   // 互斥：其他交易模式运行时，本交易模式不可启动
-  const isTradeMode = mode !== "data_download"
-  const startDisabled = isRunning || (isTradeMode && tradingModeRunning)
+  const startDisabled = isRunning || tradingModeRunning
 
   // 策略注册表（用于启动参数选策略）
   const { data: registryData } = useSWR("strategy-registry", () => api.getStrategyRegistry(), {
@@ -96,6 +103,7 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
       }
       if (defaults.showPollSeconds) params.pollSeconds = pollSeconds
       if (defaults.showReplayCsv) params.replayCsv = replayCsv || undefined
+      if (defaults.showMarketType) params.marketType = marketType
       if (fresh) params.fresh = true
       if (selectedStrategies.length > 0) params.strategies = selectedStrategies
 
@@ -108,7 +116,7 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
     } finally {
       setLoading(false)
     }
-  }, [mode, symbol, timeframe, days, initialCapital, pollSeconds, replayCsv, fresh, defaults, onAction])
+  }, [mode, symbol, timeframe, days, initialCapital, pollSeconds, replayCsv, marketType, fresh, selectedStrategies, defaults, onAction])
 
   const handleStop = useCallback(async () => {
     setLoading(true)
@@ -273,7 +281,7 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
               <Label className="text-[11px]">时间周期</Label>
               <Select value={timeframe} onValueChange={(v: string | null) => { if (v) setTimeframe(v) }}>
                 <SelectTrigger className="h-7 text-xs mt-0.5">
-                  <SelectValue />
+                  {timeframe}
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="1m">1m</SelectItem>
@@ -307,6 +315,25 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
                 onChange={(e) => setInitialCapital(Number(e.target.value))}
               />
             </div>
+            {defaults.showMarketType && (
+              <div className="col-span-2">
+                <Label className="text-[11px]">市场类型</Label>
+                <Select
+                  value={marketType}
+                  onValueChange={(v) => setMarketType(v ?? "oscillating")}
+                >
+                  <SelectTrigger className="h-7 text-xs mt-0.5">
+                    {MARKET_TYPE_LABEL[marketType] ?? "选择市场类型"}
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="random" className="text-xs">随机</SelectItem>
+                    <SelectItem value="oscillating" className="text-xs">震荡</SelectItem>
+                    <SelectItem value="trending" className="text-xs">趋势</SelectItem>
+                    <SelectItem value="black_swan" className="text-xs">黑天鹅</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             {defaults.showPollSeconds && (
               <div>
                 <Label className="text-[11px]">轮询间隔 (秒)</Label>
@@ -322,7 +349,7 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
             )}
             {defaults.showReplayCsv && (
               <div className="col-span-2">
-                <Label className="text-[11px]">回放数据 (CSV 路径或留空使用 generate)</Label>
+                <Label className="text-[11px]">回放数据（CSV 路径或留空自动生成）</Label>
                 <Input
                   className="h-7 text-xs mt-0.5"
                   placeholder="留空 = 生成模拟数据"
@@ -332,7 +359,7 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
               </div>
             )}
             {/* 策略选择 */}
-            {isTradeMode && (
+            {true && (
               <div className="col-span-2 space-y-1">
                 <Label className="text-[11px]">运行策略</Label>
                 <div className="flex flex-wrap gap-2 mt-1">
@@ -372,7 +399,7 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
         )}
 
         {/* 互斥提示 */}
-        {isTradeMode && tradingModeRunning && isIdle && (
+        {tradingModeRunning && isIdle && (
           <p className="text-[11px] text-warning">
             另一个交易模式运行中，请先停止后再启动本模式
           </p>

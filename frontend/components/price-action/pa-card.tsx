@@ -18,14 +18,9 @@ const TYPE_LABELS: Record<string, string> = {
   donchian: "唐奇安通道 · 趋势突破", structure: "市场结构 · 波动突破",
   supertrend: "SuperTrend · ATR跟踪止损", reversal: "关键位反转 · Pin Bar确认",
 }
-const TYPE_TIMEFRAMES: Record<string, string> = {
-  donchian: "period=20", structure: "lookback=10",
-  supertrend: "period=10, mult=3×", reversal: "lookback=50",
-}
 
 export function PaCard({ strategy, onSetStatus }: Props) {
   const meta = TYPE_LABELS[strategy.type] ?? strategy.type
-  const params = TYPE_TIMEFRAMES[strategy.type] ?? ""
 
   return (
     <Card>
@@ -55,9 +50,9 @@ export function PaCard({ strategy, onSetStatus }: Props) {
             <p className="text-sm font-medium">{meta}</p>
           </div>
           <div className="text-right">
-            <p className="text-[11px] text-muted-foreground">参数</p>
-            <p className="font-mono text-sm font-semibold tabular-nums text-muted-foreground">
-              {params}
+            <p className="text-[11px] text-muted-foreground">交易对</p>
+            <p className="font-mono text-sm tabular-nums text-muted-foreground">
+              {strategy.symbol}
             </p>
           </div>
         </div>

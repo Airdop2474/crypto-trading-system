@@ -6,6 +6,7 @@
 """
 
 import sys
+import argparse
 from pathlib import Path
 import json
 
@@ -23,6 +24,7 @@ def run_pipeline(
     symbol: str,
     timeframe: str,
     use_mock: bool = True,
+    market_type: str = "oscillating",
 ) -> bool:
     """
     运行完整的数据管道
@@ -30,7 +32,8 @@ def run_pipeline(
     参数：
         symbol: 交易对
         timeframe: 时间周期
-        use_mock: 是否使用模拟数据（无网络时）
+        use_mock: 是否使用模拟数据（无网络时，自动生成）
+        market_type: 市场类型（oscillating/trending/black_swan）
 
     返回：
         是否成功
@@ -45,12 +48,13 @@ def run_pipeline(
     df = downloader.load_data(symbol=symbol, timeframe=timeframe)
 
     if df.empty:
-        print("    ERROR: No data found")
         if use_mock:
-            print("    Run: python scripts/generate_mock_data.py")
+            print(f"    No data file found. Generating mock data ({market_type})...")
+            from scripts.generate_mock_data import generate_and_save_data
+            df = generate_and_save_data(symbol=symbol, timeframe=timeframe, market_type=market_type)
         else:
-            print("    Run download first")
-        return False
+            print("    ERROR: No data found. Use --live to download from exchange.")
+            return False
 
     print(f"    Loaded {len(df)} records")
 
@@ -114,6 +118,12 @@ def run_pipeline(
 
 def main():
     """主函数"""
+    parser = argparse.ArgumentParser(description="Data pipeline: generate mock data, quality check, report")
+    parser.add_argument("--market-type", default="oscillating", choices=["oscillating", "trending", "black_swan"],
+                        help="市场类型：震荡/趋势/黑天鹅")
+    parser.add_argument("--live", action="store_true", help="从交易所下载真实数据（而非生成模拟数据）")
+    args = parser.parse_args()
+
     setup_logger(log_level="INFO")
 
     # 配置
@@ -124,7 +134,8 @@ def main():
     success = run_pipeline(
         symbol=symbol,
         timeframe=timeframe,
-        use_mock=True,
+        use_mock=not args.live,
+        market_type=args.market_type,
     )
 
     print("\n" + "=" * 60)

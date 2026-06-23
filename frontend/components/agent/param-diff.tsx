@@ -1,6 +1,7 @@
 "use client"
 
 import { cn } from "@/lib/utils"
+import { getParamLabel } from "@/lib/param-labels"
 
 interface ParamDiffProps {
   oldParams: Record<string, number>
@@ -47,7 +48,7 @@ export function ParamDiff({ oldParams, newParams }: ParamDiffProps) {
                 changed && "bg-muted/30"
               )}
             >
-              <td className="py-1.5 px-2 font-mono text-xs">{key}</td>
+              <td className="py-1.5 px-2 font-mono text-xs">{getParamLabel(key)}</td>
               <td className="py-1.5 px-2 text-right tabular-nums">
                 {oldVal !== undefined ? formatNum(oldVal) : "—"}
               </td>

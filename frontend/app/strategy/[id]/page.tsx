@@ -4,10 +4,11 @@ import { useState } from "react"
 import useSWR from "swr"
 import Link from "next/link"
 import { useParams } from "next/navigation"
+import { toast } from "sonner"
 import { ArrowLeft, ExternalLink, Play, Pause, Settings } from "lucide-react"
 import { api } from "@/lib/api"
 import { fmtNum, fmtSigned, fmtUsd, pnlColor } from "@/lib/format"
-import { getStrategyLabelIcon } from "@/lib/strategy-meta"
+import { getStrategyLabelIcon, parseStrategyType } from "@/lib/strategy-meta"
 import { StatCard } from "@/components/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -22,6 +23,7 @@ import {
 } from "@/components/ui/table"
 import { ApiError } from "@/components/api-error"
 import { SideBadge } from "@/components/status-badge"
+import { StrategyParamsDialog } from "@/components/strategies/strategy-params-dialog"
 import type { BrokerOrder, ClosedTrade } from "@/lib/types"
 
 /**
@@ -45,6 +47,32 @@ export default function StrategyDetailPage() {
     id ? `multi-strategy-${id}` : null,
     () => api.getMultiStrategy(id),
   )
+
+  const { data: registry } = useSWR(
+    id ? "strategy-registry" : null,
+    () => api.getStrategyRegistry(),
+  )
+
+  const [pausing, setPausing] = useState(false)
+  const [paramsOpen, setParamsOpen] = useState(false)
+
+  const strategyType = parseStrategyType(id)
+  const registryEntry = registry?.strategies.find((s) => s.key === strategyType)
+
+  const handlePause = async () => {
+    setPausing(true)
+    const toastId = toast.loading("正在暂停策略…")
+    try {
+      await api.updateStrategyStatus(id, "paused")
+      toast.success("策略已暂停", { id: toastId })
+      mutate()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "未知错误"
+      toast.error("暂停失败", { id: toastId, description: msg })
+    } finally {
+      setPausing(false)
+    }
+  }
 
   if (error) {
     return (
@@ -111,15 +139,24 @@ export default function StrategyDetailPage() {
                 <ExternalLink className="mr-1 size-3" />
                 实时数据
               </Badge>
-              <Link href="/strategies">
-                <Button variant="outline" size="sm" className="gap-1.5">
-                  <Settings className="size-3.5" />
-                  参数
-                </Button>
-              </Link>
-              <Button variant="secondary" size="sm" className="gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => setParamsOpen(true)}
+              >
+                <Settings className="size-3.5" />
+                参数
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="gap-1.5"
+                onClick={handlePause}
+                disabled={pausing}
+              >
                 <Pause className="size-3.5" />
-                暂停
+                {pausing ? "暂停中…" : "暂停"}
               </Button>
             </div>
           </div>
@@ -344,6 +381,18 @@ export default function StrategyDetailPage() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {registryEntry && (
+        <StrategyParamsDialog
+          strategyId={id}
+          strategyName={label}
+          paramSchema={registryEntry.param_schema}
+          currentParams={registryEntry.defaults}
+          defaultParams={registryEntry.defaults}
+          open={paramsOpen}
+          onOpenChange={setParamsOpen}
+        />
       )}
     </div>
   )

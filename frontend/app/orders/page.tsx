@@ -9,10 +9,11 @@ import { OrdersTable } from "@/components/orders/orders-table"
 import { ApiError } from "@/components/api-error"
 import { ExportButton } from "@/components/export-button"
 import { ErrorBoundary } from "@/components/error-boundary"
+import { getPref } from "@/lib/prefs"
 import type { CsvColumn } from "@/lib/csv"
 import type { Order } from "@/lib/types"
 
-const DEFAULT_PAGE_SIZE = 20
+const DEFAULT_PAGE_SIZE = getPref("ordersPageSize")
 
 // 订单 CSV 列定义
 const orderColumns: CsvColumn<Order>[] = [

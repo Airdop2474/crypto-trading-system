@@ -6,6 +6,7 @@ import { toast } from "sonner"
 import useSWR from "swr"
 import { api } from "@/lib/api"
 import type { StrategyType, ParamConstraint } from "@/lib/types"
+import { getParamLabel } from "@/lib/param-labels"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -104,7 +105,7 @@ export function CreateStrategyDialog({ children }: Props) {
     for (const [key, constraint] of userParams) {
       const raw = params[key]
       if (raw == null || raw === "") {
-        toast.error(`请填写参数: ${key}`)
+        toast.error(`请填写参数: ${getParamLabel(key)}`)
         return
       }
       if (constraint.type === "bool") {
@@ -112,15 +113,15 @@ export function CreateStrategyDialog({ children }: Props) {
       } else {
         const num = Number(raw)
         if (isNaN(num)) {
-          toast.error(`参数 ${key} 必须为数字`)
+          toast.error(`参数 ${getParamLabel(key)} 必须为数字`)
           return
         }
         if (constraint.min != null && num < constraint.min) {
-          toast.error(`参数 ${key} 不能小于 ${constraint.min}`)
+          toast.error(`参数 ${getParamLabel(key)} 不能小于 ${constraint.min}`)
           return
         }
         if (constraint.max != null && num > constraint.max) {
-          toast.error(`参数 ${key} 不能大于 ${constraint.max}`)
+          toast.error(`参数 ${getParamLabel(key)} 不能大于 ${constraint.max}`)
           return
         }
         parsedParams[key] = constraint.type === "int" ? Math.round(num) : num
@@ -241,7 +242,7 @@ export function CreateStrategyDialog({ children }: Props) {
               {userParams.map(([key, constraint]) => (
                 <div key={key} className="flex flex-col gap-1.5">
                   <Label htmlFor={`param-${key}`} className="text-xs">
-                    {key}
+                    {getParamLabel(key)}
                   </Label>
                   <Input
                     id={`param-${key}`}

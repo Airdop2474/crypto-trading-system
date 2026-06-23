@@ -1,0 +1,1 @@
+{"source": "crypto_trading_system", "kind": "trade_closed", "payload": {"strategy_id": "", "profit": -10.567699947146139, "symbol": "", "close_time": "2026-04-30 04:00:00"}, "timestamp": "2026-06-23T11:19:51.591464+00:00"}

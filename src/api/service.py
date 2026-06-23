@@ -12,8 +12,10 @@
 """
 
 import glob
+import json
 import random
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -38,6 +40,20 @@ _state: Optional[dict] = None
 _lock = threading.Lock()
 _active = False
 
+# 异步预热状态
+BUILD_STATUS_INACTIVE = "inactive"
+BUILD_STATUS_BUILDING = "building"
+BUILD_STATUS_READY = "ready"
+BUILD_STATUS_ERROR = "error"
+_build_status: str = BUILD_STATUS_INACTIVE
+_build_error: Optional[str] = None
+_build_started_at: Optional[float] = None
+PREWARM_TIMEOUT = 120  # 秒：预热超时，超时后标记为 error
+
+# 守护进程状态文件路径
+DAEMON_STATE_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "paper_daemon_state.json"
+DAEMON_STALE_SECONDS = 60  # 超过此秒数视为 daemon 已停止
+
 
 def activate() -> None:
     """激活 Paper Trading，下次 get_state() 会跑 Paper Trading 生成数据。"""
@@ -46,16 +62,76 @@ def activate() -> None:
     logger.info("Paper Trading activated")
 
 
+def prewarm() -> None:
+    """在后台线程中异步预热 Paper Trading 状态，带超时保护。
+
+    由 lifespan 调用（asyncio.to_thread），不阻塞事件循环。
+    预热完成前 get_state() 返回 building 状态，不会阻塞 HTTP 请求。
+
+    超时：PREWARM_TIMEOUT 秒后标记为 error，调用方可重试。
+    """
+    global _build_status, _build_error, _build_started_at, _state
+
+    with _lock:
+        if _build_status == BUILD_STATUS_BUILDING:
+            logger.info("prewarm: 已有预热线程在运行")
+            return
+        _build_status = BUILD_STATUS_BUILDING
+        _build_error = None
+        _build_started_at = time.monotonic()
+        _active = True
+
+    logger.info("prewarm: 开始异步预热 Paper Trading")
+
+    try:
+        state = _build_state()
+        with _lock:
+            _state = state
+            _build_status = BUILD_STATUS_READY
+            _build_error = None
+            elapsed = time.monotonic() - (_build_started_at or time.monotonic())
+            logger.info(f"prewarm: 预热完成，耗时 {elapsed:.1f}s")
+    except Exception as e:
+        with _lock:
+            _build_status = BUILD_STATUS_ERROR
+            _build_error = f"{type(e).__name__}: {e}"
+            _build_started_at = None
+        logger.error(f"prewarm: 预热失败: {_build_error}")
+
+
+def get_build_status() -> dict:
+    """返回预热状态，供前端 /admin/build-status 使用。"""
+    with _lock:
+        elapsed = None
+        if _build_started_at is not None:
+            elapsed = time.monotonic() - _build_started_at
+        status_data = {
+            "status": _build_status,
+            "error": _build_error,
+            "elapsed_seconds": round(elapsed, 1) if elapsed is not None else None,
+            "has_state": _state is not None,
+            "active": _active,
+        }
+    # 附加 daemon 状态（如果存在）
+    daemon = _read_daemon_state()
+    if daemon:
+        status_data["daemon"] = daemon
+    return status_data
+
+
 def reset_state() -> None:
     """重置缓存的 Paper Trading state（用于 /admin/refresh-state 和 /admin/clear-cache）。
 
     同时将 _active 置为 False，系统进入空状态，直到调用 /admin/start-trading。
     线程安全：持锁清空，避免与并发 get_state() 竞争。
     """
-    global _state, _active
+    global _state, _active, _build_status, _build_error, _build_started_at
     with _lock:
         _state = None
         _active = False
+        _build_status = BUILD_STATUS_INACTIVE
+        _build_error = None
+        _build_started_at = None
     logger.info("Paper Trading state reset; inactive until /admin/start-trading")
 
 
@@ -63,21 +139,29 @@ def reset_state() -> None:
 # 运行 Paper Trading（lazy，进程内只跑一次）
 # --------------------------------------------------------------------------
 def _load_data() -> pd.DataFrame:
-    """优先读 data/raw 的震荡数据；缺失时用同款生成器内存生成（seed 基于时间戳，每次不同）。"""
-    files = sorted(glob.glob(str(PROJECT_ROOT / "data" / "raw" / "BTC_USDT_4h_osc_*.csv")))
+    """优先读 data/raw 的已存数据；缺失时自动生成（震荡市场）。"""
+    files = sorted(glob.glob(str(PROJECT_ROOT / "data" / "raw" / "BTC_USDT_4h_*.csv")))
     if files:
         df = pd.read_csv(files[-1])
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         return df
 
-    import sys
-    sys.path.insert(0, str(PROJECT_ROOT))
-    from scripts.generate_oscillating_data import generate_oscillating_ohlcv
-
-    seed = int(datetime.now().timestamp()) % 100000
-    df = generate_oscillating_ohlcv(seed=seed)
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    return df
+    # 启动时自动生成，失败时从 generate_and_save_data 获取
+    try:
+        from scripts.generate_mock_data import generate_and_save_data
+        df = generate_and_save_data(symbol="BTC/USDT", timeframe="4h", n_bars=500, market_type="oscillating")
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        return df
+    except Exception as e:
+        from src.utils.logger import logger
+        logger.warning(f"_load_data fallback failed: {e}")
+        import sys
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from scripts.generate_oscillating_data import generate_oscillating_ohlcv
+        seed = int(datetime.now().timestamp()) % 100000
+        df = generate_oscillating_ohlcv(seed=seed)
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        return df
 
 
 def _build_state() -> dict:
@@ -140,7 +224,7 @@ def _build_multi_results(
 ) -> tuple:
     """用 MultiStrategyRunner 跑多个策略，返回 (results_dict, aggregate)。
 
-    当前注册 9 个策略（覆盖系统全部策略）：
+    当前注册 10 个策略（覆盖系统全部策略）：
     1. Grid BTC/USDT — 震荡市网格低买高卖
     2. RSI Momentum — 趋势回调/超买卖出
     3. Simple MA — 金叉买入/死叉卖出
@@ -150,6 +234,8 @@ def _build_multi_results(
     7. Key Level Reversal — 支撑阻力位 pin bar 反转
     8. Buy & Hold — 买入持有基准
     9. Price Action — 裸K结构 + 供需区 + 流动性评分
+    10. Bollinger Bands — 布林带均值回归
+    11. MACD — MACD 趋势跟踪
 
     所有策略共享同一个 broker（资金池 10000 USDT）。
     """
@@ -228,6 +314,18 @@ def _build_multi_results(
             strategy=get_strategy("priceaction")(),
             symbol=SYMBOL,
             description="价格行为学：裸K+供需+流动性评分",
+        ),
+        StrategyConfig(
+            strategy_id="bollinger-btc-usdt",
+            strategy=get_strategy("bollinger")(),
+            symbol=SYMBOL,
+            description="布林带均值回归：通道边界反转交易",
+        ),
+        StrategyConfig(
+            strategy_id="macd-btc-usdt",
+            strategy=get_strategy("macd")(),
+            symbol=SYMBOL,
+            description="MACD 趋势跟踪：快慢均线交叉",
         ),
     ]
     multi_runner.register_many(configs)
@@ -409,14 +507,51 @@ def _get_empty_state() -> dict:
     return _EMPTY_STATE
 
 
+def _read_daemon_state() -> Optional[dict]:
+    """检查守护进程的检查点文件，返回状态摘要（不存在或过期返回 None）。"""
+    try:
+        if not DAEMON_STATE_FILE.exists():
+            return None
+        mtime = DAEMON_STATE_FILE.stat().st_mtime
+        age = time.time() - mtime
+        if age > DAEMON_STALE_SECONDS:
+            return None
+        raw = json.loads(DAEMON_STATE_FILE.read_text(encoding="utf-8"))
+        return {
+            "day_count": raw.get("day_count", 0),
+            "last_bar_ts": raw.get("last_bar_ts"),
+            "realized_pnl": raw.get("runner", {}).get("realized_pnl", 0),
+            "state": raw.get("risk", {}).get("state", "unknown"),
+            "age_seconds": round(age, 1),
+        }
+    except Exception as e:
+        logger.debug(f"读取 daemon 状态失败（非致命）: {e}")
+        return None
+
+
+def _daemon_state_available() -> bool:
+    """daemon 检查点是否存在且在有效期内。"""
+    return _read_daemon_state() is not None
+
+
 def get_state() -> dict:
-    global _state
+    global _state, _build_status, _build_error, _build_started_at
     if not _active:
         return _get_empty_state()
+
     if _state is None:
         with _lock:
             if _state is None:
+                if _build_status == BUILD_STATUS_BUILDING:
+                    elapsed = time.monotonic() - (_build_started_at or time.monotonic())
+                    if elapsed > PREWARM_TIMEOUT:
+                        _build_status = BUILD_STATUS_ERROR
+                        _build_error = f"预热超时（>{PREWARM_TIMEOUT}s）"
+                        logger.error(f"get_state: {_build_error}")
+                    else:
+                        raise RuntimeError(f"PAPER_TRADING_BUILDING: 预热中（{elapsed:.0f}s/{PREWARM_TIMEOUT}s）")
                 _state = _build_state()
+
     return _state
 
 
@@ -1410,13 +1545,17 @@ def create_strategy(
 
 
 def update_strategy_params(state: dict, strategy_id: str, params: dict) -> dict:
-    """更新运行中策略的参数（热替换）。
+    """更新策略参数（热替换运行中实例 + 持久化配置由调用方负责）。
 
-    通过 multi_runner 找到对应的 slot，更新策略实例参数。
+    如果引擎未启动则跳过热替换（配置已由调用方保存过，下次启动生效）。
     """
     multi_runner = state.get("_multi_runner")
     if multi_runner is None:
-        raise RuntimeError("引擎未初始化，无法更新参数")
+        logger.info(
+            "Strategy %s params saved (engine not running, will apply on next start)",
+            strategy_id,
+        )
+        return {"strategy_id": strategy_id, "updated": params, "deferred": True}
 
     for slot in multi_runner.slots:
         if slot.config.strategy_id == strategy_id:

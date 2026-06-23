@@ -1,0 +1,1 @@
+{"source": "crypto_trading_system", "kind": "risk_triggered", "payload": {"type": "PAUSE", "reason": "flash crash: single bar drop 14.02% >= 10.00%", "state": "PAUSED"}, "timestamp": "2026-06-23T10:59:52.175404+00:00"}

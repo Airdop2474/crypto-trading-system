@@ -53,3 +53,25 @@ def update_strategy_config(strategy_type: str, params: dict) -> dict:
     _save(data)
     logger.info(f"策略 [{strategy_type}] 配置已保存: {params}")
     return data[strategy_type]
+
+
+def delete_strategy_config(strategy_type: str) -> bool:
+    """删除指定策略配置并持久化。"""
+    data = _load()
+    if strategy_type not in data:
+        return False
+    del data[strategy_type]
+    _save(data)
+    logger.info(f"策略 [{strategy_type}] 配置已删除")
+    return True
+
+
+def rename_strategy_config(old_name: str, new_name: str) -> bool:
+    """重命名策略配置的 key（保留参数值）。"""
+    data = _load()
+    if old_name not in data:
+        return False
+    data[new_name] = data.pop(old_name)
+    _save(data)
+    logger.info(f"策略配置 [{old_name}] 已重命名为 [{new_name}]")
+    return True

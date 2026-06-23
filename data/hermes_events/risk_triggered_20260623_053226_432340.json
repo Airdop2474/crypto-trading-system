@@ -1,0 +1,1 @@
+{"source": "crypto_trading_system", "kind": "risk_triggered", "payload": {"type": "EMERGENCY_STOP", "reason": "remote emergency-stop via API", "state": "STOPPED"}, "timestamp": "2026-06-22T21:32:26.432340+00:00"}

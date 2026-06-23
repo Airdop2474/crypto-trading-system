@@ -70,7 +70,17 @@ export function AnalyzeResult({
       </CardHeader>
       <CardContent className="space-y-4">
         <Section title="分析结论" body={result.analysis} />
-        <Section title="推理过程" body={result.reasoning} muted />
+        <Section
+          title="推理过程"
+          body={
+            typeof result.reasoning === "string"
+              ? result.reasoning
+              : Object.entries(result.reasoning)
+                  .map(([k, v]) => `${k}: ${v == null ? "无" : typeof v === "object" ? JSON.stringify(v, null, 2) : v}`)
+                  .join("\n")
+          }
+          muted
+        />
         <Section title="建议" body={result.recommendation} />
 
         {risks.length > 0 ? (

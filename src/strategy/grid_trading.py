@@ -55,6 +55,8 @@ class GridTradingStrategy(RiskAwareStrategy):
         grid_count: int = 10,
         position_per_grid: Optional[float] = None,
         enable_filters: bool = True,
+        enable_adx_filter: bool = False,
+        adx_period: int = 14,
         max_consecutive_losses: int = 3,
         max_daily_loss: float = 0.02,
         initial_capital: float = 10000.0,
@@ -104,6 +106,10 @@ class GridTradingStrategy(RiskAwareStrategy):
         self.grid_count = grid_count
         self.position_per_grid = position_per_grid
         self.enable_filters = enable_filters
+        self.enable_adx_filter = enable_adx_filter
+
+        # ADX 初始化
+        self._init_adx(adx_period)
 
         # 计算网格间距与网格线
         self.grid_spacing = (upper_price - lower_price) / grid_count
@@ -177,11 +183,21 @@ class GridTradingStrategy(RiskAwareStrategy):
 
         current_price = data.iloc[-1]["close"]
 
-        # --- 熔断暂停检查（RiskAwareStrategy 统一管理）---
+        # ADX 增量更新（所有 bar）
+        bar = data.iloc[-1]
+        self._update_adx(float(bar["high"]), float(bar["low"]), float(bar["close"]))
+
+        # --- 熔断暂停检查 ---
         if self._is_paused(current_time):
             self._try_recover(data)
             if self._is_paused(current_time):
                 return []
+
+        # --- ADX 趋势过滤（网格只在震荡市交易）---
+        if self.enable_adx_filter and self._is_trending():
+            self._reset_no_trade_counter()
+            self._update_ema(current_price)
+            return []
 
         # --- 网格边界击穿检测 ---
         breach_status, breach_reason = self._check_boundary_breach(current_price)

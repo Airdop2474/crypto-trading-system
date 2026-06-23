@@ -1,7 +1,7 @@
 // 领域模型类型定义 —— 前后端共享的数据契约
 // 未来对接真实接口时，保持这些类型不变即可让 UI 无缝复用。
 
-export type StrategyType = "grid" | "rsi" | "ma" | "buyhold" | "donchian" | "structure" | "supertrend" | "reversal" | "priceaction"
+export type StrategyType = "grid" | "rsi" | "ma" | "buyhold" | "donchian" | "structure" | "supertrend" | "reversal" | "priceaction" | "bollinger" | "macd" | "composite"
 export type StrategyStatus = "running" | "paused" | "stopped"
 export type Side = "buy" | "sell"
 export type OrderStatus = "filled" | "open" | "partially_filled" | "canceled"
@@ -232,7 +232,7 @@ export type AgentTask =
 /** AI 分析统一返回结构（analyzer.py 顶部约定的输出格式） */
 export interface AgentAnalysisResult {
   analysis: string
-  reasoning: string
+  reasoning: Record<string, unknown> | string
   recommendation: string
   risks?: string[]
   requires_human_approval: boolean
@@ -377,7 +377,7 @@ export interface StrategyCorrelation {
 // 运行模式（GET /modes, POST /modes/{mode}/start, WS /ws/logs/{mode}）
 // 对应后端 src/api/mode_manager.py
 // ---------------------------------------------------------------------------
-export type RunningMode = "data_download" | "replay_paper" | "live_paper" | "testnet_live"
+export type RunningMode = "replay_paper" | "live_paper" | "testnet_live"
 export type ModeStatusValue = "idle" | "running" | "stopping" | "error"
 
 export interface ModeState {
@@ -400,6 +400,56 @@ export interface StartModeParams {
   replayCsv?: string
   fresh?: boolean
   strategies?: string[]
+  marketType?: string
+}
+
+// ---------------------------------------------------------------------------
+// 运行结果摘要（GET /modes/{mode}/result）
+// 对应后端 src/api/mode_manager.py::ModeManager.get_result
+// ---------------------------------------------------------------------------
+export interface ModeStrategyResult {
+  strategy: string
+  initial_capital: number
+  realized_pnl: number
+  return_pct: number        // %
+  total_trades: number
+  win_count: number
+  loss_count: number
+  win_rate: number       // %
+  final_balance: number
+  day_count: number
+  last_bar_ts: string | null
+  risk_state: string
+  strategy_paused: boolean
+}
+
+export interface ModeResultTrade {
+  strategy: string
+  tag: string
+  time: string
+  profit: number
+}
+
+export interface ModeResult {
+  mode: RunningMode
+  mode_status: ModeStatusValue
+  exit_code: number | null
+  available: boolean             // 是否存在可读的 daemon 检查点
+  symbol: string
+  initial_capital: number
+  realized_pnl: number
+  total_return_pct: number       // %
+  final_balance: number
+  total_trades: number
+  win_count: number
+  loss_count: number
+  win_rate: number               // %
+  day_count: number
+  last_bar_ts: string | null
+  risk_state: string
+  strategy_paused: boolean
+  strategies: ModeStrategyResult[]
+  recent_trades: ModeResultTrade[]
 }
 
 export interface TestnetValidationCheck {
@@ -523,4 +573,39 @@ export interface DataCleanupResult {
   evolutions_deleted: number
   audit_deleted: number
   error?: string
+}
+
+// ============================================================================
+// Hermes 外部 Agent 类型
+// ============================================================================
+
+/** Hermes 连接状态 */
+export interface HermesStatus {
+  available: boolean
+  hermes_home: string
+  event_dir: string
+  pending_events: number
+  completed_analyses: number
+}
+
+/** Hermes 分析结果 */
+export interface HermesAnalysisResult {
+  event_id: string
+  status: "pending" | "completed" | "error"
+  task?: string
+  summary: string
+  details: Record<string, unknown>
+  error?: string
+}
+
+/** 记忆条目（MemoryStore 检索结果） */
+export interface MemoryEntry {
+  id: string
+  kind: "analysis" | "trade" | "evolution" | "feedback" | "risk" | "daily"
+  content: Record<string, unknown>
+  tags: string[]
+  score: number
+  feedback_avg_score: number
+  created_at: string
+  similarity?: number
 }
