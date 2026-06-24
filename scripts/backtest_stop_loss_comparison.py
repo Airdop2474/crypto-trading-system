@@ -11,7 +11,7 @@
 - 最大回撤
 - Sharpe Ratio
 - 交易笔数
-- 止损触发次数
+- 胜率
 
 出口标准（v3 Phase 1）：
 - Sharpe 下降 > 30% → 该策略止损方案返工
@@ -26,8 +26,9 @@
 import sys
 import json
 import argparse
+import inspect
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 确保项目根目录在 path 中
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -39,89 +40,138 @@ import numpy as np
 from src.utils.logger import logger
 from src.strategy.registry import STRATEGY_REGISTRY
 from src.strategy.stop_configs import get_stop_config, STRATEGY_STOP_CONFIGS
-from src.data.exchange import fetch_ohlcv
 
 
-def run_backtest(strategy_name: str, with_stop: bool, symbol: str = "BTC/USDT",
-                 timeframe: str = "4h", days: int = 365) -> dict:
+def fetch_data(symbol: str, timeframe: str, days: int) -> pd.DataFrame:
+    """从 Binance 获取历史 OHLCV 数据（直接 REST API，绕过 ccxt）"""
+    import os
+    import requests
+
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    if proxy:
+        logger.info(f"Using proxy: {proxy}")
+
+    # Binance 现货 REST API
+    base_url = "https://api.binance.com/api/v3/klines"
+    # 转换交易对格式: BTC/USDT -> BTCUSDT
+    sym = symbol.replace("/", "")
+
+    end = datetime.utcnow()
+    start = end - timedelta(days=days)
+    start_ms = int(start.timestamp() * 1000)
+    end_ms = int(end.timestamp() * 1000)
+
+    all_data = []
+    current_start = start_ms
+
+    while current_start < end_ms:
+        params = {
+            "symbol": sym,
+            "interval": timeframe,
+            "startTime": current_start,
+            "endTime": end_ms,
+            "limit": 1000,
+        }
+        resp = requests.get(base_url, params=params, proxies=proxies, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        if not data:
+            break
+
+        all_data.extend(data)
+        current_start = data[-1][0] + 1
+        if len(data) < 1000:
+            break
+
+    if not all_data:
+        raise RuntimeError("No data fetched from Binance")
+
+    # Binance klines 格式: [openTime, open, high, low, close, volume, closeTime, ...]
+    df = pd.DataFrame(all_data, columns=[
+        "timestamp", "open", "high", "low", "close", "volume",
+        "close_time", "quote_volume", "trades", "taker_buy_base",
+        "taker_buy_quote", "ignore"
+    ])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = df[col].astype(float)
+    # 去掉仍在形成中的最后一根
+    df = df[df["timestamp"] < pd.Timestamp(end, tz="UTC")]
+    return df[["timestamp", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
+
+
+def create_strategy(strategy_name: str, stop_config, data: pd.DataFrame):
+    """创建策略实例，处理不同策略的构造参数差异"""
+    strategy_cls = STRATEGY_REGISTRY[strategy_name]
+    sig_params = set(inspect.signature(strategy_cls.__init__).parameters.keys())
+    sig_params.discard("self")
+
+    kwargs = {}
+    if "initial_capital" in sig_params:
+        kwargs["initial_capital"] = 10000.0
+    if "stop_loss_config" in sig_params:
+        kwargs["stop_loss_config"] = stop_config
+
+    # Grid 需要价格区间
+    if strategy_name == "grid":
+        warm = data.iloc[:30]
+        lo, hi = warm["low"].min(), warm["high"].max()
+        span = hi - lo
+        kwargs["lower_price"] = lo + span * 0.1
+        kwargs["upper_price"] = hi - span * 0.1
+
+    # 过滤 None 值
+    kwargs = {k: v for k, v in kwargs.items() if v is not None}
+    return strategy_cls(**kwargs)
+
+
+def run_backtest(strategy_name: str, with_stop: bool, data: pd.DataFrame) -> dict:
     """运行单个策略回测
 
     返回：回测结果摘要
     """
     from src.backtest.engine import BacktestEngine
-    from src.execution.paper_broker import PaperBroker
 
-    # 获取策略类
-    strategy_cls = STRATEGY_REGISTRY.get(strategy_name)
-    if strategy_cls is None:
-        return {"error": f"Unknown strategy: {strategy_name}"}
-
-    # 获取止损配置
     stop_config = get_stop_config(strategy_name) if with_stop else None
 
-    # 创建策略实例
     try:
-        # 尝试带 stop_loss_config 参数
-        strategy = strategy_cls(
-            initial_capital=10000.0,
-            stop_loss_config=stop_config,
-        )
-    except TypeError:
-        # 如果策略不接受 stop_loss_config，用旧方式
-        strategy = strategy_cls(initial_capital=10000.0)
-
-    # 获取数据
-    try:
-        data = fetch_ohlcv(symbol=symbol, timeframe=timeframe, days=days)
+        strategy = create_strategy(strategy_name, stop_config, data)
     except Exception as e:
-        return {"error": f"Failed to fetch data: {e}"}
+        return {"error": f"Failed to create strategy: {e}"}
 
-    if data is None or len(data) < 50:
-        return {"error": f"Insufficient data: {len(data) if data is not None else 0} bars"}
+    engine = BacktestEngine(initial_capital=10000.0, commission=0.001, slippage=0.0005)
+    result = engine.run(data, strategy)
 
-    # 运行回测
-    try:
-        broker = PaperBroker(
-            initial_balance=10000.0,
-            commission=0.001,
-            slippage_pct=0.0005,
-        )
-        engine = BacktestEngine(strategy=strategy, broker=broker)
-        result = engine.run(data)
+    if not result.get("success"):
+        return {"error": result.get("message", "Backtest failed")}
 
-        # 提取关键指标
-        stats = result.get("statistics", {})
-        return {
-            "strategy": strategy_name,
-            "with_stop": with_stop,
-            "total_return": stats.get("total_return", 0),
-            "annual_return": stats.get("annual_return", 0),
-            "max_drawdown": stats.get("max_drawdown", 0),
-            "sharpe_ratio": stats.get("sharpe_ratio", 0),
-            "total_trades": stats.get("total_trades", 0),
-            "win_rate": stats.get("win_rate", 0),
-            "final_balance": stats.get("final_balance", 10000),
-        }
-    except Exception as e:
-        logger.error(f"Backtest failed for {strategy_name}: {e}")
-        return {"error": str(e)}
+    metrics = result.get("metrics", {})
+    return {
+        "strategy": strategy_name,
+        "with_stop": with_stop,
+        "total_return": metrics.get("total_return", 0),
+        "annual_return": metrics.get("annual_return", 0),
+        "max_drawdown": metrics.get("max_drawdown", 0),
+        "sharpe_ratio": metrics.get("sharpe_ratio", 0),
+        "total_trades": metrics.get("total_trades", 0),
+        "win_rate": metrics.get("win_rate", 0),
+        "final_equity": result.get("final_equity", 10000),
+    }
 
 
-def compare_strategy(strategy_name: str, symbol: str, timeframe: str, days: int) -> dict:
+def compare_strategy(strategy_name: str, data: pd.DataFrame) -> dict:
     """对照回测单个策略"""
     print(f"\n{'='*60}")
     print(f"  策略: {strategy_name}")
     print(f"{'='*60}")
 
-    # 无止损
     print(f"  [1/2] 回测无止损版...")
-    baseline = run_backtest(strategy_name, with_stop=False, symbol=symbol,
-                           timeframe=timeframe, days=days)
+    baseline = run_backtest(strategy_name, with_stop=False, data=data)
 
-    # 有止损
     print(f"  [2/2] 回测有止损版...")
-    with_stop = run_backtest(strategy_name, with_stop=True, symbol=symbol,
-                            timeframe=timeframe, days=days)
+    with_stop = run_backtest(strategy_name, with_stop=True, data=data)
 
     if "error" in baseline:
         print(f"  ✗ 基线回测失败: {baseline['error']}")
@@ -196,10 +246,20 @@ def main():
     print(f"  策略数: {len(strategies)}")
     print(f"{'='*60}")
 
+    # 一次性获取数据，所有策略共用
+    print(f"\n  获取历史数据...")
+    try:
+        data = fetch_data(args.symbol, args.timeframe, args.days)
+    except Exception as e:
+        print(f"  ✗ 获取数据失败: {e}")
+        return 1
+
+    print(f"  数据: {len(data)} bars, {data.iloc[0]['timestamp']} → {data.iloc[-1]['timestamp']}")
+
     results = []
     for s in strategies:
         try:
-            result = compare_strategy(s, args.symbol, args.timeframe, args.days)
+            result = compare_strategy(s, data)
             results.append(result)
         except Exception as e:
             print(f"\n  ✗ {s} 回测异常: {e}")

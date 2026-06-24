@@ -197,13 +197,12 @@ class ParameterStability:
         """运行单次回测，返回 metrics"""
         try:
             strategy = self.strategy_class(**params)
-            broker = PaperBroker(
-                initial_balance=self.initial_capital,
+            engine = BacktestEngine(
+                initial_capital=self.initial_capital,
                 commission=0.001,
-                slippage_pct=0.0005,
+                slippage=0.0005,
             )
-            engine = BacktestEngine(strategy=strategy, broker=broker)
-            result = engine.run(self.data)
+            result = engine.run(self.data, strategy)
             return result.get("metrics", {})
         except Exception as e:
             logger.debug(f"Backtest failed with params {params}: {e}")

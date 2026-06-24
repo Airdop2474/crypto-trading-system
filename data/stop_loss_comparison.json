@@ -1,0 +1,327 @@
+[
+  {
+    "strategy": "rsi",
+    "baseline": {
+      "strategy": "rsi",
+      "with_stop": false,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "with_stop": {
+      "strategy": "rsi",
+      "with_stop": true,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "sharpe_change_pct": 0,
+    "mdd_change_pct": 0,
+    "verdict": "PASS",
+    "issues": []
+  },
+  {
+    "strategy": "ma",
+    "baseline": {
+      "strategy": "ma",
+      "with_stop": false,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "with_stop": {
+      "strategy": "ma",
+      "with_stop": true,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "sharpe_change_pct": 0,
+    "mdd_change_pct": 0,
+    "verdict": "PASS",
+    "issues": []
+  },
+  {
+    "strategy": "donchian",
+    "baseline": {
+      "strategy": "donchian",
+      "with_stop": false,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "with_stop": {
+      "strategy": "donchian",
+      "with_stop": true,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "sharpe_change_pct": 0,
+    "mdd_change_pct": 0,
+    "verdict": "PASS",
+    "issues": []
+  },
+  {
+    "strategy": "structure",
+    "baseline": {
+      "strategy": "structure",
+      "with_stop": false,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "with_stop": {
+      "strategy": "structure",
+      "with_stop": true,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "sharpe_change_pct": 0,
+    "mdd_change_pct": 0,
+    "verdict": "PASS",
+    "issues": []
+  },
+  {
+    "strategy": "supertrend",
+    "baseline": {
+      "strategy": "supertrend",
+      "with_stop": false,
+      "total_return": -0.31545851655864027,
+      "annual_return": -0.5366405981560232,
+      "max_drawdown": -0.3805736802723872,
+      "sharpe_ratio": -1.5046830755626028,
+      "total_trades": 1,
+      "win_rate": 0.0,
+      "final_equity": 6845.414834413597
+    },
+    "with_stop": {
+      "strategy": "supertrend",
+      "with_stop": true,
+      "total_return": -0.06531423174058545,
+      "annual_return": -0.1281108201523623,
+      "max_drawdown": -0.06531423174058545,
+      "sharpe_ratio": -4.29225188019383,
+      "total_trades": 38,
+      "win_rate": 0.21052631578947367,
+      "final_equity": 9346.857682594145
+    },
+    "sharpe_change_pct": -185.3,
+    "mdd_change_pct": -82.8,
+    "verdict": "PASS",
+    "issues": []
+  },
+  {
+    "strategy": "macd",
+    "baseline": {
+      "strategy": "macd",
+      "with_stop": false,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "with_stop": {
+      "strategy": "macd",
+      "with_stop": true,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "sharpe_change_pct": 0,
+    "mdd_change_pct": 0,
+    "verdict": "PASS",
+    "issues": []
+  },
+  {
+    "strategy": "composite",
+    "baseline": {
+      "strategy": "composite",
+      "with_stop": false,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "with_stop": {
+      "strategy": "composite",
+      "with_stop": true,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "sharpe_change_pct": 0,
+    "mdd_change_pct": 0,
+    "verdict": "PASS",
+    "issues": []
+  },
+  {
+    "strategy": "grid",
+    "baseline": {
+      "strategy": "grid",
+      "with_stop": false,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "with_stop": {
+      "strategy": "grid",
+      "with_stop": true,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "sharpe_change_pct": 0,
+    "mdd_change_pct": 0,
+    "verdict": "PASS",
+    "issues": []
+  },
+  {
+    "strategy": "bollinger",
+    "baseline": {
+      "strategy": "bollinger",
+      "with_stop": false,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "with_stop": {
+      "strategy": "bollinger",
+      "with_stop": true,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "sharpe_change_pct": 0,
+    "mdd_change_pct": 0,
+    "verdict": "PASS",
+    "issues": []
+  },
+  {
+    "strategy": "reversal",
+    "error": "unsupported operand type(s) for *: 'NoneType' and 'float'"
+  },
+  {
+    "strategy": "priceaction",
+    "baseline": {
+      "strategy": "priceaction",
+      "with_stop": false,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "with_stop": {
+      "strategy": "priceaction",
+      "with_stop": true,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "win_rate": 0.0,
+      "final_equity": 10000.0
+    },
+    "sharpe_change_pct": 0,
+    "mdd_change_pct": 0,
+    "verdict": "PASS",
+    "issues": []
+  },
+  {
+    "strategy": "buyhold",
+    "baseline": {
+      "strategy": "buyhold",
+      "with_stop": false,
+      "total_return": -0.3124746039637357,
+      "annual_return": -0.5311071609549882,
+      "max_drawdown": -0.38057368027238725,
+      "sharpe_ratio": -1.4777728667002772,
+      "total_trades": 1,
+      "win_rate": 0.0,
+      "final_equity": 6875.253960362643
+    },
+    "with_stop": {
+      "strategy": "buyhold",
+      "with_stop": true,
+      "total_return": -0.3124746039637357,
+      "annual_return": -0.5311071609549882,
+      "max_drawdown": -0.38057368027238725,
+      "sharpe_ratio": -1.4777728667002772,
+      "total_trades": 1,
+      "win_rate": 0.0,
+      "final_equity": 6875.253960362643
+    },
+    "sharpe_change_pct": 0.0,
+    "mdd_change_pct": 0.0,
+    "verdict": "WARN",
+    "issues": [
+      "最大回撤仅下降 0.0% < 15%"
+    ]
+  }
+]

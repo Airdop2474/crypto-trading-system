@@ -158,6 +158,7 @@ class StrategyEvaluator:
     def evaluate_single(self, strategy_name: str) -> StrategyEvaluation:
         """评估单个策略"""
         start_time = time.time()
+        import inspect
 
         strategy_cls = STRATEGY_REGISTRY.get(strategy_name)
         if strategy_cls is None:
@@ -165,21 +166,32 @@ class StrategyEvaluator:
 
         # 1. 基础回测（带止损）
         stop_config = get_stop_config(strategy_name)
-        try:
-            strategy = strategy_cls(
-                initial_capital=self.initial_capital,
-                stop_loss_config=stop_config,
-            )
-        except TypeError:
-            strategy = strategy_cls(initial_capital=self.initial_capital)
+        sig_params = set(inspect.signature(strategy_cls.__init__).parameters.keys())
+        sig_params.discard("self")
 
-        broker = PaperBroker(
-            initial_balance=self.initial_capital,
+        kwargs = {}
+        if "initial_capital" in sig_params:
+            kwargs["initial_capital"] = self.initial_capital
+        if "stop_loss_config" in sig_params:
+            kwargs["stop_loss_config"] = stop_config
+
+        # Grid 需要价格区间
+        if strategy_name == "grid":
+            warm = self.data.iloc[:30]
+            lo, hi = warm["low"].min(), warm["high"].max()
+            span = hi - lo
+            kwargs["lower_price"] = lo + span * 0.1
+            kwargs["upper_price"] = hi - span * 0.1
+
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        strategy = strategy_cls(**kwargs)
+
+        engine = BacktestEngine(
+            initial_capital=self.initial_capital,
             commission=0.001,
-            slippage_pct=0.0005,
+            slippage=0.0005,
         )
-        engine = BacktestEngine(strategy=strategy, broker=broker)
-        bt_result = engine.run(self.data)
+        bt_result = engine.run(self.data, strategy)
         metrics = bt_result.get("metrics", {})
         trades = bt_result.get("trades", [])
         equity_curve = bt_result.get("equity_curve", [])

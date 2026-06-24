@@ -1,0 +1,375 @@
+[
+  {
+    "strategy_name": "supertrend",
+    "strategy_label": "超级趋势",
+    "total_score": 51.3,
+    "verdict": "WARN",
+    "scores": {
+      "profitability": 0.7,
+      "risk": 86.2,
+      "stability": 94.8,
+      "trade_quality": 29.2
+    },
+    "metrics": {
+      "annual_return": -0.1281,
+      "sharpe_ratio": -4.29,
+      "max_drawdown": 0.0653,
+      "win_rate": 0.2105,
+      "profit_factor": 0.12,
+      "total_trades": 38
+    },
+    "monte_carlo": {
+      "return_median": -0.0664,
+      "return_p5": -0.0986,
+      "max_dd_p95": 0.099,
+      "ruin_prob": 0.0
+    },
+    "param_stability": 0.999,
+    "elimination_flags": [
+      "Sharpe -4.29 < 0.3"
+    ],
+    "elapsed_seconds": 3.6
+  },
+  {
+    "strategy_name": "grid",
+    "strategy_label": "网格",
+    "total_score": 50.0,
+    "verdict": "WARN",
+    "scores": {
+      "profitability": 0.0,
+      "risk": 100.0,
+      "stability": 100.0,
+      "trade_quality": 0.0
+    },
+    "metrics": {
+      "annual_return": 0.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "total_trades": 0
+    },
+    "monte_carlo": {
+      "return_median": 0,
+      "return_p5": 0,
+      "max_dd_p95": 0,
+      "ruin_prob": 0
+    },
+    "param_stability": 1.0,
+    "elimination_flags": [
+      "Sharpe 0.00 < 0.3"
+    ],
+    "elapsed_seconds": 7.02
+  },
+  {
+    "strategy_name": "rsi",
+    "strategy_label": "RSI 动量",
+    "total_score": 50.0,
+    "verdict": "WARN",
+    "scores": {
+      "profitability": 0.0,
+      "risk": 100.0,
+      "stability": 100.0,
+      "trade_quality": 0.0
+    },
+    "metrics": {
+      "annual_return": 0.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "total_trades": 0
+    },
+    "monte_carlo": {
+      "return_median": 0,
+      "return_p5": 0,
+      "max_dd_p95": 0,
+      "ruin_prob": 0
+    },
+    "param_stability": 1.0,
+    "elimination_flags": [
+      "Sharpe 0.00 < 0.3"
+    ],
+    "elapsed_seconds": 7.36
+  },
+  {
+    "strategy_name": "ma",
+    "strategy_label": "均线",
+    "total_score": 50.0,
+    "verdict": "WARN",
+    "scores": {
+      "profitability": 0.0,
+      "risk": 100.0,
+      "stability": 100.0,
+      "trade_quality": 0.0
+    },
+    "metrics": {
+      "annual_return": 0.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "total_trades": 0
+    },
+    "monte_carlo": {
+      "return_median": 0,
+      "return_p5": 0,
+      "max_dd_p95": 0,
+      "ruin_prob": 0
+    },
+    "param_stability": 1.0,
+    "elimination_flags": [
+      "Sharpe 0.00 < 0.3"
+    ],
+    "elapsed_seconds": 0.85
+  },
+  {
+    "strategy_name": "donchian",
+    "strategy_label": "唐奇安通道",
+    "total_score": 50.0,
+    "verdict": "WARN",
+    "scores": {
+      "profitability": 0.0,
+      "risk": 100.0,
+      "stability": 100.0,
+      "trade_quality": 0.0
+    },
+    "metrics": {
+      "annual_return": 0.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "total_trades": 0
+    },
+    "monte_carlo": {
+      "return_median": 0,
+      "return_p5": 0,
+      "max_dd_p95": 0,
+      "ruin_prob": 0
+    },
+    "param_stability": 1.0,
+    "elimination_flags": [
+      "Sharpe 0.00 < 0.3"
+    ],
+    "elapsed_seconds": 7.1
+  },
+  {
+    "strategy_name": "structure",
+    "strategy_label": "市场结构",
+    "total_score": 50.0,
+    "verdict": "WARN",
+    "scores": {
+      "profitability": 0.0,
+      "risk": 100.0,
+      "stability": 100.0,
+      "trade_quality": 0.0
+    },
+    "metrics": {
+      "annual_return": 0.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "total_trades": 0
+    },
+    "monte_carlo": {
+      "return_median": 0,
+      "return_p5": 0,
+      "max_dd_p95": 0,
+      "ruin_prob": 0
+    },
+    "param_stability": 1.0,
+    "elimination_flags": [
+      "Sharpe 0.00 < 0.3"
+    ],
+    "elapsed_seconds": 1.18
+  },
+  {
+    "strategy_name": "priceaction",
+    "strategy_label": "价格行为学",
+    "total_score": 50.0,
+    "verdict": "WARN",
+    "scores": {
+      "profitability": 0.0,
+      "risk": 100.0,
+      "stability": 100.0,
+      "trade_quality": 0.0
+    },
+    "metrics": {
+      "annual_return": 0.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "total_trades": 0
+    },
+    "monte_carlo": {
+      "return_median": 0,
+      "return_p5": 0,
+      "max_dd_p95": 0,
+      "ruin_prob": 0
+    },
+    "param_stability": 1.0,
+    "elimination_flags": [
+      "Sharpe 0.00 < 0.3"
+    ],
+    "elapsed_seconds": 88.65
+  },
+  {
+    "strategy_name": "bollinger",
+    "strategy_label": "布林带均值回归",
+    "total_score": 50.0,
+    "verdict": "WARN",
+    "scores": {
+      "profitability": 0.0,
+      "risk": 100.0,
+      "stability": 100.0,
+      "trade_quality": 0.0
+    },
+    "metrics": {
+      "annual_return": 0.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "total_trades": 0
+    },
+    "monte_carlo": {
+      "return_median": 0,
+      "return_p5": 0,
+      "max_dd_p95": 0,
+      "ruin_prob": 0
+    },
+    "param_stability": 1.0,
+    "elimination_flags": [
+      "Sharpe 0.00 < 0.3"
+    ],
+    "elapsed_seconds": 11.7
+  },
+  {
+    "strategy_name": "macd",
+    "strategy_label": "MACD 趋势跟踪",
+    "total_score": 50.0,
+    "verdict": "WARN",
+    "scores": {
+      "profitability": 0.0,
+      "risk": 100.0,
+      "stability": 100.0,
+      "trade_quality": 0.0
+    },
+    "metrics": {
+      "annual_return": 0.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "total_trades": 0
+    },
+    "monte_carlo": {
+      "return_median": 0,
+      "return_p5": 0,
+      "max_dd_p95": 0,
+      "ruin_prob": 0
+    },
+    "param_stability": 1.0,
+    "elimination_flags": [
+      "Sharpe 0.00 < 0.3"
+    ],
+    "elapsed_seconds": 5.72
+  },
+  {
+    "strategy_name": "composite",
+    "strategy_label": "复合趋势",
+    "total_score": 50.0,
+    "verdict": "WARN",
+    "scores": {
+      "profitability": 0.0,
+      "risk": 100.0,
+      "stability": 100.0,
+      "trade_quality": 0.0
+    },
+    "metrics": {
+      "annual_return": 0.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown": 0.0,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "total_trades": 0
+    },
+    "monte_carlo": {
+      "return_median": 0,
+      "return_p5": 0,
+      "max_dd_p95": 0,
+      "ruin_prob": 0
+    },
+    "param_stability": 1.0,
+    "elimination_flags": [
+      "Sharpe 0.00 < 0.3"
+    ],
+    "elapsed_seconds": 32.78
+  },
+  {
+    "strategy_name": "buyhold",
+    "strategy_label": "买入持有",
+    "total_score": 40.0,
+    "verdict": "ELIMINATE",
+    "scores": {
+      "profitability": 0.0,
+      "risk": 60.0,
+      "stability": 100.0,
+      "trade_quality": 0.0
+    },
+    "metrics": {
+      "annual_return": -0.5311,
+      "sharpe_ratio": -1.48,
+      "max_drawdown": 0.3806,
+      "win_rate": 0.0,
+      "profit_factor": 0.0,
+      "total_trades": 1
+    },
+    "monte_carlo": {
+      "return_median": 0,
+      "return_p5": 0,
+      "max_dd_p95": 0,
+      "ruin_prob": 0
+    },
+    "param_stability": 1.0,
+    "elimination_flags": [
+      "Sharpe -1.48 < 0.3",
+      "最大回撤 38.1% > 25%"
+    ],
+    "elapsed_seconds": 0.23
+  },
+  {
+    "strategy_name": "reversal",
+    "strategy_label": "关键位反转",
+    "total_score": 0,
+    "verdict": "ELIMINATE",
+    "scores": {
+      "profitability": 0,
+      "risk": 0,
+      "stability": 0,
+      "trade_quality": 0
+    },
+    "metrics": {
+      "annual_return": 0,
+      "sharpe_ratio": 0,
+      "max_drawdown": 0,
+      "win_rate": 0,
+      "profit_factor": 0,
+      "total_trades": 0
+    },
+    "monte_carlo": {
+      "return_median": 0,
+      "return_p5": 0,
+      "max_dd_p95": 0,
+      "ruin_prob": 0
+    },
+    "param_stability": 0,
+    "elimination_flags": [
+      "评估失败: unsupported operand type(s) for *: 'NoneType' and 'float'"
+    ],
+    "elapsed_seconds": 0.0
+  }
+]
