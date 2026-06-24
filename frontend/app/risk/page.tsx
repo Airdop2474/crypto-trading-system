@@ -2,10 +2,15 @@ import { ErrorBoundary } from "@/components/error-boundary"
 import { RiskMetricsGrid } from "@/components/risk/risk-metrics-grid"
 import { DrawdownChart } from "@/components/risk/drawdown-chart"
 import { RiskStatusCard } from "@/components/risk/risk-status-card"
+import { PortfolioHeatCard } from "@/components/risk/portfolio-heat-card"
 
 export default function RiskPage() {
   return (
     <div className="flex flex-col gap-4 pb-16 md:pb-0">
+      <ErrorBoundary>
+        <PortfolioHeatCard />
+      </ErrorBoundary>
+
       <ErrorBoundary>
         <RiskMetricsGrid />
       </ErrorBoundary>

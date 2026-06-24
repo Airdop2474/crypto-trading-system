@@ -588,6 +588,99 @@ export interface HermesStatus {
   completed_analyses: number
 }
 
+// ---------------------------------------------------------------------------
+// 组合热力 Portfolio Heat（GET /risk/portfolio-heat）
+// ---------------------------------------------------------------------------
+export interface PortfolioHeatStrategy {
+  heat: number              // 该策略的热力值（小数，如 0.03 = 3%）
+  position_value: number    // 持仓市值
+  position_risk: number     // 持仓风险额
+  updated_at: string | null
+}
+
+export interface PortfolioHeat {
+  total_heat: number        // 总热力（小数，如 0.12 = 12%）
+  max_heat: number          // 热力阈值（如 0.15 = 15%）
+  heat_pct: number          // 热力占比 %（total_heat / max_heat * 100）
+  strategies: Record<string, PortfolioHeatStrategy>
+  updated_at: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Monte Carlo 模拟（POST /analytics/monte-carlo）
+// ---------------------------------------------------------------------------
+export interface MonteCarloRequest {
+  strategy_id: string
+  n_simulations?: number
+  method?: "trade_bootstrap" | "return_resample"
+}
+
+export interface MonteCarloDistribution {
+  mean: number
+  median: number
+  std: number
+  p5: number    // 5th percentile
+  p25: number
+  p75: number
+  p95: number   // 95th percentile
+  min: number
+  max: number
+}
+
+export interface MonteCarloResult {
+  strategy_id: string
+  method: string
+  n_simulations: number
+  return_distribution: MonteCarloDistribution
+  max_dd_distribution: MonteCarloDistribution
+  sharpe_distribution: MonteCarloDistribution
+  var_95: number          // 95% VaR
+  cvar_95: number         // 95% CVaR (Expected Shortfall)
+  ruin_probability: number // 破产概率
+  original_return: number
+  original_max_dd: number
+  original_sharpe: number
+}
+
+// ---------------------------------------------------------------------------
+// 策略评估（POST /analytics/strategy-evaluation）
+// ---------------------------------------------------------------------------
+export interface StrategyEvaluation {
+  strategy_name: string
+  total_score: number         // 0-100
+  verdict: "KEEP" | "WARN" | "ELIMINATE"
+  sharpe_ratio: number
+  max_drawdown: number        // 小数
+  total_return: number        // 小数
+  total_trades: number
+  win_rate: number            // 小数
+  mc_return_median: number
+  mc_max_dd_median: number
+  mc_ruin_prob: number
+  param_stability: number     // 0-1
+  is_os_diff: number          // IS-OS 差异 %
+  elimination_flags: string[]
+}
+
+export interface StrategyEvaluationRequest {
+  days?: number
+  n_mc_simulations?: number
+}
+
+// ---------------------------------------------------------------------------
+// 止损信息（策略详情页用）
+// ---------------------------------------------------------------------------
+export interface StopLossInfo {
+  enabled: boolean
+  in_position: boolean
+  entry_price: number | null
+  entry_time: string | null
+  highest_price: number | null
+  bars_held: number
+  current_stop_price: number | null
+  stop_type: string           // "atr_trailing" | "range_breakout" | "time_only" | "none"
+}
+
 /** Hermes 分析结果 */
 export interface HermesAnalysisResult {
   event_id: string

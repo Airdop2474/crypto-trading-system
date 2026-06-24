@@ -27,17 +27,22 @@ import type {
   EvolutionStats,
   EvolveRequest,
   HermesStatus,
+  MonteCarloRequest,
+  MonteCarloResult,
   MultiStrategyDetail,
   MultiStrategyResult,
   MultiStrategySummary,
   OrdersPage,
   PnlDistribution,
   PnlPoint,
+  PortfolioHeat,
   Position,
   RiskMetrics,
   RiskStatus,
   Strategy,
   StrategyCorrelation,
+  StrategyEvaluation,
+  StrategyEvaluationRequest,
   StrategyPerformance,
   StrategyRegistryResponse,
   StrategyRunHistoryResponse,
@@ -464,6 +469,43 @@ export const api = {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       throw new Error(body.detail || `数据生成失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // --------------------------------------------------------------------------
+  // 组合热力 Portfolio Heat（GET /risk/portfolio-heat）
+  // --------------------------------------------------------------------------
+  getPortfolioHeat: (): Promise<PortfolioHeat> => get("/risk/portfolio-heat"),
+
+  // --------------------------------------------------------------------------
+  // Monte Carlo 模拟（POST /analytics/monte-carlo）
+  // --------------------------------------------------------------------------
+  runMonteCarlo: async (req: MonteCarloRequest): Promise<MonteCarloResult> => {
+    const res = await fetch(`${API_BASE}/analytics/monte-carlo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `Monte Carlo 模拟失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // --------------------------------------------------------------------------
+  // 策略评估（POST /analytics/strategy-evaluation）
+  // --------------------------------------------------------------------------
+  runStrategyEvaluation: async (req: StrategyEvaluationRequest = {}): Promise<StrategyEvaluation[]> => {
+    const res = await fetch(`${API_BASE}/analytics/strategy-evaluation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `策略评估失败: ${res.status}`)
     }
     return res.json()
   },

@@ -10,6 +10,8 @@ import { StrategyComparison } from "@/components/analytics/strategy-comparison"
 import { DrawdownCurveCard } from "@/components/analytics/drawdown-curve-card"
 import { WinRateTrendCard } from "@/components/analytics/win-rate-trend-card"
 import { StrategyCorrelationCard } from "@/components/analytics/strategy-correlation-card"
+import { MonteCarloPanel } from "@/components/analytics/monte-carlo-panel"
+import { StrategyEvaluationPanel } from "@/components/analytics/strategy-evaluation-panel"
 import { ApiError } from "@/components/api-error"
 import { ExportButton } from "@/components/export-button"
 import { ErrorBoundary } from "@/components/error-boundary"
@@ -76,7 +78,16 @@ export default function AnalyticsPage() {
       )}
 
       <StrategyCorrelationCard />
+
+      {/* Monte Carlo + 策略评估 */}
+      <ErrorBoundary>
+        <MonteCarloPanel />
+      </ErrorBoundary>
+
+      <ErrorBoundary>
+        <StrategyEvaluationPanel />
+      </ErrorBoundary>
     </div>
-    </ErrorBoundary>
+  </ErrorBoundary>
   )
 }

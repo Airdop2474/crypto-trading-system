@@ -5,7 +5,7 @@ import useSWR from "swr"
 import Link from "next/link"
 import { useParams } from "next/navigation"
 import { toast } from "sonner"
-import { ArrowLeft, ExternalLink, Play, Pause, Settings } from "lucide-react"
+import { ArrowLeft, ExternalLink, Play, Pause, Settings, Shield } from "lucide-react"
 import { api } from "@/lib/api"
 import { fmtNum, fmtSigned, fmtUsd, pnlColor } from "@/lib/format"
 import { getStrategyLabelIcon, parseStrategyType } from "@/lib/strategy-meta"
@@ -190,6 +190,77 @@ export default function StrategyDetailPage() {
           sub={`手续费 ${fmtUsd(stats.total_commission)} · 滑点 ${fmtUsd(stats.total_slippage)}`}
         />
       </div>
+
+      {/* 2.5 止损信息 */}
+      {(() => {
+        const sl = (data as unknown as Record<string, unknown>).stop_loss_info as Record<string, unknown> | undefined
+        if (!sl) return null
+        return (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm font-medium">
+              <Shield className="h-4 w-4" />
+              止损管理
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {(() => {
+              if (!(sl.enabled as boolean)) {
+                return <p className="py-2 text-center text-sm text-muted-foreground">该策略未启用止损</p>
+              }
+              const stopTypeLabels: Record<string, string> = {
+                atr_trailing: "ATR 追踪止损",
+                range_breakout: "区间突破止损",
+                time_only: "纯时间止损",
+                none: "无止损",
+              }
+              return (
+                <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                  <div className="space-y-0.5">
+                    <div className="text-xs text-muted-foreground">止损类型</div>
+                    <div className="text-sm font-medium">{stopTypeLabels[sl.stop_type as string] ?? (sl.stop_type as string)}</div>
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="text-xs text-muted-foreground">持仓状态</div>
+                    <div className="text-sm font-medium">
+                      {sl.in_position ? (
+                        <Badge className="bg-success/20 text-success border-success/30">持仓中</Badge>
+                      ) : (
+                        <Badge variant="secondary">空仓</Badge>
+                      )}
+                    </div>
+                  </div>
+                  {sl.entry_price != null && (
+                    <div className="space-y-0.5">
+                      <div className="text-xs text-muted-foreground">入场价</div>
+                      <div className="font-mono text-sm">{fmtNum(sl.entry_price as number, 2)}</div>
+                    </div>
+                  )}
+                  {sl.current_stop_price != null && (
+                    <div className="space-y-0.5">
+                      <div className="text-xs text-muted-foreground">当前止损价</div>
+                      <div className="font-mono text-sm text-warning">{fmtNum(sl.current_stop_price as number, 2)}</div>
+                    </div>
+                  )}
+                  {sl.highest_price != null && (
+                    <div className="space-y-0.5">
+                      <div className="text-xs text-muted-foreground">最高价</div>
+                      <div className="font-mono text-sm">{fmtNum(sl.highest_price as number, 2)}</div>
+                    </div>
+                  )}
+                  {sl.bars_held != null && (sl.bars_held as number) > 0 && (
+                    <div className="space-y-0.5">
+                      <div className="text-xs text-muted-foreground">持仓 bar 数</div>
+                      <div className="font-mono text-sm">{sl.bars_held as number}</div>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+          </CardContent>
+        </Card>
+        )
+      })()}
 
       {/* 3. 当前持仓 */}
       <Card>
