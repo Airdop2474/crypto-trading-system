@@ -207,12 +207,21 @@ def assets() -> Optional[list[dict]]:
 
 
 def multi_strategy_result(strategy_id: str) -> Optional[dict]:
-    """获取单个策略的运行结果（用于策略详情页）。"""
+    """获取单个策略的运行结果（用于策略详情页）。
+
+    返回格式与前端 MultiStrategyResult 类型对齐：
+        statistics: { initial_balance, current_balance, total_trades,
+                      total_commission, total_slippage, total_cost, positions }
+        open_lots: Record[str, number]
+        closed_trades: [{ tag, time, profit }]
+        trade_history: [{ order_id, timestamp, symbol, side, order_type,
+                          amount, price, commission, slippage, tag, status }]
+        signals: []
+        realized_pnl: float
+    """
     states = _load_all_states()
     if not states:
         return None
-
-    from src.strategy.registry import get_strategy_label
 
     for s in states:
         strat_name = s.get("strategy_name", "unknown")
@@ -225,64 +234,68 @@ def multi_strategy_result(strategy_id: str) -> Optional[dict]:
         realized = float(s.get("runner", {}).get("realized_pnl", 0))
         closed = s.get("runner", {}).get("closed_trades", [])
         lots = s.get("runner", {}).get("lots", {})
-        wins = sum(1 for t in closed if float(t.get("profit", 0)) > 0)
-        total_closed = len(closed)
+        balance = float(s.get("broker", {}).get("balance", 0))
         last_price = _get_last_price(states)
 
-        # 构建交易历史
-        trade_history = []
+        # 统计
+        total_commission = sum(
+            float(o.get("commission", 0))
+            for o in s.get("broker", {}).get("orders", [])
+        )
+        total_slippage = 0.0  # PaperBroker 滑点已计入 commission
+
+        # open_lots: Record[str, number]
+        open_lots = {}
+        for tag, lot in lots.items():
+            amt = float(lot.get("amount", 0))
+            if amt > 0:
+                open_lots[tag] = amt
+
+        # closed_trades: [{ tag, time, profit }]
+        closed_trades = []
         for t in closed:
-            trade_history.append({
+            closed_trades.append({
                 "tag": str(t.get("tag", "")),
                 "time": str(t.get("time", "")),
                 "profit": float(t.get("profit", 0)),
-                "profit_pct": round(float(t.get("profit", 0)) / initial * 100, 2) if initial else 0.0,
             })
 
-        # 构建订单历史
-        orders_list = []
+        # trade_history: BrokerOrder 格式
+        trade_history = []
         for o in s.get("broker", {}).get("orders", []):
-            orders_list.append({
+            trade_history.append({
                 "order_id": o.get("order_id", ""),
                 "timestamp": str(o.get("timestamp", "")),
                 "symbol": o.get("symbol", symbol),
                 "side": o.get("side", ""),
-                "price": float(o.get("price", 0)),
+                "order_type": o.get("order_type", "market"),
                 "amount": float(o.get("amount", 0)),
+                "price": float(o.get("price", 0)),
                 "commission": float(o.get("commission", 0)),
+                "slippage": 0.0,
+                "tag": o.get("tag", ""),
+                "status": "filled",
             })
 
-        # 当前持仓
-        open_positions = []
-        for tag, lot in lots.items():
-            amt = float(lot.get("amount", 0))
-            cost = float(lot.get("cost_price", 0))
-            open_positions.append({
-                "tag": tag,
-                "amount": round(amt, 8),
-                "cost_price": round(cost, 2),
-                "current_price": round(last_price, 2),
-                "unrealized_pnl": round(amt * (last_price - cost), 2),
-            })
+        # positions: 当前持仓量（用于 statistics）
+        positions = {tag: amt for tag, amt in open_lots.items()}
 
         return {
-            "strategyId": sid,
-            "strategyName": get_strategy_label(strat_name) or strat_name,
             "symbol": symbol,
-            "initialCapital": initial,
-            "realizedPnl": round(realized, 2),
-            "returnPct": round(realized / initial * 100, 2) if initial else 0.0,
-            "totalTrades": total_closed,
-            "winCount": wins,
-            "lossCount": total_closed - wins,
-            "winRate": round(wins / total_closed * 100, 2) if total_closed else 0.0,
-            "openLots": len(lots),
-            "finalBalance": round(float(s.get("broker", {}).get("balance", 0)), 2),
-            "dayCount": int(s.get("day_count", 0)),
-            "tradeHistory": trade_history,
-            "orders": orders_list,
-            "openPositions": open_positions,
-            "params": s.get("strategy", {}).get("params", {}),
+            "statistics": {
+                "initial_balance": initial,
+                "current_balance": round(balance, 2),
+                "total_trades": len(trade_history),
+                "total_commission": round(total_commission, 4),
+                "total_slippage": round(total_slippage, 4),
+                "total_cost": round(total_commission + total_slippage, 4),
+                "positions": positions,
+            },
+            "trade_history": trade_history,
+            "signals": [],
+            "open_lots": open_lots,
+            "realized_pnl": round(realized, 2),
+            "closed_trades": closed_trades,
         }
 
     return None
