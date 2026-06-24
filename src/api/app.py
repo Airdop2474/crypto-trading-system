@@ -426,6 +426,165 @@ def strategy_correlation(_=Security(verify_api_token)):
 
 
 # --------------------------------------------------------------------------
+# Monte Carlo & 策略评估端点
+# --------------------------------------------------------------------------
+@app.post("/analytics/monte-carlo")
+@limiter.limit("2/minute")
+def monte_carlo_analysis(
+    request: Request,
+    body: dict = None,
+    _=Security(verify_api_token),
+):
+    """Monte Carlo 模拟分析
+
+    请求体（可选）：
+        strategy: 策略名（如 "rsi"），不填则用 live_data 的第一个策略
+        n_simulations: 模拟次数（默认 1000）
+        method: "trade_bootstrap" 或 "return_resample"
+    """
+    body = body or {}
+    strategy_name = body.get("strategy", "")
+    n_sim = body.get("n_simulations", 1000)
+    method = body.get("method", "trade_bootstrap")
+
+    # 优先从 live_data 获取交易数据
+    live = live_data.multi_strategy_details()
+    if live:
+        # 找到指定策略或用第一个
+        target = None
+        if strategy_name:
+            for s in live:
+                if strategy_name in s.get("id", ""):
+                    target = s
+                    break
+        if target is None and live:
+            target = live[0]
+
+        if target:
+            from src.backtest.monte_carlo import MonteCarloSimulator
+            # 从 live_data 构造 trades
+            trades = []
+            for ct in target.get("closed_trades", []):
+                trades.append({
+                    "type": "SELL",
+                    "profit": float(ct.get("profit", 0)),
+                })
+
+            mc = MonteCarloSimulator(n_simulations=n_sim, random_seed=42)
+            result = mc.run(
+                trades=trades,
+                initial_capital=float(target.get("investment", 10000)),
+                method=method,
+            )
+            return {
+                "strategy": target.get("id", ""),
+                **result.to_dict(),
+            }
+
+    return {"error": "No live data available. Run a strategy first."}
+
+
+@app.post("/analytics/strategy-evaluation")
+@limiter.limit("1/minute")
+def strategy_evaluation(
+    request: Request,
+    body: dict = None,
+    _=Security(verify_api_token),
+):
+    """策略评估报告 — 对所有策略做全面评估
+
+    请求体（可选）：
+        strategies: 策略名列表，不填则评估全部
+        days: 回测天数（默认 365）
+    """
+    body = body or {}
+    strategies = body.get("strategies")
+    days = body.get("days", 365)
+
+    # 从 live_data 获取已有回测结果
+    live = live_data.multi_strategy_details()
+    if not live:
+        return {"error": "No live data available."}
+
+    from src.backtest.monte_carlo import MonteCarloSimulator
+
+    results = []
+    for s in live:
+        sid = s.get("id", "")
+        sname = sid.split("-")[0] if "-" in sid else sid
+
+        # 跳过不在指定列表中的策略
+        if strategies and sname not in strategies:
+            continue
+
+        trades = []
+        for ct in s.get("closed_trades", []):
+            trades.append({
+                "type": "SELL",
+                "profit": float(ct.get("profit", 0)),
+            })
+
+        initial = float(s.get("investment", 10000))
+        realized = float(s.get("pnl", 0))
+
+        # Monte Carlo
+        mc = MonteCarloSimulator(n_simulations=500, random_seed=42)
+        mc_result = mc.run(trades=trades, initial_capital=initial)
+
+        # 简化评分（基于 live_data）
+        total_trades = len(trades)
+        wins = sum(1 for t in trades if t["profit"] > 0)
+        win_rate = wins / total_trades if total_trades > 0 else 0
+        return_pct = realized / initial if initial > 0 else 0
+
+        # 简化评分
+        profitability = min(100, max(0, return_pct * 200))
+        risk = max(0, 100 - mc_result.max_dd_p95 * 200)
+        stability = max(0, 100 - abs(mc_result.return_p95 - mc_result.return_p5) * 200)
+        trade_quality = min(100, win_rate * 150) if total_trades > 0 else 0
+        total_score = (
+            profitability * 0.30 + risk * 0.25 +
+            stability * 0.25 + trade_quality * 0.20
+        )
+
+        # 淘汰检查
+        flags = []
+        if total_trades > 0 and return_pct < 0:
+            flags.append("收益为负")
+        if mc_result.ruin_probability > 0.1:
+            flags.append(f"破产概率 {mc_result.ruin_probability:.0%} > 10%")
+
+        verdict = "KEEP"
+        if len(flags) >= 2:
+            verdict = "ELIMINATE"
+        elif len(flags) >= 1:
+            verdict = "WARN"
+
+        results.append({
+            "strategy_name": sname,
+            "strategy_label": s.get("name", sname),
+            "total_score": round(total_score, 1),
+            "verdict": verdict,
+            "scores": {
+                "profitability": round(profitability, 1),
+                "risk": round(risk, 1),
+                "stability": round(stability, 1),
+                "trade_quality": round(trade_quality, 1),
+            },
+            "metrics": {
+                "total_return": round(return_pct, 4),
+                "total_trades": total_trades,
+                "win_rate": round(win_rate, 4),
+            },
+            "monte_carlo": mc_result.to_dict(),
+            "elimination_flags": flags,
+        })
+
+    results.sort(key=lambda x: x["total_score"], reverse=True)
+    return {"strategies": results, "total": len(results)}
+
+
+# --------------------------------------------------------------------------
 # 管理端点（需 API Token）
 # --------------------------------------------------------------------------
 @app.post("/admin/refresh-state")
