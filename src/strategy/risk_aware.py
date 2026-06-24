@@ -14,12 +14,13 @@
 """
 
 from datetime import date as DateType
-from typing import Optional
+from typing import Optional, Union, List
 
 import pandas as pd
 import numpy as np
 
-from src.strategy.base import Strategy
+from src.strategy.base import Strategy, Order
+from src.strategy.stop_loss import StopLossManager, StopLossConfig
 from src.utils.logger import logger
 
 
@@ -56,6 +57,7 @@ class RiskAwareStrategy(Strategy):
         max_daily_loss: float = 0.02,
         max_drawdown: float = 0.15,
         initial_capital: float = 10000.0,
+        stop_loss_config: Optional[StopLossConfig] = None,
     ):
         super().__init__(name=name)
         self.max_consecutive_losses = max_consecutive_losses
@@ -73,6 +75,14 @@ class RiskAwareStrategy(Strategy):
         self._daily_pnl: float = 0.0
         self._peak_balance: float = initial_capital
         self._current_balance: float = initial_capital
+
+        # 止损管理器
+        self._stop_loss: Optional[StopLossManager] = None
+        if stop_loss_config is not None:
+            self._stop_loss = StopLossManager(stop_loss_config)
+            logger.info(
+                f"StopLoss enabled for {name}: type={stop_loss_config.stop_type}"
+            )
 
     def _init_risk_state(self) -> None:
         """初始化/重置风险追踪状态。
@@ -149,15 +159,21 @@ class RiskAwareStrategy(Strategy):
         logger.warning(f"CircuitBreaker triggered: {reason}")
 
     def on_fill(self, trade: dict) -> None:
-        """成交回报钩子：统一熔断逻辑。
+        """成交回报钩子：统一熔断逻辑 + 止损状态更新。
 
         在每笔订单成交后由引擎调用，依次检测累计回撤、连亏笔数、
         当日亏损三条熔断线。任一触发即设置 _paused = True 并抛出
         CircuitBreaker 异常。
 
+        同时更新止损管理器的持仓状态（入场价、最高价等）。
+
         参数：
             trade: 成交记录字典，需包含 'profit' 和 'time' 字段。
         """
+        # 更新止损管理器状态
+        if self._stop_loss is not None:
+            self._stop_loss.on_fill(trade)
+
         profit = trade.get("profit")
         if profit is None:
             return  # 买入开仓无已实现盈亏，不计入熔断
@@ -208,6 +224,69 @@ class RiskAwareStrategy(Strategy):
         """重置策略状态（含风险追踪）。"""
         super().reset()
         self._init_risk_state()
+        if self._stop_loss is not None:
+            self._stop_loss.reset()
+
+    # ------------------------------------------------------------------
+    # 止损检查（子类在 on_bar 中调用）
+    # ------------------------------------------------------------------
+
+    def _check_stop_loss(
+        self,
+        current_price: float,
+        current_time=None,
+        atr: Optional[float] = None,
+    ) -> tuple[bool, str]:
+        """检查是否触发止损。
+
+        子类应在 on_bar() 中、策略信号生成之前调用此方法。
+        如果返回 True，子类应直接返回 'SELL'（单仓位策略）或
+        生成卖出 Order 列表（多仓位策略），跳过策略本身的信号逻辑。
+
+        参数：
+            current_price: 当前 K 线收盘价
+            current_time: 当前 K 线时间
+            atr: 当前 ATR 值（ATR 止损用，可选）
+
+        返回：
+            (是否触发, 触发原因)
+        """
+        if self._stop_loss is None:
+            return False, ""
+
+        if not self._stop_loss.in_position:
+            return False, ""
+
+        triggered, reason = self._stop_loss.check_stop(
+            current_price, current_time, atr
+        )
+
+        if triggered:
+            # 发送 Telegram 通知（异步，不阻塞）
+            try:
+                from src.utils.telegram_notifier import notifier
+                info = self._stop_loss.get_stop_info()
+                msg = (
+                    f"止损触发: {self.name}\n\n"
+                    f"• 原因: {reason}\n"
+                    f"• 入场价: {info.get('entry_price')}\n"
+                    f"• 当前价: {current_price:.2f}\n"
+                    f"• 持仓 K 线: {info.get('bars_held')}\n"
+                    f"• 止损类型: {info.get('stop_type')}"
+                )
+                notifier.send_warning_sync(msg)
+            except Exception:
+                pass  # 通知失败不影响止损逻辑
+
+        return triggered, reason
+
+    def _get_stop_loss_info(self) -> dict:
+        """获取止损状态信息（供前端/日志使用）"""
+        if self._stop_loss is None:
+            return {"enabled": False}
+        info = self._stop_loss.get_stop_info()
+        info["enabled"] = True
+        return info
 
     # ---- 向后兼容属性（旧代码直接访问 public 属性） ----
 

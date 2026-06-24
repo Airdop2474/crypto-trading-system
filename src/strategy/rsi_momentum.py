@@ -51,6 +51,7 @@ class RSIMomentumStrategy(RiskAwareStrategy):
         max_consecutive_losses: int = 3,
         max_daily_loss: float = 0.02,
         initial_capital: float = 10000.0,
+        stop_loss_config=None,
     ):
         """
         初始化 RSI 策略
@@ -64,12 +65,14 @@ class RSIMomentumStrategy(RiskAwareStrategy):
             max_consecutive_losses: 连亏熔断阈值
             max_daily_loss: 当日亏损熔断（占初始资金比例）
             initial_capital: 初始资金（熔断基准）
+            stop_loss_config: 止损配置（StopLossConfig，可选）
         """
         super().__init__(
             name="RSIMomentum",
             max_consecutive_losses=max_consecutive_losses,
             max_daily_loss=max_daily_loss,
             initial_capital=initial_capital,
+            stop_loss_config=stop_loss_config,
         )
 
         if rsi_period < 2:
@@ -166,6 +169,15 @@ class RSIMomentumStrategy(RiskAwareStrategy):
 
         if self._is_paused(current_time):
             return None
+
+        # 止损检查（在策略逻辑之前）
+        if self._in_position:
+            triggered, reason = self._check_stop_loss(
+                float(data["close"].iloc[-1]), current_time, atr=None
+            )
+            if triggered:
+                self._in_position = False
+                return "SELL"
 
         current_price = float(data["close"].iloc[-1])
         rsi = self._update_rsi(current_price)

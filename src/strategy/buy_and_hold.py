@@ -20,8 +20,8 @@ class BuyAndHoldStrategy(RiskAwareStrategy):
 
     PARAM_SCHEMA = {}
 
-    def __init__(self):
-        super().__init__(name="BuyAndHold")
+    def __init__(self, stop_loss_config=None):
+        super().__init__(name="BuyAndHold", stop_loss_config=stop_loss_config)
         self._init_risk_state()
         self.has_bought = False
         self.bar_count = 0

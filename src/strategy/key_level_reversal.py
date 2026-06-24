@@ -49,12 +49,14 @@ class KeyLevelReversalStrategy(RiskAwareStrategy):
         max_consecutive_losses: int = 3,
         max_daily_loss: float = 0.02,
         initial_capital: float = 10000.0,
+        stop_loss_config=None,
     ):
         super().__init__(
             name="KeyLevelReversal",
             max_consecutive_losses=max_consecutive_losses,
             max_daily_loss=max_daily_loss,
             initial_capital=initial_capital,
+            stop_loss_config=stop_loss_config,
         )
 
         self.lookback = lookback
@@ -108,6 +110,16 @@ class KeyLevelReversalStrategy(RiskAwareStrategy):
             float(data["low"].iloc[-1]),
             close,
         )
+
+        # 止损检查（在策略逻辑之前）
+        if self._in_position:
+            triggered, reason = self._check_stop_loss(
+                close, current_time, atr=atr
+            )
+            if triggered:
+                self._in_position = False
+                self._entry_price = None
+                return "SELL"
 
         sr = self._identify_sr_zones(data)
         self._support_zone = sr["support"]

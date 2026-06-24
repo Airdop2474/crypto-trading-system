@@ -114,12 +114,14 @@ class CompositeTrendStrategy(RiskAwareStrategy):
         max_daily_loss: float = 0.02,
         max_drawdown: float = 0.15,
         initial_capital: float = 10000.0,
+        stop_loss_config=None,
     ):
         super().__init__(
             max_consecutive_losses=max_consecutive_losses,
             max_daily_loss=max_daily_loss,
             max_drawdown=max_drawdown,
             initial_capital=initial_capital,
+            stop_loss_config=stop_loss_config,
         )
         self.name = "CompositeTrend"
 
@@ -302,7 +304,19 @@ class CompositeTrendStrategy(RiskAwareStrategy):
         if len(self._vol_buffer) > self.vol_period * 3:
             self._vol_buffer = self._vol_buffer[-(self.vol_period * 3):]
 
-        # --- 2. 持仓中：检查出场条件 ---
+        # --- 2. 持仓中：止损检查（在策略出场/入场逻辑之前）---
+        if self._in_position:
+            triggered, reason = self._check_stop_loss(
+                close, current_time, atr=self._atr_value
+            )
+            if triggered:
+                self._in_position = False
+                self._first_tp_done = False
+                self._breakeven_activated = False
+                self._adx_below_sleep_bars = 0
+                return [Order(side="SELL", tag="stop_loss", fraction=1.0)]
+
+        # --- 3. 持仓中：检查出场条件 ---
         if self._in_position:
             exit_tag = self._check_exit(close, high, low)
             if exit_tag:
@@ -312,11 +326,11 @@ class CompositeTrendStrategy(RiskAwareStrategy):
                 self._adx_below_sleep_bars = 0
                 return [Order(side="SELL", tag="composite", fraction=1.0)]
 
-        # --- 3. 预热期不入场 ---
+        # --- 4. 预热期不入场 ---
         if self._bar_count < self._warmup:
             return None
 
-        # --- 4. 空仓中：检查入场条件 ---
+        # --- 5. 空仓中：检查入场条件 ---
         if not self._in_position:
             entry_ok, _ = self._check_entry(close, volume)
             if entry_ok:

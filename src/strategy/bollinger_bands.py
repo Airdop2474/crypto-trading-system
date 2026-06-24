@@ -52,12 +52,14 @@ class BollingerBandsStrategy(RiskAwareStrategy):
         max_daily_loss: float = 0.02,
         max_drawdown: float = 0.15,
         initial_capital: float = 10000.0,
+        stop_loss_config=None,
     ):
         super().__init__(
             max_consecutive_losses=max_consecutive_losses,
             max_daily_loss=max_daily_loss,
             max_drawdown=max_drawdown,
             initial_capital=initial_capital,
+            stop_loss_config=stop_loss_config,
         )
         self.bb_period = bb_period
         self.bb_std = bb_std
@@ -104,6 +106,15 @@ class BollingerBandsStrategy(RiskAwareStrategy):
     ) -> Optional[List[Order]]:
         if self._is_paused(current_time):
             return None
+
+        # 止损检查（在策略逻辑之前）
+        if self._last_signal == "BUY":
+            triggered, reason = self._check_stop_loss(
+                float(data["close"].iloc[-1]), current_time, atr=None
+            )
+            if triggered:
+                self._last_signal = "SELL"
+                return [Order(side="SELL", tag="stop_loss", fraction=self.position_fraction)]
 
         close = float(data["close"].iloc[-1])
         high = float(data["high"].iloc[-1])

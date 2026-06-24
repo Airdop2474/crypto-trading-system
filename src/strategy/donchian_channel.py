@@ -32,12 +32,14 @@ class DonchianChannelStrategy(RiskAwareStrategy):
         max_consecutive_losses: int = 3,
         max_daily_loss: float = 0.02,
         initial_capital: float = 10000.0,
+        stop_loss_config=None,
     ):
         super().__init__(
             name="DonchianChannel",
             max_consecutive_losses=max_consecutive_losses,
             max_daily_loss=max_daily_loss,
             initial_capital=initial_capital,
+            stop_loss_config=stop_loss_config,
         )
         if period < 2:
             raise ValueError("period must be >= 2")

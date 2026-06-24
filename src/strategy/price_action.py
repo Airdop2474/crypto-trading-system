@@ -478,8 +478,13 @@ class PriceActionStrategy(RiskAwareStrategy):
         min_pin_ratio: float = 2.0,
         confluence_threshold: int = _CONFLUENCE_THRESHOLD,
         initial_capital: float = 10000.0,
+        stop_loss_config=None,
     ):
-        super().__init__(name="PriceAction", initial_capital=initial_capital)
+        super().__init__(
+            name="PriceAction",
+            initial_capital=initial_capital,
+            stop_loss_config=stop_loss_config,
+        )
 
         self.lookback_structure = lookback_structure
         self.lookback_supplydemand = lookback_supplydemand
@@ -652,6 +657,15 @@ class PriceActionStrategy(RiskAwareStrategy):
 
         if self._is_paused(current_time):
             return None
+
+        # 止损检查（在策略逻辑之前）
+        if self._in_position:
+            triggered, reason = self._check_stop_loss(
+                float(data["close"].iloc[-1]), current_time, atr=None
+            )
+            if triggered:
+                self._in_position = False
+                return "SELL"
 
         # 更新各层
         self._structure.update(data)

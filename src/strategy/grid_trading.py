@@ -60,6 +60,7 @@ class GridTradingStrategy(RiskAwareStrategy):
         max_consecutive_losses: int = 3,
         max_daily_loss: float = 0.02,
         initial_capital: float = 10000.0,
+        stop_loss_config=None,
     ):
         """
         初始化网格策略
@@ -73,12 +74,14 @@ class GridTradingStrategy(RiskAwareStrategy):
             max_consecutive_losses: 连亏熔断阈值
             max_daily_loss: 当日亏损熔断阈值（占初始资金比例）
             initial_capital: 初始资金（用于当日亏损熔断的资金基准，应与引擎一致）
+            stop_loss_config: 止损配置（StopLossConfig，可选，网格策略有自身边界保护不使用）
         """
         super().__init__(
             name="GridTrading",
             max_consecutive_losses=max_consecutive_losses,
             max_daily_loss=max_daily_loss,
             initial_capital=initial_capital,
+            stop_loss_config=stop_loss_config,
         )
 
         if lower_price >= upper_price:
