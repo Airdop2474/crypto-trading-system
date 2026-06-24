@@ -1116,7 +1116,6 @@ def admin_test_telegram_view(request: Request, _=Security(verify_api_token)):
     无 Token 时返回降级状态（不报错）。
     """
     from src.utils.telegram_notifier import notifier
-    import asyncio
 
     enabled = notifier.enabled
     try:
@@ -1131,6 +1130,135 @@ def admin_test_telegram_view(request: Request, _=Security(verify_api_token)):
         }
     except Exception as e:
         return {"ok": False, "enabled": enabled, "message": str(e)}
+
+
+class TelegramConfigRequest(BaseModel):
+    bot_token: str = ""
+    chat_id: str = ""
+    min_level: str = "INFO"  # INFO / WARNING / CRITICAL
+
+
+def _read_env_file() -> dict:
+    """读取 .env 文件中的 Telegram 相关配置"""
+    from pathlib import Path
+    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    result = {"bot_token": "", "chat_id": "", "min_level": "INFO"}
+    if not env_path.exists():
+        return result
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("TELEGRAM_BOT_TOKEN="):
+            result["bot_token"] = line.split("=", 1)[1]
+        elif line.startswith("TELEGRAM_CHAT_ID="):
+            result["chat_id"] = line.split("=", 1)[1]
+        elif line.startswith("TELEGRAM_MIN_LEVEL="):
+            result["min_level"] = line.split("=", 1)[1] or "INFO"
+    return result
+
+
+def _update_env_file(bot_token: str, chat_id: str, min_level: str) -> None:
+    """更新 .env 文件中的 Telegram 配置（保留其他行不变）"""
+    from pathlib import Path
+    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+
+    lines = []
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+
+    found_keys = set()
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("TELEGRAM_BOT_TOKEN="):
+            new_lines.append(f"TELEGRAM_BOT_TOKEN={bot_token}")
+            found_keys.add("bot_token")
+        elif stripped.startswith("TELEGRAM_CHAT_ID="):
+            new_lines.append(f"TELEGRAM_CHAT_ID={chat_id}")
+            found_keys.add("chat_id")
+        elif stripped.startswith("TELEGRAM_MIN_LEVEL="):
+            new_lines.append(f"TELEGRAM_MIN_LEVEL={min_level}")
+            found_keys.add("min_level")
+        else:
+            new_lines.append(line)
+
+    # 追加缺失的键
+    if "bot_token" not in found_keys:
+        new_lines.append(f"TELEGRAM_BOT_TOKEN={bot_token}")
+    if "chat_id" not in found_keys:
+        new_lines.append(f"TELEGRAM_CHAT_ID={chat_id}")
+    if "min_level" not in found_keys:
+        new_lines.append(f"TELEGRAM_MIN_LEVEL={min_level}")
+
+    env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+
+@app.get("/admin/telegram-config")
+def admin_get_telegram_config(_=Security(verify_api_token)):
+    """获取当前 Telegram 配置（Token 部分掩码显示）"""
+    cfg = _read_env_file()
+    token = cfg["bot_token"]
+    # 掩码处理：只显示前5位和后4位
+    if len(token) > 10:
+        masked = token[:5] + "..." + token[-4:]
+    elif token:
+        masked = "***"
+    else:
+        masked = ""
+    return {
+        "bot_token_masked": masked,
+        "bot_token_set": bool(token),
+        "chat_id": cfg["chat_id"],
+        "min_level": cfg["min_level"],
+        "enabled": bool(token and cfg["chat_id"]),
+    }
+
+
+@app.post("/admin/telegram-config")
+@limiter.limit("5/minute")
+def admin_set_telegram_config(
+    request: Request,
+    body: TelegramConfigRequest,
+    _=Security(verify_api_token),
+):
+    """保存 Telegram 配置到 .env 文件并热更新 notifier。
+
+    - bot_token 为空字符串时清除 Token（降级为纯日志模式）
+    - 保存后立即生效，无需重启服务
+    """
+    import os
+    from src.utils.telegram_notifier import notifier, NotificationLevel
+
+    min_level = body.min_level.upper()
+    if min_level not in ("INFO", "WARNING", "CRITICAL"):
+        return {"ok": False, "message": f"无效的 min_level: {body.min_level}"}
+
+    # 如果前端传空 Token，保留已有值（除非显式传空字符串清除）
+    token_to_save = body.bot_token
+    if token_to_save == "":
+        # 空字符串 = 用户未输入新 Token，保留已有
+        existing = _read_env_file()
+        token_to_save = existing["bot_token"]
+
+    # 写入 .env 文件
+    _update_env_file(token_to_save, body.chat_id, min_level)
+
+    # 更新环境变量（供后续 import 的模块读取）
+    os.environ["TELEGRAM_BOT_TOKEN"] = token_to_save
+    os.environ["TELEGRAM_CHAT_ID"] = body.chat_id
+    os.environ["TELEGRAM_MIN_LEVEL"] = min_level
+
+    # 热更新 notifier 单例
+    notifier._bot_token = token_to_save
+    notifier._chat_id = body.chat_id
+    notifier._min_level = NotificationLevel[min_level]
+    notifier._enabled = bool(token_to_save and body.chat_id)
+
+    enabled = notifier._enabled
+    return {
+        "ok": True,
+        "enabled": enabled,
+        "message": "Telegram 配置已保存并生效" if enabled else "已保存（降级模式：未配置 Token，仅日志输出）",
+    }
 
 
 # --------------------------------------------------------------------------

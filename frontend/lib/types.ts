@@ -702,3 +702,26 @@ export interface MemoryEntry {
   created_at: string
   similarity?: number
 }
+
+// ---------------------------------------------------------------------------
+// Telegram 通知配置
+// ---------------------------------------------------------------------------
+export interface TelegramConfig {
+  bot_token_masked: string    // 掩码后的 Token（如 12345...ABCD）
+  bot_token_set: boolean      // 是否已设置 Token
+  chat_id: string             // Chat ID
+  min_level: string           // 最低通知级别 INFO / WARNING / CRITICAL
+  enabled: boolean            // 是否已启用（Token + Chat ID 均非空）
+}
+
+export interface TelegramConfigUpdate {
+  bot_token: string           // 新 Token（空字符串=清除）
+  chat_id: string
+  min_level: string           // INFO / WARNING / CRITICAL
+}
+
+export interface TelegramTestResult {
+  ok: boolean
+  enabled: boolean
+  message: string
+}

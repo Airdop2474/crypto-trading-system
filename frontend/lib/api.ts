@@ -47,6 +47,9 @@ import type {
   StrategyRegistryResponse,
   StrategyRunHistoryResponse,
   Ticker,
+  TelegramConfig,
+  TelegramConfigUpdate,
+  TelegramTestResult,
   WinRateTrendPoint,
   ModeResult,
   ModeState,
@@ -506,6 +509,36 @@ export const api = {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       throw new Error(body.detail || `策略评估失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // --------------------------------------------------------------------------
+  // Telegram 通知配置
+  // --------------------------------------------------------------------------
+  getTelegramConfig: (): Promise<TelegramConfig> => get("/admin/telegram-config"),
+
+  saveTelegramConfig: async (req: TelegramConfigUpdate): Promise<{ ok: boolean; enabled: boolean; message: string }> => {
+    const res = await fetch(`${API_BASE}/admin/telegram-config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `保存 Telegram 配置失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  testTelegram: async (): Promise<TelegramTestResult> => {
+    const res = await fetch(`${API_BASE}/admin/test-telegram`, {
+      method: "POST",
+      headers: { "X-API-Token": API_TOKEN },
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `Telegram 测试失败: ${res.status}`)
     }
     return res.json()
   },

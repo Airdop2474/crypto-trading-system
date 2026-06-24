@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react"
 import { useTheme } from "next-themes"
 import { toast } from "sonner"
-import { Moon, Palette, RefreshCw, Layout, Gauge } from "lucide-react"
+import { Moon, Palette, RefreshCw, Layout, Gauge, Send } from "lucide-react"
+import useSWR from "swr"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import {
@@ -15,6 +16,8 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
+import { api } from "@/lib/api"
+import { TelegramConfigCard } from "@/components/settings/telegram-config-card"
 
 /** UI 偏好键（localStorage） */
 const PREF_KEY = "quantdesk-ui-prefs"
@@ -89,6 +92,13 @@ export default function SettingsPage() {
   const { theme, setTheme } = useTheme()
   const [prefs, setPrefs] = useState<UiPrefs>(DEFAULT_PREFS)
   const [mounted, setMounted] = useState(false)
+
+  // Telegram 配置（SWR 自动获取 + 缓存）
+  const { data: telegramConfig, mutate: mutateTelegram } = useSWR(
+    "telegram-config",
+    () => api.getTelegramConfig().catch(() => undefined),
+    { revalidateOnFocus: false }
+  )
 
   useEffect(() => {
     setPrefs(loadPrefs())
@@ -251,6 +261,9 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      {/* Telegram 通知配置 */}
+      <TelegramConfigCard config={telegramConfig} />
+
       {/* 重置 */}
       <div className="flex justify-end">
         <Button
@@ -277,7 +290,7 @@ export default function SettingsPage() {
         <CardContent className="space-y-2 text-xs text-muted-foreground">
           <p>· 偏好存储在浏览器 <code className="font-mono">localStorage</code>，清除浏览器数据后会丢失</p>
           <p>· 主题切换即时生效；刷新间隔与每页条数在下次页面加载时生效</p>
-          <p>· API 密钥管理、通知配置等敏感设置暂未开放（需后端加密存储）</p>
+          <p>· Telegram 配置保存在后端 <code className="font-mono">.env</code> 文件，保存后立即生效无需重启</p>
         </CardContent>
       </Card>
     </div>
