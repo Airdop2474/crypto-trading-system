@@ -46,7 +46,11 @@ def _find_active_mode() -> Optional[str]:
 
 
 def _load_all_states() -> list[dict]:
-    """加载当前活跃模式的所有策略 state 文件。"""
+    """加载当前活跃模式的所有策略 state 文件。
+
+    优先读取 .final 文件（回放结束强制平仓后的最终状态），
+    无 .final 时读主 state 文件（实时运行中的状态）。
+    """
     mode = _find_active_mode()
     if not mode:
         return []
@@ -54,8 +58,14 @@ def _load_all_states() -> list[dict]:
     files = sorted(_DATA_DIR.glob(f"paper_daemon_state_{mode}_*.json"))
     states = []
     for sf in files:
+        # 跳过 .final 和 .tmp 文件
+        if not sf.name.endswith(".json"):
+            continue
         try:
-            raw = json.loads(sf.read_text(encoding="utf-8"))
+            # 优先读 .final 文件（回放结束平仓后的最终状态）
+            final_file = Path(str(sf) + ".final")
+            read_file = final_file if final_file.exists() else sf
+            raw = json.loads(read_file.read_text(encoding="utf-8"))
             if raw.get("strategy_name"):
                 states.append(raw)
         except Exception as e:

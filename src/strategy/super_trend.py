@@ -105,7 +105,12 @@ class SuperTrendStrategy(RiskAwareStrategy):
 
         atr = self._update_atr(current_high, current_low, current_close)
         if atr is None:
-            return None
+            # 增量 ATR 尚未就绪（首次调用只处理了最后一根 bar），
+            # 从完整数据批量计算 ATR
+            if len(data) >= self.period + 1:
+                atr = self._calc_atr_from_data(data, self.period)
+            if atr is None:
+                return None
 
         # 止损检查（在策略逻辑之前）
         if self._in_position:
@@ -161,6 +166,22 @@ class SuperTrendStrategy(RiskAwareStrategy):
                 return "SELL"
 
         return None
+
+
+    @staticmethod
+    def _calc_atr_from_data(data: pd.DataFrame, period: int) -> Optional[float]:
+        """从完整数据批量计算 ATR（用于首次调用时增量 ATR 尚未就绪）。"""
+        if len(data) < period + 1:
+            return None
+        high, low, close = data["high"], data["low"], data["close"]
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        val = tr.rolling(period).mean().iloc[-1]
+        return float(val) if pd.notna(val) else None
 
 
 __all__ = ["SuperTrendStrategy"]

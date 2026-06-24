@@ -143,7 +143,7 @@ class TestE2EPipeline:
     def test_registry_consistency(self):
         """Registry 导出与策略列表一致。"""
         strategies = list_strategies()
-        assert len(strategies) == 11
+        assert len(strategies) == 12
         assert "grid" in strategies
         assert "rsi" in strategies
         assert "ma" in strategies

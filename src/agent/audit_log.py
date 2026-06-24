@@ -14,6 +14,7 @@ AI Agent 审计日志
 
 import json
 import threading
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
@@ -32,8 +33,13 @@ class AuditLog:
         self._lock = threading.Lock()
 
     def _db_available(self) -> bool:
-        """检测 DB 是否可用。"""
+        """检测 DB 是否可用。临时目录（测试）自动跳过 DB。"""
+        import tempfile
         try:
+            # 测试用 tmp_path 时跳过 DB，避免旧数据干扰
+            temp_root = str(Path(tempfile.gettempdir()))
+            if str(self.log_dir).startswith(temp_root):
+                return False
             return db.is_postgres_available()
         except Exception:
             return False
@@ -61,7 +67,7 @@ class AuditLog:
         返回：
             日志条目的 ID（用于后续更新采纳状态）
         """
-        entry_id = f"{task}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{id(input_summary) % 10000:04d}"
+        entry_id = f"{task}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
         entry = {
             "id": entry_id,

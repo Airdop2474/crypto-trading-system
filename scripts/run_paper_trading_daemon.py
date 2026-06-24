@@ -116,7 +116,10 @@ class PaperTradingDaemon:
         from src.utils.config import config as _cfg
         from src.strategy.registry import get_strategy
         initial = self.args.initial
+        # self.args.strategy 可能是 list（argparse action="append"）或 str（main 循环中赋值）
         strat_name = self.args.strategy
+        if isinstance(strat_name, list):
+            strat_name = strat_name[0] if strat_name else "grid"
 
         # 从持久化配置加载已保存的参数
         saved = get_strategy_config(strat_name) or {}
@@ -264,7 +267,7 @@ class PaperTradingDaemon:
         return df.iloc[:-1].reset_index(drop=True)
 
     # ---- 状态检查点 ----
-    def _checkpoint(self):
+    def _checkpoint(self, path=None):
         # exchange 模式 broker 无本地余额/持仓/订单，存适配器账本（注释：非逐位一致）；
         # paper 分支字节级保持原样。
         if self.args.broker == "exchange":
@@ -280,9 +283,11 @@ class PaperTradingDaemon:
                 "_total_slippage": self.broker._total_slippage,
                 "_archived_order_count": self.broker._archived_order_count,
             }
+        _sn = self.args.strategy
+        _sn = _sn[0] if isinstance(_sn, list) and _sn else (_sn if isinstance(_sn, str) else "grid")
         st = {
             "version": 1, "symbol": self.symbol,
-            "strategy_name": self.args.strategy,
+            "strategy_name": _sn,
             "initial_capital": self.args.initial,
             "day_count": self.day_count,
             "current_day": self.current_day.isoformat() if self.current_day else None,
@@ -305,6 +310,14 @@ class PaperTradingDaemon:
                 "daily_pnl": self.strategy._daily_pnl,
                 "auto_resume_count": getattr(self.strategy, '_auto_resume_count', 0),
                 "current_day": self.strategy._current_day.isoformat() if getattr(self.strategy, '_current_day', None) else None,
+                # 指标内部状态（resume 续跑必需，否则指标被重置导致信号不一致）
+                "last_price": getattr(self.strategy, 'last_price', None),
+                "ema20": getattr(self.strategy, '_ema20', None),
+                "ema50": getattr(self.strategy, '_ema50', None),
+                "prev_close_atr": getattr(self.strategy, '_prev_close_atr', None),
+                "tr_window": list(self.strategy._tr_window) if getattr(self.strategy, '_tr_window', None) else None,
+                "tr_sum": getattr(self.strategy, '_tr_sum', 0.0),
+                "anomaly_paused_at": str(self.strategy._anomaly_paused_at) if getattr(self.strategy, '_anomaly_paused_at', None) else None,
             },
             "risk": {
                 "state": self.risk.state,
@@ -320,10 +333,11 @@ class PaperTradingDaemon:
             },
             "pending": _ser_pending(self.pending),
         }
-        tmp = Path(str(self.state_file) + ".tmp")
+        target = Path(path) if path else self.state_file
+        tmp = Path(str(target) + ".tmp")
         tmp.write_text(json.dumps(st, ensure_ascii=False, default=str),
                        encoding="utf-8")
-        tmp.replace(self.state_file)  # 原子替换，防写一半崩溃
+        tmp.replace(target)  # 原子替换，防写一半崩溃
 
     def _restore(self):
         st = json.loads(self.state_file.read_text(encoding="utf-8"))
@@ -370,6 +384,25 @@ class PaperTradingDaemon:
         self.strategy._daily_pnl = s["daily_pnl"]
         self.strategy._auto_resume_count = s.get("auto_resume_count", 0)
         self.strategy._current_day = date.fromisoformat(s["current_day"]) if s.get("current_day") else None
+        # 恢复指标内部状态（旧 checkpoint 无这些字段时跳过，保持向后兼容）
+        if hasattr(self.strategy, 'last_price'):
+            self.strategy.last_price = s.get("last_price")
+        if hasattr(self.strategy, '_ema20'):
+            self.strategy._ema20 = s.get("ema20")
+        if hasattr(self.strategy, '_ema50'):
+            self.strategy._ema50 = s.get("ema50")
+        if hasattr(self.strategy, '_prev_close_atr'):
+            self.strategy._prev_close_atr = s.get("prev_close_atr")
+        if hasattr(self.strategy, '_tr_window') and s.get("tr_window") is not None:
+            from collections import deque
+            self.strategy._tr_window = deque(s["tr_window"], maxlen=getattr(self.strategy, '_atr_period', 14))
+        if hasattr(self.strategy, '_tr_sum'):
+            self.strategy._tr_sum = s.get("tr_sum", 0.0)
+        if hasattr(self.strategy, '_anomaly_paused_at') and s.get("anomaly_paused_at"):
+            try:
+                self.strategy._anomaly_paused_at = pd.Timestamp(s["anomaly_paused_at"])
+            except Exception:
+                self.strategy._anomaly_paused_at = None
 
         rk = st["risk"]
         self.risk.state = rk["state"]
@@ -668,9 +701,14 @@ class PaperTradingDaemon:
             self._build(lo + span * 0.1, hi - span * 0.1)
         self._history = df
         start = WARMUP
+        # 数据不足时缩减 warmup（保证有足够 bar 生成日报）
+        if start >= len(df):
+            start = 0
         if resuming and self.last_bar_ts is not None:
             after = df.index[df["timestamp"] > pd.Timestamp(self.last_bar_ts)]
-            start = int(after[0]) if len(after) else len(df)
+            if len(after):
+                start = int(after[0])
+            # else: 无新 bar → start 保持 0，从头重处理（日报按日期覆盖）
 
         print(f"[replay] bars {start}..{len(df)-1}, 目标 {self.args.days} 天")
         for i in range(start, len(df)):
@@ -754,6 +792,9 @@ class PaperTradingDaemon:
 
         # 回放模式：强制平仓所有未平仓位，使盈亏计入 closed_trades
         if self.args.replay:
+            # 先保存未平仓状态（resume 续跑需要——连续运行不会在中途平仓）
+            self._checkpoint()
+
             pos = self.broker.get_position(self.symbol)
             if pos and pos > 0:
                 last_bar = self._history.iloc[-1]
@@ -770,8 +811,10 @@ class PaperTradingDaemon:
                     # 无 lots 记账（如 BuyAndHold 返回字符串信号），用 LEGACY_TAG 平仓
                     runner._sell(runner.LEGACY_TAG, pos, close_price, ts, self.strategy)
                 logger.info(f"回放结束强制平仓: {pos:.6f} @ {close_price:.2f}")
-                # 平仓后必须写 state 文件，否则前端读不到平仓结果
-                self._checkpoint()
+                # 平仓结果写入 .final 文件（前端读取最终平仓状态），
+                # 主 state 文件保留未平仓状态供 resume 续跑
+                final_file = Path(str(self.state_file) + ".final")
+                self._checkpoint(str(final_file))
 
         print(f"完成：累计 {self.day_count} 天日报，检查点 {self.state_file}")
         crits = self.alert_mgr.critical_alerts()
@@ -829,7 +872,7 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     setup_logger(log_level=getattr(args, 'log_level', 'INFO'))
 
-    strategies = args.strategy
+    strategies = args.strategy or ["grid"]
     exit_codes = []
 
     for i, strat_name in enumerate(strategies):

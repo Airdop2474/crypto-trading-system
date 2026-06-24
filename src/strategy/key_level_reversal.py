@@ -165,9 +165,9 @@ class KeyLevelReversalStrategy(RiskAwareStrategy):
         )
         return {"support": support, "resistance": resistance}
 
-    def _in_zone(self, price: float, zone: Tuple[float, float], atr: float) -> bool:
+    def _in_zone(self, price: float, zone: Tuple[float, float], atr: Optional[float]) -> bool:
         """检查价格是否在区域附近（±0.5 ATR 容忍度）。"""
-        margin = atr * 0.5
+        margin = (atr or 0.0) * 0.5
         return (zone[0] - margin) <= price <= (zone[1] + margin)
 
     def _detect_pin_bar(self, data: pd.DataFrame) -> Optional[str]:
@@ -200,7 +200,7 @@ class KeyLevelReversalStrategy(RiskAwareStrategy):
     def _check_exit(
         self, data: pd.DataFrame, close: float, atr: Optional[float], pin: Optional[str]
     ) -> bool:
-        if pin == "bearish" and self._in_zone(close, self._resistance_zone, atr or 0):
+        if pin == "bearish" and self._in_zone(close, self._resistance_zone, atr):
             return True
 
         if self._entry_price is not None and atr is not None and atr > 0:

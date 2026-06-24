@@ -24,6 +24,15 @@ def _run(state, reports, days, extra=None):
     return main(argv)
 
 
+def _run_csv(state, reports, csv_path, days, extra=None):
+    """用指定 CSV 回放（用于 resume 测试，确保续跑时有真正的新 bar）。"""
+    argv = ["--replay", str(csv_path), "--days", str(days), "--no-db",
+            "--state-file", str(state), "--report-dir", str(reports)]
+    if extra:
+        argv += extra
+    return main(argv)
+
+
 def _md_count(reports):
     return len(list(Path(reports).glob("*.md")))
 
@@ -43,19 +52,39 @@ def test_replay_produces_n_daily_reports(tmp_path):
 
 
 def test_resume_equals_continuous(tmp_path):
+    # 生成固定 4 天 CSV，切出前 2 天 CSV，确保续跑时有真正的新 bar
+    from scripts.generate_mock_data import generate_mock_ohlcv
+    from datetime import datetime, timedelta
+    end = datetime(2026, 6, 24)
+    start = end - timedelta(days=4)
+    df_full = generate_mock_ohlcv(
+        start_date=start.strftime("%Y-%m-%d"),
+        end_date=end.strftime("%Y-%m-%d"),
+        timeframe="4h",
+        initial_price=50000.0,
+        market_type="oscillating",
+    )
+    csv_full = tmp_path / "full.csv"
+    df_full.to_csv(csv_full, index=False)
+
+    # 前 2 天 CSV（timestamp <= start+2d）
+    df_half = df_full[df_full["timestamp"] <= (start + timedelta(days=2)).strftime("%Y-%m-%d")].copy()
+    csv_half = tmp_path / "half.csv"
+    df_half.to_csv(csv_half, index=False)
+
     # 连续跑到 4 天
     s_cont = tmp_path / "cont.json"
     r_cont = tmp_path / "cont_daily"
-    _run(s_cont, r_cont, days=4)
+    _run_csv(s_cont, r_cont, csv_full, days=4)
     cont = _ckpt(s_cont)
 
     # 分两段：先 2 天，再用同 state 续到 4 天
     s_split = tmp_path / "split.json"
     r_split = tmp_path / "split_daily"
-    _run(s_split, r_split, days=2)
+    _run_csv(s_split, r_split, csv_half, days=2)
     mid = _ckpt(s_split)
     assert mid["day_count"] == 2
-    _run(s_split, r_split, days=4)  # resume
+    _run_csv(s_split, r_split, csv_full, days=4)  # resume
     split = _ckpt(s_split)
 
     # 续跑结果必须与连续运行逐位一致（证明不重复、不丢、不重启）

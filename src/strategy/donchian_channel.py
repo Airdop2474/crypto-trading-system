@@ -50,6 +50,8 @@ class DonchianChannelStrategy(RiskAwareStrategy):
         self._in_position = False
         self._entry_price: Optional[float] = None
         self._trailing_stop: Optional[float] = None
+        self._upper: Optional[float] = None
+        self._lower: Optional[float] = None
 
         # 增量 ATR 状态
         self._tr_window: list[float] = []
@@ -65,6 +67,8 @@ class DonchianChannelStrategy(RiskAwareStrategy):
         self._in_position = False
         self._entry_price = None
         self._trailing_stop = None
+        self._upper = None
+        self._lower = None
         self._tr_window.clear()
         self._tr_sum = 0.0
         self._prev_close_atr = None
@@ -98,6 +102,8 @@ class DonchianChannelStrategy(RiskAwareStrategy):
         window = data.iloc[-(self.period + 1):-1]
         upper = float(window["high"].max())
         lower = float(window["low"].min())
+        self._upper = upper
+        self._lower = lower
         mid = (upper + lower) / 2.0
 
         current_price = float(data["close"].iloc[-1])

@@ -112,14 +112,15 @@ class SimpleMAStrategy(RiskAwareStrategy):
         if self._prev_short_ma is None or self._prev_long_ma is None:
             return None
 
-        if not self._in_position:
-            if self._prev_short_ma <= self._prev_long_ma and self._short_ma > self._long_ma:
+        # 金叉：短均线上穿长期均线 → BUY
+        if self._prev_short_ma <= self._prev_long_ma and self._short_ma > self._long_ma:
+            if not self._in_position:
                 self._in_position = True
                 return "BUY"
-        else:
-            if self._prev_short_ma >= self._prev_long_ma and self._short_ma < self._long_ma:
-                self._in_position = False
-                return "SELL"
+        # 死叉：短均线下穿长期均线 → SELL
+        elif self._prev_short_ma >= self._prev_long_ma and self._short_ma < self._long_ma:
+            self._in_position = False
+            return "SELL"
 
         return None
 

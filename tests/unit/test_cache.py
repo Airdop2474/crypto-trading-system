@@ -84,18 +84,17 @@ class TestCacheLayer:
     @pytest.fixture
     def cache(self):
         """创建使用内存回退的 CacheLayer"""
-        # 使用不存在的 Redis URL 强制使用内存
-        import os
-        old_url = os.environ.get("REDIS_URL")
-        os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"  # 端口 1 立即拒绝
+        # config 是模块级单例，在 import 时已读取 REDIS_URL；
+        # 仅改 os.environ 不影响已初始化的 config.REDIS_URL，需直接 patch
+        from src.utils.config import config
+
+        old_redis_url = config.REDIS_URL
+        config.REDIS_URL = "redis://127.0.0.1:1/0"  # 端口 1 立即拒绝
 
         c = CacheLayer(namespace="test")
 
-        # 恢复环境变量
-        if old_url:
-            os.environ["REDIS_URL"] = old_url
-        else:
-            os.environ.pop("REDIS_URL", None)
+        # 恢复 config
+        config.REDIS_URL = old_redis_url
 
         return c
 

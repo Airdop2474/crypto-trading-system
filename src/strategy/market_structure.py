@@ -62,6 +62,8 @@ class MarketStructureStrategy(RiskAwareStrategy):
         self.lookback = lookback
 
         self._in_position = False
+        self._swing_high: Optional[float] = None
+        self._swing_low: Optional[float] = None
 
         self.set_parameters(lookback=lookback)
         self._init_risk_state()
@@ -71,6 +73,8 @@ class MarketStructureStrategy(RiskAwareStrategy):
     def reset(self):
         super().reset()
         self._in_position = False
+        self._swing_high = None
+        self._swing_low = None
 
     def on_bar(self, data: pd.DataFrame, current_time: datetime) -> Optional[str]:
         if len(data) < self.lookback:
@@ -94,6 +98,8 @@ class MarketStructureStrategy(RiskAwareStrategy):
         window = data.iloc[-(self.lookback + 1):-1]
         swing_high = float(window["high"].max())
         swing_low = float(window["low"].min())
+        self._swing_high = swing_high
+        self._swing_low = swing_low
 
         signal: Optional[str] = None
 

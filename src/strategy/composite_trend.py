@@ -81,12 +81,12 @@ class CompositeTrendStrategy(RiskAwareStrategy):
         self,
         # ADX 参数
         adx_period: int = 14,
-        adx_threshold: float = 20.0,
+        adx_threshold: float = 25.0,
         adx_sleep_threshold: float = 15.0,  # 休眠继承阈值
         adx_sleep_bars: int = 3,            # 休眠后强制出场 K 线数
         # 趋势 EMA（判断多空排列）
-        ema_fast: int = 12,
-        ema_slow: int = 26,
+        ema_fast: int = 50,
+        ema_slow: int = 200,
         # MACD 参数
         macd_fast: int = 12,
         macd_slow: int = 26,
