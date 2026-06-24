@@ -503,6 +503,9 @@ def multi_details(_=Security(verify_api_token)):
 @app.get("/multi/strategy/{strategy_id}")
 def multi_strategy_detail(strategy_id: str, _=Security(verify_api_token)):
     """获取单个策略的运行结果"""
+    live = live_data.multi_strategy_result(strategy_id)
+    if live is not None:
+        return live
     result = service.multi_strategy_result(service.get_state(), strategy_id)
     if result is None:
         from fastapi import HTTPException

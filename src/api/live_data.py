@@ -24,6 +24,18 @@ _DATA_DIR = _PROJECT_ROOT / "data"
 _MODE_PRIORITY = ["live_paper", "replay_paper", "testnet_live"]
 
 
+def _is_mode_running(mode: str) -> bool:
+    """检查指定模式是否正在运行（通过 mode_manager 状态）。"""
+    try:
+        from src.api.mode_manager import mode_manager, ModeStatus
+        st = mode_manager._modes.get(mode)
+        if st:
+            return st.status in (ModeStatus.RUNNING, ModeStatus.STOPPING)
+    except Exception:
+        pass
+    return False
+
+
 def _find_active_mode() -> Optional[str]:
     """找到有 daemon state 文件的模式（按优先级）。"""
     for mode in _MODE_PRIORITY:
@@ -192,6 +204,88 @@ def assets() -> Optional[list[dict]]:
             "allocationPct": round(btc_value / total_value * 100, 2) if total_value else 0.0,
         })
     return out
+
+
+def multi_strategy_result(strategy_id: str) -> Optional[dict]:
+    """获取单个策略的运行结果（用于策略详情页）。"""
+    states = _load_all_states()
+    if not states:
+        return None
+
+    from src.strategy.registry import get_strategy_label
+
+    for s in states:
+        strat_name = s.get("strategy_name", "unknown")
+        symbol = s.get("symbol", "BTC/USDT")
+        sid = f"{strat_name}-{symbol.lower().replace('/', '-')}"
+        if sid != strategy_id:
+            continue
+
+        initial = float(s.get("initial_capital", 10000))
+        realized = float(s.get("runner", {}).get("realized_pnl", 0))
+        closed = s.get("runner", {}).get("closed_trades", [])
+        lots = s.get("runner", {}).get("lots", {})
+        wins = sum(1 for t in closed if float(t.get("profit", 0)) > 0)
+        total_closed = len(closed)
+        last_price = _get_last_price(states)
+
+        # 构建交易历史
+        trade_history = []
+        for t in closed:
+            trade_history.append({
+                "tag": str(t.get("tag", "")),
+                "time": str(t.get("time", "")),
+                "profit": float(t.get("profit", 0)),
+                "profit_pct": round(float(t.get("profit", 0)) / initial * 100, 2) if initial else 0.0,
+            })
+
+        # 构建订单历史
+        orders_list = []
+        for o in s.get("broker", {}).get("orders", []):
+            orders_list.append({
+                "order_id": o.get("order_id", ""),
+                "timestamp": str(o.get("timestamp", "")),
+                "symbol": o.get("symbol", symbol),
+                "side": o.get("side", ""),
+                "price": float(o.get("price", 0)),
+                "amount": float(o.get("amount", 0)),
+                "commission": float(o.get("commission", 0)),
+            })
+
+        # 当前持仓
+        open_positions = []
+        for tag, lot in lots.items():
+            amt = float(lot.get("amount", 0))
+            cost = float(lot.get("cost_price", 0))
+            open_positions.append({
+                "tag": tag,
+                "amount": round(amt, 8),
+                "cost_price": round(cost, 2),
+                "current_price": round(last_price, 2),
+                "unrealized_pnl": round(amt * (last_price - cost), 2),
+            })
+
+        return {
+            "strategyId": sid,
+            "strategyName": get_strategy_label(strat_name) or strat_name,
+            "symbol": symbol,
+            "initialCapital": initial,
+            "realizedPnl": round(realized, 2),
+            "returnPct": round(realized / initial * 100, 2) if initial else 0.0,
+            "totalTrades": total_closed,
+            "winCount": wins,
+            "lossCount": total_closed - wins,
+            "winRate": round(wins / total_closed * 100, 2) if total_closed else 0.0,
+            "openLots": len(lots),
+            "finalBalance": round(float(s.get("broker", {}).get("balance", 0)), 2),
+            "dayCount": int(s.get("day_count", 0)),
+            "tradeHistory": trade_history,
+            "orders": orders_list,
+            "openPositions": open_positions,
+            "params": s.get("strategy", {}).get("params", {}),
+        }
+
+    return None
 
 
 def orders(limit: int = 100, offset: int = 0) -> Optional[dict]:
@@ -378,6 +472,10 @@ def strategies() -> Optional[list[dict]]:
 
     from src.strategy.registry import get_strategy_label
 
+    # 判断当前模式是否在运行
+    active_mode = _find_active_mode()
+    mode_running = _is_mode_running(active_mode) if active_mode else False
+
     out = []
     for s in states:
         strat_name = s.get("strategy_name", "unknown")
@@ -389,12 +487,22 @@ def strategies() -> Optional[list[dict]]:
         paused = bool(s.get("strategy", {}).get("paused", False))
         risk_state = s.get("risk", {}).get("state", "unknown")
 
+        # 模式未运行时，状态显示 stopped
+        if not mode_running:
+            status = "stopped"
+        elif paused:
+            status = "paused"
+        elif risk_state == "ACTIVE":
+            status = "running"
+        else:
+            status = risk_state.lower()
+
         out.append({
             "id": f"{strat_name}-{symbol.lower().replace('/', '-')}",
             "name": get_strategy_label(strat_name) or strat_name,
             "type": strat_name,
             "symbol": symbol,
-            "status": "paused" if paused else ("running" if risk_state == "ACTIVE" else risk_state.lower()),
+            "status": status,
             "pnl": round(realized, 2),
             "pnlPct": round(realized / initial * 100, 2) if initial else 0.0,
             "investment": initial,
