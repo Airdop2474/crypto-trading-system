@@ -3,10 +3,19 @@ version: '3.8'
 # TODO: Use Docker secrets or *_FILE variants for production
 # - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_password
 # - TIMESCALE_PASSWORD_FILE=/run/secrets/timescale_password
+
+# Docker 日志轮转全局默认（各服务可覆盖）
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   timescaledb:
     image: timescale/timescaledb:2.17.0-pg16
     container_name: crypto_trading_db
+    logging: *default-logging
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-crypto_trading}
@@ -26,6 +35,7 @@ services:
   redis:
     image: redis:7.4-alpine
     container_name: crypto_trading_redis
+    logging: *default-logging
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
@@ -43,6 +53,7 @@ services:
   grafana:
     image: grafana/grafana-oss:10.4.12
     container_name: crypto_trading_grafana
+    logging: *default-logging
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}
@@ -67,6 +78,7 @@ services:
   trading_system:
     build: .
     container_name: crypto_trading_app
+    logging: *default-logging
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -97,6 +109,7 @@ services:
   paper_daemon:
     build: .
     container_name: crypto_trading_paper_daemon
+    logging: *default-logging
     depends_on:
       timescaledb:
         condition: service_healthy
