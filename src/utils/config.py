@@ -121,6 +121,13 @@ class Config:
         self.LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")       # 空=使用协议默认 URL
         self.LLM_MODEL = os.getenv("LLM_MODEL", "")             # 空=根据 provider 选默认
 
+        # ============================================
+        # Telegram 通知配置
+        # ============================================
+        self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        self.TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+        self.TELEGRAM_MIN_LEVEL = os.getenv("TELEGRAM_MIN_LEVEL", "INFO")  # INFO / WARNING / CRITICAL
+
     def validate(self, strict: bool = True) -> tuple[bool, list[str]]:
         """
         验证配置

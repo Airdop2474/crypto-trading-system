@@ -47,11 +47,13 @@ from src.execution.paper_report import PaperTradingReportGenerator
 from src.execution.paper_trading_runner import ExecutionConfig
 from src.monitor import MetricsCollector, MetricsWriter
 from src.monitor.alert_manager import AlertManager, CRITICAL, WARNING
+from src.monitor.alert_channels import TelegramChannel
 from src.strategy.base import Order as StrategyOrder
 from src.strategy.grid_trading import GridTradingStrategy
 from src.api.strategy_config_store import get_strategy_config
 from src.risk.portfolio_heat import PortfolioHeatManager
 from src.utils.logger import logger, setup_logger
+from src.utils.telegram_notifier import notifier
 
 WARMUP = 30  # 预热 bar 数：定网格区间 + 喂指标，不作为交易 bar
 
@@ -98,7 +100,7 @@ class PaperTradingDaemon:
         self.portfolio_heat = None  # PortfolioHeatManager（跨策略热力协调）
         self.collector = MetricsCollector()
         self.writer = None
-        self.alert_mgr = AlertManager()
+        self.alert_mgr = AlertManager(channels=[TelegramChannel()])
 
         self.pending = None
         self.day_count = 0
@@ -483,6 +485,11 @@ class PaperTradingDaemon:
             logger.error(reason)
             self.risk._trip_pause(reason)
             self.strategy._trigger_breaker(reason)
+            notifier.send_warning_sync(
+                f"闪崩保护触发\n策略: {self.args.strategy}\n"
+                f"跌幅: {drop:.2%}\n价格: {self._prev_close:.2f} → {float(bar['close']):.2f}\n"
+                f"时间: {bar['timestamp']}"
+            )
 
     # ---- P1-8: 实时数据轻量校验 ----
     @staticmethod
@@ -622,6 +629,9 @@ class PaperTradingDaemon:
         if self._check_emergency_stop_signal():
             self.risk.emergency_stop("remote emergency-stop via API signal file")
             logger.warning("收到远程急停信号，RiskManager -> STOPPED")
+            notifier.send_critical_sync(
+                f"急停触发\n策略: {self.args.strategy}\n原因: 远程 API 急停信号\n时间: {bar['timestamp']}"
+            )
             return
 
         self._check_resume()
@@ -637,6 +647,11 @@ class PaperTradingDaemon:
             portfolio_heat = self.portfolio_heat.get_portfolio_heat()
             if portfolio_heat > self.portfolio_heat.max_heat:
                 self._filter_pending_buy()
+                notifier.send_warning_sync(
+                    f"Portfolio Heat 超阈值\n策略: {self.args.strategy}\n"
+                    f"当前热力: {portfolio_heat:.2%} (阈值: {self.portfolio_heat.max_heat:.2%})\n"
+                    f"已拒绝新开仓，仅允许平仓\n时间: {bar['timestamp']}"
+                )
 
         before = len(self.runner.closed_trades)
         # historical：截至本 bar 的全部已见数据
@@ -890,6 +905,14 @@ def main(argv=None) -> int:
 
     summary = ", ".join(f"{n}={c}" for n, c in exit_codes)
     logger.info(f"全部策略运行完成: {summary}")
+    if all(c == 0 for _, c in exit_codes):
+        notifier.send_info_sync(
+            f"Daemon 运行完成\n策略: {', '.join(strategies)}\n结果: 全部成功"
+        )
+    else:
+        notifier.send_critical_sync(
+            f"Daemon 异常退出\n策略: {', '.join(strategies)}\n结果: {summary}"
+        )
     return 0 if all(c == 0 for _, c in exit_codes) else 1
 
 

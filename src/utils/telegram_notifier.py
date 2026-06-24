@@ -75,20 +75,24 @@ class TelegramNotifier:
         self._load_config()
 
     def _load_config(self):
-        """从环境变量加载配置"""
+        """从环境变量和 config 单例加载配置"""
         self._bot_token = (
             os.getenv("TELEGRAM_BOT_TOKEN")
-            or getattr(_cfg, "telegram_bot_token", None)
+            or getattr(_cfg, "TELEGRAM_BOT_TOKEN", None)
             or ""
         )
         self._chat_id = (
             os.getenv("TELEGRAM_CHAT_ID")
-            or getattr(_cfg, "telegram_chat_id", None)
+            or getattr(_cfg, "TELEGRAM_CHAT_ID", None)
             or ""
         )
 
         # 从环境变量读取最低通知级别
-        level_str = os.getenv("TELEGRAM_MIN_LEVEL", "INFO").upper()
+        level_str = (
+            os.getenv("TELEGRAM_MIN_LEVEL")
+            or getattr(_cfg, "TELEGRAM_MIN_LEVEL", None)
+            or "INFO"
+        ).upper()
         try:
             self._min_level = NotificationLevel[level_str]
         except KeyError:
@@ -173,14 +177,24 @@ class TelegramNotifier:
         参数：
             level: 通知级别
             text: 通知内容
+
+        注意：使用线程执行异步发送，避免 asyncio.run() 污染主线程 event loop。
         """
         try:
             loop = asyncio.get_running_loop()
             # 已在 event loop 中，创建任务
             loop.create_task(self.send(level, text))
         except RuntimeError:
-            # 不在 event loop 中，新建一个
-            asyncio.run(self.send(level, text))
+            # 不在 event loop 中，用线程执行避免污染主线程
+            def _run():
+                try:
+                    asyncio.run(self.send(level, text))
+                except Exception as e:
+                    logger.warning(f"Telegram send_sync 异常: {e}")
+
+            t = threading.Thread(target=_run, daemon=True)
+            t.start()
+            t.join(timeout=15)  # 等待发送完成（httpx timeout=10s）
 
     async def send_critical(self, text: str):
         """发送紧急通知（止损触发、熔断、daemon 崩溃）"""

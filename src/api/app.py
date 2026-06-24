@@ -1108,6 +1108,31 @@ def admin_data_cleanup_view(request: Request, body: CleanupRequest, _=Security(v
     return admin_data_cleanup(body)
 
 
+@app.post("/admin/test-telegram")
+@limiter.limit("3/minute")
+def admin_test_telegram_view(request: Request, _=Security(verify_api_token)):
+    """发送一条 Telegram 测试消息，验证 Bot Token 和 Chat ID 是否配置正确。
+
+    无 Token 时返回降级状态（不报错）。
+    """
+    from src.utils.telegram_notifier import notifier
+    import asyncio
+
+    enabled = notifier.enabled
+    try:
+        notifier.send_info_sync(
+            "Telegram 通知测试\n这是一条来自 crypto-trading-system 的测试消息。\n"
+            "如果你收到了，说明配置正确！"
+        )
+        return {
+            "ok": True,
+            "enabled": enabled,
+            "message": "测试消息已发送" if enabled else "降级模式（未配置 Token，仅日志输出）",
+        }
+    except Exception as e:
+        return {"ok": False, "enabled": enabled, "message": str(e)}
+
+
 # --------------------------------------------------------------------------
 # 数据生成（一次性，不经过模式管理）
 # --------------------------------------------------------------------------

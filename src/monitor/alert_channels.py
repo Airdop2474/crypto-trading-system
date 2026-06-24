@@ -138,4 +138,33 @@ class EmailChannel(AlertChannel):
         self._send(msg, self.smtp_config)
 
 
-__all__ = ["AlertChannel", "WebhookChannel", "EmailChannel"]
+class TelegramChannel(AlertChannel):
+    """Telegram 通知通道。
+
+    桥接 AlertManager 的结构化告警到 TelegramNotifier。
+    - 有 Bot Token 时异步发送 Telegram 消息
+    - 无 Token 时 TelegramNotifier 自动降级为纯日志
+    - 级别映射：INFO→INFO, WARNING→WARNING, CRITICAL→CRITICAL
+    """
+
+    # AlertManager 级别 → TelegramNotifier 级别名称
+    _LEVEL_MAP = {INFO: "INFO", WARNING: "WARNING", CRITICAL: "CRITICAL"}
+
+    def __init__(self, min_level: str = WARNING):
+        super().__init__(min_level)
+
+    def send(self, alert: dict) -> None:
+        from src.utils.telegram_notifier import notifier, NotificationLevel
+
+        level_str = self._LEVEL_MAP.get(alert.get("level", WARNING), "WARNING")
+        level = NotificationLevel[level_str]
+
+        text = (
+            f"<b>{alert.get('source', 'System')}</b>\n"
+            f"{alert.get('message', '')}\n"
+            f"<i>{alert.get('time', '')}</i>"
+        )
+        notifier.send_sync(level, text)
+
+
+__all__ = ["AlertChannel", "WebhookChannel", "EmailChannel", "TelegramChannel"]
