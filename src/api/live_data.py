@@ -897,3 +897,47 @@ def pnl_distribution(bins: int = 10) -> Optional[dict]:
     }
 
     return {"bins": bin_list, "stats": stats}
+
+
+def portfolio_heat() -> Optional[dict]:
+    """读取组合热力（Portfolio Heat）共享文件。
+
+    从 data/portfolio_heat.json 读取所有策略的持仓热力，
+    聚合后返回总热力、各策略明细。
+
+    无共享文件时返回 None（调用方可知热力监控未启用）。
+    """
+    heat_file = _DATA_DIR / "portfolio_heat.json"
+    if not heat_file.exists():
+        return None
+
+    try:
+        data = json.loads(heat_file.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.debug(f"读取 portfolio_heat.json 失败: {e}")
+        return None
+
+    strategies = data.get("strategies", {})
+    if not strategies:
+        return None
+
+    from src.risk.portfolio_heat import DEFAULT_MAX_HEAT
+
+    total_heat = sum(float(v.get("heat", 0)) for v in strategies.values())
+    max_heat = DEFAULT_MAX_HEAT
+
+    return {
+        "total_heat": round(total_heat, 4),
+        "max_heat": max_heat,
+        "heat_pct": round(total_heat / max_heat * 100, 1) if max_heat > 0 else 0,
+        "strategies": {
+            k: {
+                "heat": round(float(v.get("heat", 0)), 4),
+                "position_value": round(float(v.get("position_value", 0)), 2),
+                "position_risk": round(float(v.get("position_risk", 0)), 2),
+                "updated_at": v.get("updated_at"),
+            }
+            for k, v in strategies.items()
+        },
+        "updated_at": data.get("updated_at"),
+    }

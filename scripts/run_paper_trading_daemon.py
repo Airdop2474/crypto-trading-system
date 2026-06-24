@@ -50,6 +50,7 @@ from src.monitor.alert_manager import AlertManager, CRITICAL, WARNING
 from src.strategy.base import Order as StrategyOrder
 from src.strategy.grid_trading import GridTradingStrategy
 from src.api.strategy_config_store import get_strategy_config
+from src.risk.portfolio_heat import PortfolioHeatManager
 from src.utils.logger import logger, setup_logger
 
 WARMUP = 30  # 预热 bar 数：定网格区间 + 喂指标，不作为交易 bar
@@ -94,6 +95,7 @@ class PaperTradingDaemon:
         self.broker = None
         self.runner = None
         self.risk = None
+        self.portfolio_heat = None  # PortfolioHeatManager（跨策略热力协调）
         self.collector = MetricsCollector()
         self.writer = None
         self.alert_mgr = AlertManager()
@@ -186,6 +188,13 @@ class PaperTradingDaemon:
             self.broker, self.symbol, risk_manager=self.risk,
             metrics_collector=self.collector, exec_config=exec_config,
         )
+
+        # Portfolio Heat：跨策略风险敞口协调（共享文件 data/portfolio_heat.json）
+        self.portfolio_heat = PortfolioHeatManager(
+            strategy_name=strat_name,
+            state_dir=str(project_root / "data"),
+        )
+        logger.info(f"PortfolioHeat 已初始化: strategy={strat_name}")
 
     def _build_exchange_broker(self):
         """构造 testnet 交易所适配链；硬护栏：仅允许 testnet，否则拒启（绝不碰主网）。"""
@@ -485,6 +494,80 @@ class PaperTradingDaemon:
         return False
 
     # ---- 单 bar 处理 ----
+    def _compute_atr(self, period: int = 14) -> float | None:
+        """从历史数据计算 ATR（用于 Portfolio Heat 风险估算）。
+
+        ATR = SMA(True Range, period)
+        TR = max(H-L, |H-prev_C|, |L-prev_C|)
+        """
+        df = self._history
+        if df is None or len(df) < period + 1:
+            return None
+        try:
+            recent = df.tail(period + 1)
+            high = recent["high"].values
+            low = recent["low"].values
+            close = recent["close"].values
+            tr_list = []
+            for i in range(1, len(close)):
+                tr = max(
+                    high[i] - low[i],
+                    abs(high[i] - close[i - 1]),
+                    abs(low[i] - close[i - 1]),
+                )
+                tr_list.append(tr)
+            return sum(tr_list) / len(tr_list) if tr_list else None
+        except Exception:
+            return None
+
+    def _filter_pending_buy(self):
+        """Portfolio Heat 超阈值时，取消 pending 中的 BUY 信号（允许 SELL）。
+
+        信号格式：
+        - str: "BUY" / "SELL"
+        - List[Order]: Order.side = "buy" / "sell"
+        """
+        if self.pending is None:
+            return
+
+        if isinstance(self.pending, str):
+            if self.pending == "BUY":
+                logger.warning(
+                    f"Portfolio Heat 拒单: 取消 pending BUY 信号 "
+                    f"(strategy={self.args.strategy})"
+                )
+                self.pending = None
+            # SELL 信号保留
+        elif isinstance(self.pending, list):
+            sell_orders = [o for o in self.pending if o.side != "buy"]
+            if len(sell_orders) < len(self.pending):
+                cancelled = len(self.pending) - len(sell_orders)
+                logger.warning(
+                    f"Portfolio Heat 拒单: 取消 {cancelled} 个 pending BUY 订单 "
+                    f"(strategy={self.args.strategy})"
+                )
+                self.pending = sell_orders if sell_orders else None
+
+    def _update_portfolio_heat(self, bar):
+        """更新本策略的持仓热力到共享文件"""
+        if self.portfolio_heat is None:
+            return
+
+        current_price = float(bar["close"])
+        atr = self._compute_atr()
+
+        # lots 格式: {tag: {"amount": float, "cost_price": float}}
+        lots_serializable = {
+            str(k): v for k, v in self.runner.lots.items()
+        } if self.runner.lots else {}
+
+        self.portfolio_heat.update_position_heat(
+            lots=lots_serializable,
+            current_price=current_price,
+            atr=atr,
+            initial_capital=self.args.initial,
+        )
+
     def _on_bar(self, bar):
         try:
             self._on_bar_inner(bar)
@@ -516,6 +599,12 @@ class PaperTradingDaemon:
         # 闪崩保护：在信号生成前检查
         self._check_flash_crash(bar)
 
+        # Portfolio Heat 门控：超阈值时取消 pending BUY（允许 SELL 平仓）
+        if self.portfolio_heat is not None and self.pending is not None:
+            portfolio_heat = self.portfolio_heat.get_portfolio_heat()
+            if portfolio_heat > self.portfolio_heat.max_heat:
+                self._filter_pending_buy()
+
         before = len(self.runner.closed_trades)
         # historical：截至本 bar 的全部已见数据
         self.pending = self.runner.process_bar(
@@ -523,6 +612,9 @@ class PaperTradingDaemon:
         )
         for t in self.runner.closed_trades[before:]:
             self.risk.record_fill(t)
+
+        # Portfolio Heat：更新本策略持仓热力到共享文件
+        self._update_portfolio_heat(bar)
 
         if self.args.broker == "exchange":
             self._reconcile_drift()
@@ -655,6 +747,11 @@ class PaperTradingDaemon:
         signal.signal(signal.SIGTERM, _graceful_exit)
 
     def _finish(self):
+        # 清除 Portfolio Heat 记录（防止已停止策略的热力残留）
+        if self.portfolio_heat is not None:
+            self.portfolio_heat.clear()
+            logger.info(f"Portfolio Heat 已清除: strategy={self.args.strategy}")
+
         # 回放模式：强制平仓所有未平仓位，使盈亏计入 closed_trades
         if self.args.replay:
             pos = self.broker.get_position(self.symbol)

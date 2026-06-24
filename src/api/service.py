@@ -9,6 +9,13 @@
     * 行情 Ticker —— 由 OHLCV 最后一段派生（同一份数据，非外部实时源）。
     * price-action 策略 —— 后端不存在，策略列表只含运行中的网格策略。
     * 启停策略 —— Paper 模式无常驻策略，PATCH 为 no-op 回显。
+
+⚠️ 双轨制说明（v3 Phase 3 技术债清理）：
+  本模块的 _build_state() 是 **预跑回退路径**（pre-run fallback）。
+  主数据源是 live_data.py（读取 daemon 检查点文件）。
+  当 daemon 运行时，所有 API 端点优先使用 live_data，仅当 daemon 未运行
+  且无检查点时才回退到本模块的同步预跑。
+  计划在 Phase 4+ 完全移除预跑路径，统一由 daemon 提供数据。
 """
 
 import glob
@@ -69,6 +76,9 @@ def prewarm() -> None:
     预热完成前 get_state() 返回 building 状态，不会阻塞 HTTP 请求。
 
     超时：PREWARM_TIMEOUT 秒后标记为 error，调用方可重试。
+
+    ⚠️ DEPRECATED（v3 Phase 3）：预热仅在 daemon 未运行时触发。
+    daemon 运行时 lifespan 会跳过预热，直接使用 daemon 检查点。
     """
     global _build_status, _build_error, _build_started_at, _state
 
@@ -169,7 +179,19 @@ def _build_state() -> dict:
 
     同时构建单策略（Grid BTC/USDT）与多策略运行结果。
     单策略路径保持向后兼容；多策略结果存入 state["multi_results"]。
+
+    ⚠️ DEPRECATED（v3 Phase 3）：此方法是预跑回退路径。
+    主数据源为 live_data.py（读取 daemon 检查点）。
+    仅当 daemon 未运行且无检查点时才会被调用。
     """
+    import warnings
+    warnings.warn(
+        "_build_state() 是预跑回退路径，主数据源应为 live_data.py。"
+        "请确保 daemon 运行以避免触发此回退。",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    logger.warning("_build_state() 预跑回退路径被触发（daemon 未运行或无检查点）")
     df = _load_data()
     lo, hi = df["low"].min(), df["high"].max()
     span = hi - lo
@@ -535,6 +557,11 @@ def _daemon_state_available() -> bool:
 
 
 def get_state() -> dict:
+    """获取 Paper Trading 状态（主数据源为 live_data.py，此为回退路径）。
+
+    ⚠️ 当 daemon 运行时，API 端点应优先调用 live_data.* 函数。
+    仅当 live_data 返回 None 时才回退到此方法。
+    """
     global _state, _build_status, _build_error, _build_started_at
     if not _active:
         return _get_empty_state()

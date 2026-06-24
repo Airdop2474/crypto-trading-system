@@ -380,6 +380,27 @@ def risk_status(_=Security(verify_api_token)):
     return service.risk_status(service.get_state())
 
 
+@app.get("/risk/portfolio-heat")
+def portfolio_heat(_=Security(verify_api_token)):
+    """组合热力（Portfolio Heat）：跨策略风险敞口汇总
+
+    返回各策略的持仓热力（ATR 风险 / 初始资金）及总热力。
+    超过 15% 阈值时 daemon 会自动拒绝新开仓。
+    """
+    live = live_data.portfolio_heat()
+    if live is not None:
+        return live
+    # 无共享文件时返回空状态
+    from src.risk.portfolio_heat import DEFAULT_MAX_HEAT
+    return {
+        "total_heat": 0.0,
+        "max_heat": DEFAULT_MAX_HEAT,
+        "heat_pct": 0.0,
+        "strategies": {},
+        "updated_at": None,
+    }
+
+
 # --------------------------------------------------------------------------
 # 持仓历史 / 盈亏分布
 # --------------------------------------------------------------------------
