@@ -36,7 +36,7 @@ export function MobileNav() {
   const pathname = usePathname()
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-30 flex overflow-x-auto border-t border-border bg-sidebar md:hidden">
+    <nav aria-label="主导航" className="fixed inset-x-0 bottom-0 z-30 flex overflow-x-auto border-t border-border bg-sidebar md:hidden">
       {nav.map((item) => {
         const active = pathname === item.href
         const Icon = item.icon
@@ -44,6 +44,7 @@ export function MobileNav() {
           <Link
             key={item.href}
             href={item.href}
+            aria-current={active ? "page" : undefined}
             className={cn(
               "flex shrink-0 flex-col items-center gap-0.5 px-3 py-2 text-[10px]",
               active ? "text-primary" : "text-muted-foreground",

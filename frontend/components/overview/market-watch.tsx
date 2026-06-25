@@ -19,6 +19,7 @@ export function MarketWatch() {
               isConnected ? "bg-success" : "bg-destructive",
             )}
             title={isConnected ? "WebSocket 已连接" : "WebSocket 断线"}
+            aria-label={isConnected ? "WebSocket 已连接" : "WebSocket 断线"}
           />
         </CardTitle>
       </CardHeader>

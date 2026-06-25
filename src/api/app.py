@@ -318,6 +318,41 @@ WS_PORT = 8000
 MAX_WS_CLIENTS = 50
 
 
+async def _authenticate_ws(ws: WebSocket) -> bool:
+    """WebSocket 统一认证 — 通过首条 JSON 消息 {"type":"auth","token":"..."}
+
+    返回 True 表示认证成功，False 表示已发送错误并关闭连接。
+    """
+    from src.utils.config import config
+    if config.API_TOKEN is None or config.API_TOKEN == "":
+        await ws.send_text(json.dumps({"error": "Server not configured"}))
+        await ws.close(code=4001)
+        return False
+
+    try:
+        first_msg = await asyncio.wait_for(ws.receive_text(), timeout=10.0)
+        auth_data = json.loads(first_msg)
+    except WebSocketDisconnect:
+        return False
+    except asyncio.TimeoutError:
+        await ws.send_text(json.dumps({"error": "Authentication timeout"}))
+        await ws.close(code=4001)
+        return False
+    except json.JSONDecodeError:
+        await ws.send_text(json.dumps({"error": "Invalid auth message"}))
+        await ws.close(code=4001)
+        return False
+
+    if auth_data.get("type") != "auth" or not secrets.compare_digest(
+        auth_data.get("token", ""), config.API_TOKEN
+    ):
+        await ws.send_text(json.dumps({"error": "Invalid token"}))
+        await ws.close(code=4001)
+        return False
+
+    return True
+
+
 @app.websocket("/ws/tickers")
 async def ws_tickers(ws: WebSocket):
     """WebSocket 实时行情推送 (auth via first JSON message: {"type":"auth","token":"..."})
@@ -334,31 +369,8 @@ async def ws_tickers(ws: WebSocket):
 
     await ws.accept()
 
-    # WebSocket 认证 — 通过首条 JSON 消息 {"type":"auth","token":"..."}
-    from src.utils.config import config
-    if config.API_TOKEN is None or config.API_TOKEN == "":
-        await ws.send_text(json.dumps({"error": "Server not configured"}))
-        await ws.close(code=4001)
-        return
-    try:
-        first_msg = await asyncio.wait_for(ws.receive_text(), timeout=10.0)
-        auth_data = json.loads(first_msg)
-    except WebSocketDisconnect:
-        return
-    except asyncio.TimeoutError:
-        await ws.send_text(json.dumps({"error": "Authentication timeout"}))
-        await ws.close(code=4001)
-        return
-    except json.JSONDecodeError:
-        await ws.send_text(json.dumps({"error": "Invalid auth message"}))
-        await ws.close(code=4001)
-        return
-
-    if auth_data.get("type") != "auth" or not secrets.compare_digest(
-        auth_data.get("token", ""), config.API_TOKEN
-    ):
-        await ws.send_text(json.dumps({"error": "Invalid token"}))
-        await ws.close(code=4001)
+    # WebSocket 认证
+    if not await _authenticate_ws(ws):
         return
 
     queue = ws_feed.subscribe()
@@ -1252,12 +1264,18 @@ def agent_evolve(request: Request, body: EvolveRequest, _=Security(verify_api_to
     else:
         slots = multi_runner.slots
 
-    results = engine.evolve_all(
-        slots=slots,
-        skip={"buyhold"},
-        multi_runner=multi_runner,
-        risk_manager_state=risk_state,
-    )
+    try:
+        results = engine.evolve_all(
+            slots=slots,
+            skip={"buyhold"},
+            multi_runner=multi_runner,
+            risk_manager_state=risk_state,
+        )
+    except ValueError as e:
+        raise HTTPException(400, f"进化参数错误: {e}")
+    except Exception as e:
+        logger.exception(f"策略进化失败: {e}")
+        raise HTTPException(500, f"进化引擎内部错误: {e}")
 
     return [r.to_dict() for r in results]
 
@@ -1719,32 +1737,8 @@ async def ws_logs_endpoint(ws: WebSocket, mode: str):
     # 连接限制（复用 WS_PORT 常量）
     await ws.accept()
 
-    # WebSocket 认证 — 与 /ws/tickers 相同模式
-    from src.utils.config import config
-    if config.API_TOKEN is None or config.API_TOKEN == "":
-        await ws.send_text(json.dumps({"error": "Server not configured"}))
-        await ws.close(code=4001)
-        return
-
-    try:
-        first_msg = await asyncio.wait_for(ws.receive_text(), timeout=10.0)
-        auth_data = json.loads(first_msg)
-    except WebSocketDisconnect:
-        return
-    except asyncio.TimeoutError:
-        await ws.send_text(json.dumps({"error": "Authentication timeout"}))
-        await ws.close(code=4001)
-        return
-    except json.JSONDecodeError:
-        await ws.send_text(json.dumps({"error": "Invalid auth message"}))
-        await ws.close(code=4001)
-        return
-
-    if auth_data.get("type") != "auth" or not secrets.compare_digest(
-        auth_data.get("token", ""), config.API_TOKEN
-    ):
-        await ws.send_text(json.dumps({"error": "Invalid token"}))
-        await ws.close(code=4001)
+    # WebSocket 认证
+    if not await _authenticate_ws(ws):
         return
 
     # 先发送缓冲的历史日志

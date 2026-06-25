@@ -74,6 +74,8 @@ function CorrelationHeatmap({
         width={svgWidth}
         height={svgHeight}
         viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+        role="img"
+        aria-label="策略相关性矩阵热力图"
         className="block"
       >
         {/* 顶部策略标签 */}

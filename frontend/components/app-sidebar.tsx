@@ -61,7 +61,7 @@ export function AppSidebar() {
         </span>
       </div>
 
-      <nav className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">
+      <nav aria-label="主导航" className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">
         {navGroups.map((group) => (
           <div key={group.label} className="flex flex-col gap-1">
             <p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -76,6 +76,7 @@ export function AppSidebar() {
                 <Link
                   key={item.href}
                   href={item.href}
+                  aria-current={active ? "page" : undefined}
                   className={cn(
                     "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
                     active

@@ -110,18 +110,38 @@ class ExchangeBroker(BrokerInterface):
             )
 
     def cancel_order(self, order_id: str) -> bool:
-        """撤单，返回是否成功（带回查 symbol，binance 撤单必需）"""
+        """撤单，返回是否成功（带回查 symbol，binance 撤单必需）
+
+        失败时记录异常上下文（订单 ID + 错误类型），便于调用方排查。
+        """
         try:
             self.exchange.cancel_order(order_id, self._order_symbols.get(order_id))
             return True
-        except Exception:
+        except ccxt.OrderNotFound:
+            logger.warning(f"撤单失败：订单不存在 {order_id}")
+            return False
+        except ccxt.NetworkError as e:
+            logger.warning(f"撤单网络错误 {order_id}: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"撤单失败 {order_id}: {type(e).__name__}: {e}")
             return False
 
     def get_order_status(self, order_id: str) -> Optional[dict]:
-        """查询订单状态，不存在或失败返回 None（带回查 symbol，binance 查单必需）"""
+        """查询订单状态，不存在或失败返回 None（带回查 symbol，binance 查单必需）
+
+        失败时记录异常上下文，便于调用方区分错误类型。
+        """
         try:
             return self.exchange.fetch_order(order_id, self._order_symbols.get(order_id))
-        except Exception:
+        except ccxt.OrderNotFound:
+            logger.debug(f"查单：订单不存在 {order_id}")
+            return None
+        except ccxt.NetworkError as e:
+            logger.warning(f"查单网络错误 {order_id}: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"查单失败 {order_id}: {type(e).__name__}: {e}")
             return None
 
 
