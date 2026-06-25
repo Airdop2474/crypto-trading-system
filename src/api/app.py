@@ -652,24 +652,30 @@ def monte_carlo_analysis(
     n_sim = body.get("n_simulations", 1000)
     method = body.get("method", "trade_bootstrap")
 
-    # 优先从 live_data 获取交易数据
-    live = live_data.multi_strategy_details()
-    if live:
+    # 直接读取原始 state 文件（需要 closed_trades 明细）
+    from src.api.live_data import _load_all_states
+    states = _load_all_states()
+    if states:
         # 找到指定策略或用第一个
         target = None
         if strategy_name:
-            for s in live:
-                if strategy_name in s.get("id", ""):
+            for s in states:
+                sname = s.get("strategy_name", "")
+                sid = s.get("strategy_id", "") or sname
+                # 匹配策略 ID（如 grid-btc-usdt）或策略类型名（如 grid）
+                if strategy_name in sid or strategy_name == sname:
                     target = s
                     break
-        if target is None and live:
-            target = live[0]
+        if target is None:
+            target = states[0]
 
         if target:
             from src.backtest.monte_carlo import MonteCarloSimulator
-            # 从 live_data 构造 trades
+            # 从原始 state 获取交易明细
+            runner_state = target.get("runner", {})
+            closed_trades_raw = runner_state.get("closed_trades", [])
             trades = []
-            for ct in target.get("closed_trades", []):
+            for ct in closed_trades_raw:
                 trades.append({
                     "type": "SELL",
                     "profit": float(ct.get("profit", 0)),
@@ -678,11 +684,12 @@ def monte_carlo_analysis(
             mc = MonteCarloSimulator(n_simulations=n_sim, random_seed=42)
             result = mc.run(
                 trades=trades,
-                initial_capital=float(target.get("investment", 10000)),
+                initial_capital=float(target.get("initial_capital", 10000)),
                 method=method,
             )
+            sid = target.get("strategy_id", "") or target.get("strategy_name", "")
             return {
-                "strategy_id": target.get("id", ""),
+                "strategy_id": sid,
                 **result.to_dict(),
             }
 
