@@ -19,6 +19,14 @@ export function MonteCarloPanel() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<Error | null>(null)
 
+  // 策略 ID → 中文显示文本
+  const strategyLabel = (() => {
+    const type = strategyId.split("-")[0] as keyof typeof STRATEGY_TYPE_LABEL
+    return STRATEGY_TYPE_LABEL[type] ?? strategyId
+  })()
+  // 方法 → 中文显示文本
+  const methodLabel = method === "trade_bootstrap" ? "交易重采样" : "收益重采样"
+
   const handleRun = async () => {
     setLoading(true)
     setError(null)
@@ -47,7 +55,7 @@ export function MonteCarloPanel() {
             <label className="text-xs text-muted-foreground">策略</label>
             <Select value={strategyId} onValueChange={(v) => v && setStrategyId(v)}>
               <SelectTrigger className="w-44">
-                <SelectValue />
+                <SelectValue>{strategyLabel}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="grid-btc-usdt">{STRATEGY_TYPE_LABEL.grid}</SelectItem>
@@ -69,7 +77,7 @@ export function MonteCarloPanel() {
             <label className="text-xs text-muted-foreground">方法</label>
             <Select value={method} onValueChange={(v) => setMethod(v as typeof method)}>
               <SelectTrigger className="w-40">
-                <SelectValue />
+                <SelectValue>{methodLabel}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="trade_bootstrap">交易重采样</SelectItem>
