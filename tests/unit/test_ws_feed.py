@@ -20,8 +20,12 @@ from src.api.ws_feed import WsFeed, ws_feed, WATCH_SYMBOLS, _BINANCE_TO_STD
 
 
 def _run(coro):
-    """同步包装器运行 async 函数"""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """同步包装器运行 async 函数
+
+    使用 asyncio.run() 替代 get_event_loop().run_until_complete()，
+    避免 Python 3.10+ 中无当前事件循环时 RuntimeError。
+    """
+    return asyncio.run(coro)
 
 
 class TestWsFeedParsing:

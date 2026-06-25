@@ -42,7 +42,7 @@ export function ModeControls() {
         {/* 互斥提示 */}
         {tradingModeRunning && (
           <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
-            当前有交易模式运行中。同一时间只能运行一个交易模式（回放纸盘 / 实时纸盘 / Testnet 实盘），数据下载不受限制。
+            当前有交易模式运行中。同一时间只能运行一个交易模式（回放纸盘 / 实时纸盘 / 测试网实盘），数据下载不受限制。
           </div>
         )}
 

@@ -138,9 +138,9 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
       const result = await api.validateTestnet()
       setValidation(result)
       if (result.ok) {
-        toast.success("Testnet 验证通过")
+        toast.success("测试网验证通过")
       } else {
-        toast.error("Testnet 验证未通过")
+        toast.error("测试网验证未通过")
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "验证失败"
@@ -220,7 +220,7 @@ export function ModeCard({ mode, state, tradingModeRunning, onAction }: ModeCard
               disabled={validating || loading}
             >
               {validating ? <Loader2 className="size-3 animate-spin" /> : null}
-              验证 Testnet
+              验证测试网
             </Button>
           )}
 
