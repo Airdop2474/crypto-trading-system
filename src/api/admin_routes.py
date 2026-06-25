@@ -163,6 +163,16 @@ def admin_emergency_stop():
     risk_manager.emergency_stop("remote emergency-stop via API")
     logger.warning(f"远程急停已触发：{prev_state} -> STOPPED")
 
+    # 发送告警通知
+    try:
+        from src.monitor.alert_hub import alert_manager
+        alert_manager.emit(
+            "CRITICAL", "api",
+            f"远程急停已触发: {prev_state} -> STOPPED (via API)",
+        )
+    except Exception as e:
+        logger.debug(f"急停告警发送失败（非致命）: {e}")
+
     from pathlib import Path as _Path
     signal_file = _Path("data/.emergency_stop")
     try:

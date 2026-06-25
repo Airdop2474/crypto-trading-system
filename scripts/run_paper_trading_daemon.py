@@ -48,6 +48,7 @@ from src.execution.paper_trading_runner import ExecutionConfig
 from src.monitor import MetricsCollector, MetricsWriter
 from src.monitor.alert_manager import AlertManager, CRITICAL, WARNING
 from src.monitor.alert_channels import TelegramChannel
+from src.monitor.alert_hub import get_alert_manager
 from src.strategy.base import Order as StrategyOrder
 from src.strategy.grid_trading import GridTradingStrategy
 from src.api.strategy_config_store import get_strategy_config
@@ -100,7 +101,7 @@ class PaperTradingDaemon:
         self.portfolio_heat = None  # PortfolioHeatManager（跨策略热力协调）
         self.collector = MetricsCollector()
         self.writer = None
-        self.alert_mgr = AlertManager(channels=[TelegramChannel()])
+        self.alert_mgr = get_alert_manager()  # 共享单例（Telegram + 可选 Webhook）
 
         self.pending = None
         self.day_count = 0

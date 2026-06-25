@@ -84,25 +84,33 @@ class ExchangeExecutor:
             return amount_r, False, f"名义额 {notional:.4f} < minNotional {min_cost}"
         return amount_r, True, ""
 
-    def place_and_confirm(self, symbol, side, amount, ref_price, order_type="market"):
+    def place_and_confirm(self, symbol, side, amount, ref_price, order_type="market", **kwargs):
         """下单并确认成交。
 
         返回 OrderResult，status ∈ {filled, partial, timeout, rejected}：
             - rejected：sizing 不过 或 交易所拒单（无 order_id）
             - filled/partial：拿到真实成交价量，按 FULL_FILL_TOL 判全/部分
             - timeout：下单成功但 timeout 内未确认成交（调用方决定撤单/重试）
+
+        kwargs 支持:
+            price: 限价单价格（覆盖 ref_price）
+            stop_price: stop-limit 单的触发价
         """
         amount_r, ok, reason = self.size_order(symbol, amount, ref_price)
         if not ok:
             logger.warning(f"sizing 拒单 {symbol} {side} {amount}: {reason}")
             return OrderResult(order_id=None, status="rejected", reason=reason)
 
-        price_arg = ref_price
+        price_arg = kwargs.get("price", ref_price)
         if order_type == "limit":
-            price_arg = float(self.exchange.price_to_precision(symbol, ref_price))
+            price_arg = float(self.exchange.price_to_precision(symbol, price_arg))
 
-        res = self.broker.place_order(
-            Order(symbol, side, amount_r, price_arg, order_type))
+        stop_price = kwargs.get("stop_price")
+        order_obj = Order(symbol, side, amount_r, price_arg, order_type,
+                          limit_price=price_arg if order_type == "limit" else None,
+                          stop_price=stop_price)
+
+        res = self.broker.place_order(order_obj)
         if res.order_id is None:
             return OrderResult(order_id=None, status="rejected",
                                reason=res.reason or res.status)

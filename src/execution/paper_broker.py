@@ -86,15 +86,20 @@ class PaperBroker(BrokerInterface):
 
     def place_order(self, order: Order, **kwargs) -> OrderResult:
         """
-        下单：支持市价单（立即成交）和限价单（挂单等待撮合）
+        下单：支持市价单、限价单和 stop-limit 单
 
-        市价单（order_type='market' 或 limit_price=None）：
+        市价单（order_type='market'）：
             按 order.price ± 滑点立即成交
 
         限价单（order_type='limit' 且 limit_price != None）：
             - BUY limit_price=P：当市场价格 <= P 时按 P 成交
             - SELL limit_price=P：当市场价格 >= P 时按 P 成交
             如果不满足条件，订单进入 pending_orders 队列等待
+
+        Stop-limit 单（order_type='stop_limit' 且 stop_price + limit_price != None）：
+            - BUY: 市场价涨到 stop_price 时触发，以 limit_price 挂买单
+            - SELL: 市场价跌到 stop_price 时触发，以 limit_price 挂卖单
+            触发前进入 pending 队列等待
 
         timestamp: 成交时间。回测/纸面运行应传入当根 bar 时间。
         """
@@ -108,6 +113,11 @@ class PaperBroker(BrokerInterface):
         # 风控检查（仅买入加仓需要）
         if order.side == "buy" and not self._check_risk_limits(order):
             return OrderResult(None, "rejected", reason="风控拒绝：超过仓位限制")
+
+        # Stop-limit 单：先进入 pending 队列等待触发
+        is_stop = order.order_type == "stop_limit" and order.stop_price is not None and order.limit_price is not None
+        if is_stop:
+            return self._place_pending_stop(order, timestamp)
 
         # 限价单：检查是否可立即成交
         limit_price = getattr(order, 'limit_price', None)
@@ -258,6 +268,51 @@ class PaperBroker(BrokerInterface):
             filled_amount=0.0,
         )
 
+    def _place_pending_stop(self, order: Order, timestamp) -> OrderResult:
+        """将 stop-limit 单放入挂单队列等待触发"""
+        order_id = self._generate_order_id()
+
+        # 买入 stop-limit 单需预留资金
+        if order.side == "buy":
+            reserved = order.amount * order.limit_price * (1 + self.commission)
+            if reserved > self.balance:
+                return OrderResult(
+                    None, "rejected",
+                    reason=f"资金不足：需预留 {reserved:.2f}，余额 {self.balance:.2f}",
+                )
+            self.balance -= reserved  # 冻结资金
+
+        # 卖出 stop-limit 单需检查持仓
+        elif order.side == "sell":
+            current = self.get_position(order.symbol)
+            if order.amount > current:
+                return OrderResult(
+                    None, "rejected",
+                    reason=f"持仓不足：需要 {order.amount}，持仓 {current}",
+                )
+            # 冻结持仓（减少可用）
+            self.positions[order.symbol] = current - order.amount
+
+        self.pending_orders.append({
+            "order_id": order_id,
+            "order": order,
+            "placed_at": timestamp if timestamp is not None else datetime.now(),
+            "is_stop": True,
+        })
+
+        logger.debug(
+            f"STOP-LIMIT {order.side.upper()} {order.amount} {order.symbol} "
+            f"trigger@{order.stop_price:.2f} limit@{order.limit_price:.2f} "
+            f"-> {order_id} (pending)"
+        )
+
+        return OrderResult(
+            order_id=order_id,
+            status="pending",
+            filled_price=None,
+            filled_amount=0.0,
+        )
+
     def check_pending_orders(
         self,
         bar_high: float,
@@ -291,6 +346,8 @@ class PaperBroker(BrokerInterface):
         for pending in self.pending_orders:
             order = pending["order"]
             limit_price = order.limit_price
+            is_stop = pending.get("is_stop", False)
+            stop_price = getattr(order, 'stop_price', None)
 
             # P1-6: TTL 过期检查——超时未成交则自动取消
             if timestamp is not None and pending.get("placed_at") is not None:
@@ -315,7 +372,40 @@ class PaperBroker(BrokerInterface):
 
             filled = False
 
-            if order.side == "buy" and bar_low <= limit_price:
+            if is_stop and stop_price is not None:
+                # Stop-limit 单触发逻辑
+                # BUY stop: bar_high >= stop_price 时触发（价格涨到止损买入选）
+                # SELL stop: bar_low <= stop_price 时触发（价格跌到止损卖价）
+                triggered = False
+                if order.side == "buy" and bar_high >= stop_price:
+                    triggered = True
+                elif order.side == "sell" and bar_low <= stop_price:
+                    triggered = True
+
+                if triggered:
+                    # 触发后按 limit_price 撮合（同限价单逻辑）
+                    can_fill = False
+                    if order.side == "buy" and bar_low <= limit_price:
+                        can_fill = True
+                    elif order.side == "sell" and bar_high >= limit_price:
+                        can_fill = True
+
+                    if can_fill:
+                        # 解冻资金/持仓
+                        if order.side == "buy":
+                            reserved = order.amount * limit_price * (1 + self.commission)
+                            self.balance += reserved
+                        elif order.side == "sell":
+                            current = self.positions.get(order.symbol, 0.0)
+                            self.positions[order.symbol] = current + order.amount
+                        result = self._fill_order(order, limit_price, timestamp)
+                        filled = True
+                    else:
+                        # 触发但限价未满足，转为普通限价单继续等待
+                        pending["is_stop"] = False
+                # 未触发：继续等待
+
+            elif order.side == "buy" and bar_low <= limit_price:
                 # 解冻资金（_fill_order 会重新扣除实际成本）
                 reserved = order.amount * limit_price * (1 + self.commission)
                 self.balance += reserved

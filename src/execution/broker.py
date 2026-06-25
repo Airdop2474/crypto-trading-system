@@ -20,8 +20,9 @@ class Order:
     side: str  # 'buy' or 'sell'
     amount: float  # 基础货币数量（如 BTC 数量）
     price: float
-    order_type: str = "market"  # 'limit' or 'market'
-    limit_price: Optional[float] = None  # 限价单价格
+    order_type: str = "market"  # 'market', 'limit', 'stop_limit'
+    limit_price: Optional[float] = None  # 限价单价格 / stop-limit 的限价
+    stop_price: Optional[float] = None   # stop-limit 的触发价
 
 
 @dataclass

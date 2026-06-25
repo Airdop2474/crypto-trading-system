@@ -83,7 +83,10 @@ class ExchangeRunnerBroker:
     # ---- 下单（经 executor 做 sizing + 真实成交确认）----
 
     def place_order(self, order: Order, timestamp=None) -> OrderResult:
-        """下市价单并确认真实成交。timestamp 仅记账本（成交时刻由交易所定）。"""
+        """下单并确认真实成交。支持 market/limit/stop_limit 类型。
+
+        timestamp 仅记账本（成交时刻由交易所定）。
+        """
         if self.guard is not None:
             ok, reason = self.guard.check(order.amount * order.price, timestamp)
             if not ok:
@@ -92,8 +95,20 @@ class ExchangeRunnerBroker:
                                f"{order.amount}: {reason}")
                 return OrderResult(order_id=None, status="rejected", reason=reason)
 
+        # 根据订单类型传递参数
+        order_type = order.order_type if order.order_type in ("market", "limit") else "market"
+        extra_kwargs = {}
+        if order.order_type == "limit" and order.limit_price is not None:
+            extra_kwargs["price"] = order.limit_price
+        elif order.order_type == "stop_limit" and order.stop_price is not None:
+            # 交易所 stop-limit：先触发再以 limit_price 挂单
+            extra_kwargs["stop_price"] = order.stop_price
+            extra_kwargs["price"] = order.limit_price or order.price
+            order_type = "limit"  # 交易所层用 limit + stop_price
+
         res = self.executor.place_and_confirm(
-            order.symbol, order.side, order.amount, order.price, order_type="market"
+            order.symbol, order.side, order.amount, order.price,
+            order_type=order_type, **extra_kwargs,
         )
         if res.status in ("filled", "partial"):
             self._record_fill(res, order.side, timestamp)
