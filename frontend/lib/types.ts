@@ -725,3 +725,29 @@ export interface TelegramTestResult {
   enabled: boolean
   message: string
 }
+
+// ---------------------------------------------------------------------------
+// 止损配置
+// ---------------------------------------------------------------------------
+export interface StopConfig {
+  stop_type: string            // none / atr_trailing / range_breakout / time_only
+  atr_mult: number
+  trailing_activation: number
+  trailing_drawback: number
+  range_breakout_pct: number
+  max_bars: number
+  min_stop_pct: number
+}
+
+export type StopConfigMap = Record<string, StopConfig>
+
+export interface StopConfigUpdate {
+  strategy_type: string
+  stop_type: string
+  atr_mult: number
+  trailing_activation: number
+  trailing_drawback: number
+  range_breakout_pct: number
+  max_bars: number
+  min_stop_pct: number
+}

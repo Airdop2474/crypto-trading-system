@@ -50,6 +50,8 @@ import type {
   TelegramConfig,
   TelegramConfigUpdate,
   TelegramTestResult,
+  StopConfigMap,
+  StopConfigUpdate,
   WinRateTrendPoint,
   ModeResult,
   ModeState,
@@ -539,6 +541,39 @@ export const api = {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       throw new Error(body.detail || `Telegram 测试失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // --------------------------------------------------------------------------
+  // 止损配置
+  // --------------------------------------------------------------------------
+  getStopConfigs: (): Promise<StopConfigMap> => get("/risk/stop-config"),
+
+  saveStopConfig: async (req: StopConfigUpdate): Promise<{ ok: boolean; message: string }> => {
+    const res = await fetch(`${API_BASE}/risk/stop-config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `保存止损配置失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // --------------------------------------------------------------------------
+  // 策略实例管理
+  // --------------------------------------------------------------------------
+  deleteStrategyInstance: async (strategyId: string): Promise<{ ok: boolean; message: string }> => {
+    const res = await fetch(`${API_BASE}/strategies/${strategyId}/instance`, {
+      method: "DELETE",
+      headers: { "X-API-Token": API_TOKEN },
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `删除策略实例失败: ${res.status}`)
     }
     return res.json()
   },

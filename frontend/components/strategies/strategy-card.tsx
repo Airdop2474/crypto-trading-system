@@ -1,12 +1,27 @@
 "use client"
 
+import { useState } from "react"
+import { toast } from "sonner"
 import type { StrategyRegistryEntry, MultiStrategyDetail, StrategyType } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Settings } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
+import { Settings, Trash2, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { fmtSigned, fmtNum, pnlColor } from "@/lib/format"
 import { STRATEGY_TYPE_COLOR, STRATEGY_FALLBACK_COLOR } from "@/lib/strategy-meta"
+import { api } from "@/lib/api"
+import useSWR, { mutate as globalMutate } from "swr"
 
 interface Props {
   entry: StrategyRegistryEntry
@@ -15,9 +30,31 @@ interface Props {
 }
 
 export function StrategyCard({ entry, instance, onConfigure }: Props) {
+  const [deleting, setDeleting] = useState(false)
   const colorClass = entry.key in STRATEGY_TYPE_COLOR
     ? STRATEGY_TYPE_COLOR[entry.key as StrategyType]
     : STRATEGY_FALLBACK_COLOR
+
+  const handleDelete = async () => {
+    setDeleting(true)
+    try {
+      const result = await api.deleteStrategyInstance(entry.key)
+      if (result.ok) {
+        toast.success(result.message)
+        await globalMutate(
+          (key) => typeof key === "string" && key.startsWith("strategies"),
+          undefined,
+          { revalidate: true }
+        )
+      } else {
+        toast.error(result.message || "删除失败")
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "删除失败")
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   return (
     <Card>
@@ -79,16 +116,53 @@ export function StrategyCard({ entry, instance, onConfigure }: Props) {
           </div>
         )}
 
-        {/* 配置按钮 */}
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full gap-1.5"
-          onClick={onConfigure}
-        >
-          <Settings className="size-3.5" />
-          配置参数
-        </Button>
+        {/* 操作按钮 */}
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1 gap-1.5"
+            onClick={onConfigure}
+          >
+            <Settings className="size-3.5" />
+            配置参数
+          </Button>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-destructive hover:text-destructive"
+                disabled={deleting || !entry.running}
+              >
+                {deleting ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="size-3.5" />
+                )}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>删除策略实例</AlertDialogTitle>
+                <AlertDialogDescription>
+                  确定要删除运行中的策略实例 "{entry.name}" 吗？
+                  此操作会从运行队列中移除该策略并清理其状态文件，但不会删除已保存的参数配置。
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>取消</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleDelete}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  确认删除
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
       </CardContent>
     </Card>
   )

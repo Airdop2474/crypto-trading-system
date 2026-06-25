@@ -829,7 +829,9 @@ def build_analysis_data(task: str) -> Optional[dict]:
         }
 
     elif task == "param_sensitivity":
-        # 从第一个策略取参数
+        # 从各策略 state 提取参数 + 运行指标，构建扫描结果 DataFrame
+        import pandas as pd
+        scan_rows = []
         base_params = {}
         for s in states:
             strat_name = s.get("strategy_name", "grid")
@@ -838,8 +840,40 @@ def build_analysis_data(task: str) -> Optional[dict]:
                 base_params["lower_price"] = bounds.get("lower", 0)
                 base_params["upper_price"] = bounds.get("upper", 0)
             base_params["strategy"] = strat_name
-            break
-        return {"base_params": base_params}
+
+            # 提取该策略的运行指标
+            s_initial = float(s.get("initial_capital", 10000))
+            s_balance = float(s.get("broker", {}).get("balance", 0))
+            s_realized = float(s.get("runner", {}).get("realized_pnl", 0))
+            s_lots = s.get("runner", {}).get("lots", {})
+            s_amount = sum(float(l.get("amount", 0)) for l in s_lots.values())
+            s_equity = s_balance + s_amount * last_price
+            s_return = (s_equity - s_initial) / s_initial if s_initial else 0.0
+
+            s_closed = s.get("runner", {}).get("closed_trades", [])
+            s_wins = [t for t in s_closed if float(t.get("profit", 0)) > 0]
+            s_win_rate = len(s_wins) / len(s_closed) if s_closed else 0.0
+
+            row = {
+                "strategy": strat_name,
+                "total_return": s_return,
+                "win_rate": s_win_rate,
+                "max_drawdown": 0.0,
+                "sharpe_ratio": 0.0,
+                "n_trades": len(s_closed),
+            }
+            # 补充参数列
+            if bounds:
+                row["lower_price"] = float(bounds.get("lower", 0))
+                row["upper_price"] = float(bounds.get("upper", 0))
+            # grid_count 如果有
+            grid_count = s.get("grid_count")
+            if grid_count:
+                row["grid_count"] = int(grid_count)
+            scan_rows.append(row)
+
+        scan_df = pd.DataFrame(scan_rows) if scan_rows else pd.DataFrame()
+        return {"base_params": base_params, "scan_results": scan_df}
 
     return None
 

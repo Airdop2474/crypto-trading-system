@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 import secrets
+import pandas as pd
 from loguru import logger
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect, Security, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
@@ -402,6 +403,87 @@ def portfolio_heat(_=Security(verify_api_token)):
 
 
 # --------------------------------------------------------------------------
+# 止损配置
+# --------------------------------------------------------------------------
+class StopConfigUpdateRequest(BaseModel):
+    strategy_type: str
+    stop_type: str = "atr_trailing"  # none / atr_trailing / range_breakout / time_only
+    atr_mult: float = 1.5
+    trailing_activation: float = 0.03
+    trailing_drawback: float = 0.03
+    range_breakout_pct: float = 0.05
+    max_bars: int = 50
+    min_stop_pct: float = 0.01
+
+
+@app.get("/risk/stop-config")
+def get_stop_configs(_=Security(verify_api_token)):
+    """获取所有策略类型的止损配置"""
+    from src.strategy.stop_configs import STRATEGY_STOP_CONFIGS
+    from src.strategy.stop_loss import StopLossConfig
+
+    result = {}
+    for stype, cfg in STRATEGY_STOP_CONFIGS.items():
+        result[stype] = {
+            "stop_type": cfg.stop_type,
+            "atr_mult": cfg.atr_mult,
+            "trailing_activation": cfg.trailing_activation,
+            "trailing_drawback": cfg.trailing_drawback,
+            "range_breakout_pct": cfg.range_breakout_pct,
+            "max_bars": cfg.max_bars,
+            "min_stop_pct": cfg.min_stop_pct,
+        }
+    return result
+
+
+@app.post("/risk/stop-config")
+@limiter.limit("10/minute")
+def update_stop_config(
+    request: Request,
+    body: StopConfigUpdateRequest,
+    _=Security(verify_api_token),
+):
+    """更新指定策略类型的止损配置（热更新，下次策略创建/bar 时生效）
+
+    安全边界：参数会被 StopLossConfig.__post_init__ 自动 clamp 到安全范围
+    """
+    from src.strategy.stop_configs import STRATEGY_STOP_CONFIGS
+    from src.strategy.stop_loss import StopLossConfig
+
+    stype = body.strategy_type
+    if stype not in STRATEGY_STOP_CONFIGS:
+        return {"ok": False, "message": f"未知策略类型: {stype}"}
+
+    # 构建新配置（StopLossConfig 会自动 clamp 到安全范围）
+    new_cfg = StopLossConfig(
+        stop_type=body.stop_type,
+        atr_mult=body.atr_mult,
+        trailing_activation=body.trailing_activation,
+        trailing_drawback=body.trailing_drawback,
+        range_breakout_pct=body.range_breakout_pct,
+        max_bars=body.max_bars,
+        min_stop_pct=body.min_stop_pct,
+    )
+
+    # 热更新模块级字典（运行中的策略下次创建 StopLossManager 时使用新配置）
+    STRATEGY_STOP_CONFIGS[stype] = new_cfg
+
+    return {
+        "ok": True,
+        "message": f"{stype} 止损配置已更新",
+        "config": {
+            "stop_type": new_cfg.stop_type,
+            "atr_mult": new_cfg.atr_mult,
+            "trailing_activation": new_cfg.trailing_activation,
+            "trailing_drawback": new_cfg.trailing_drawback,
+            "range_breakout_pct": new_cfg.range_breakout_pct,
+            "max_bars": new_cfg.max_bars,
+            "min_stop_pct": new_cfg.min_stop_pct,
+        },
+    }
+
+
+# --------------------------------------------------------------------------
 # 持仓历史 / 盈亏分布
 # --------------------------------------------------------------------------
 @app.get("/positions/history")
@@ -548,8 +630,8 @@ def strategy_evaluation(
         initial = float(s.get("investment", 10000))
         realized = float(s.get("pnl", 0))
 
-        # Monte Carlo
-        mc = MonteCarloSimulator(n_simulations=500, random_seed=42)
+        # Monte Carlo（1000 次模拟，与脚本版一致）
+        mc = MonteCarloSimulator(n_simulations=1000, random_seed=42)
         mc_result = mc.run(trades=trades, initial_capital=initial)
 
         # 简化评分（基于 live_data）
@@ -558,14 +640,26 @@ def strategy_evaluation(
         win_rate = wins / total_trades if total_trades > 0 else 0
         return_pct = realized / initial if initial > 0 else 0
 
-        # 简化评分
+        # 参数稳定性评分：基于交易盈亏的变异系数
+        if total_trades >= 5:
+            profits = [t["profit"] for t in trades]
+            import numpy as np
+            mean_profit = float(np.mean(profits))
+            std_profit = float(np.std(profits))
+            cv = std_profit / abs(mean_profit) if abs(mean_profit) > 1e-8 else 1.0
+            param_stability = max(0, min(100, 100 - cv * 30))
+        else:
+            param_stability = 50.0  # 交易不足，给中等分
+
+        # 五维评分（与 StrategyEvaluator 对齐）
         profitability = min(100, max(0, return_pct * 200))
         risk = max(0, 100 - mc_result.max_dd_p95 * 200)
         stability = max(0, 100 - abs(mc_result.return_p95 - mc_result.return_p5) * 200)
         trade_quality = min(100, win_rate * 150) if total_trades > 0 else 0
         total_score = (
-            profitability * 0.30 + risk * 0.25 +
-            stability * 0.25 + trade_quality * 0.20
+            profitability * 0.25 + risk * 0.20 +
+            stability * 0.20 + trade_quality * 0.15 +
+            param_stability * 0.20
         )
 
         # 淘汰检查
@@ -591,6 +685,7 @@ def strategy_evaluation(
                 "risk": round(risk, 1),
                 "stability": round(stability, 1),
                 "trade_quality": round(trade_quality, 1),
+                "param_stability": round(param_stability, 1),
             },
             "metrics": {
                 "total_return": round(return_pct, 4),
@@ -820,6 +915,54 @@ def delete_strategy_config_endpoint(
     return {"deleted": strategy_type}
 
 
+@app.delete("/strategies/{strategy_id}/instance")
+def delete_strategy_instance(
+    strategy_id: str, _=Security(verify_api_token),
+):
+    """删除运行中的策略实例（从 multi_runner 中移除，不影响已保存配置）
+
+    - 清理策略持仓（如果有）
+    - 从 multi_runner.slots 移除
+    - 删除对应的 state 文件
+    """
+    import json
+    from pathlib import Path
+    from src.api.mode_manager import mode_manager
+
+    # 1. 从 multi_runner 移除
+    removed = False
+    try:
+        from src.execution.multi_runner import multi_runner
+        original_len = len(multi_runner.slots)
+        multi_runner.slots = [s for s in multi_runner.slots if s.config.strategy_id != strategy_id]
+        if len(multi_runner.slots) < original_len:
+            removed = True
+            logger.info(f"策略实例 {strategy_id} 已从 multi_runner 移除")
+    except Exception as e:
+        logger.warning(f"从 multi_runner 移除 {strategy_id} 失败: {e}")
+
+    # 2. 删除 state 文件
+    state_dir = Path("data") / "paper_daemon_state"
+    state_files = list(state_dir.glob(f"*{strategy_id}*.json")) if state_dir.exists() else []
+    for sf in state_files:
+        try:
+            sf.unlink()
+            logger.info(f"已删除 state 文件 {sf.name}")
+        except Exception as e:
+            logger.warning(f"删除 state 文件 {sf.name} 失败: {e}")
+
+    # 3. 从 _pending_map 移除
+    try:
+        multi_runner._pending_map.pop(strategy_id, None)
+    except Exception:
+        pass
+
+    if not removed and not state_files:
+        return {"ok": False, "message": f"未找到策略实例 {strategy_id}"}
+
+    return {"ok": True, "message": f"策略实例 {strategy_id} 已删除"}
+
+
 @app.put("/strategies/configs/{strategy_type}/rename")
 def rename_strategy_config_endpoint(
     strategy_type: str,
@@ -859,6 +1002,7 @@ _analyzer = TradingAnalyzer(_audit_log)
 class AnalyzeRequest(BaseModel):
     task: Literal["backtest", "trade_attribution", "risk_checklist", "param_sensitivity", "weekly_review"]
     phase: str = "Phase 6"
+    strategy_id: str = ""
 
 
 @app.post("/agent/analyze")
@@ -885,9 +1029,8 @@ def agent_analyze(request: Request, body: AnalyzeRequest, _=Security(verify_api_
         elif body.task == "risk_checklist":
             report = _analyzer.analyze_risk_checklist(live["checklist"])
         elif body.task == "param_sensitivity":
-            import pandas as pd
             report = _analyzer.analyze_param_sensitivity(
-                scan_results=pd.DataFrame(),
+                scan_results=live.get("scan_results", pd.DataFrame()),
                 base_params=live["base_params"],
             )
         else:
@@ -929,10 +1072,20 @@ def agent_analyze(request: Request, body: AnalyzeRequest, _=Security(verify_api_
                 "data_quality_score": 1.0,
             })
         elif body.task == "param_sensitivity":
-            import pandas as pd
             base_params = getattr(state["strategy"], "parameters", {})
+            # 回退路径：用已有回测结果构建单行扫描数据
+            result = state["result"]
+            stats = result.get("statistics", {})
+            scan_df = pd.DataFrame([{
+                "strategy": getattr(state["strategy"], "name", "GridTrading"),
+                "total_return": stats.get("total_return", 0),
+                "win_rate": stats.get("win_rate", 0),
+                "max_drawdown": stats.get("max_drawdown", 0),
+                "sharpe_ratio": stats.get("sharpe_ratio", 0),
+                "n_trades": stats.get("total_trades", 0),
+            }])
             report = _analyzer.analyze_param_sensitivity(
-                scan_results=pd.DataFrame(),
+                scan_results=scan_df,
                 base_params=base_params,
             )
         else:
