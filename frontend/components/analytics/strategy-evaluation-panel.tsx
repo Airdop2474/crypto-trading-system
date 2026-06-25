@@ -85,11 +85,12 @@ export function StrategyEvaluationPanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {results.map((r) => {
+                  {results.map((r, idx) => {
                     const meta = VERDICT_META[r.verdict] ?? VERDICT_META.WARN
                     const Icon = meta.icon
+                    const rowKey = r.strategy_name || `strategy-${idx}`
                     return (
-                      <tr key={r.strategy_name} className="border-b last:border-0">
+                      <tr key={rowKey} className="border-b last:border-0">
                         <td className="py-2 pr-3 font-medium">{r.strategy_name}</td>
                         <td className="px-3 text-right font-mono">{r.total_score.toFixed(1)}</td>
                         <td className={cn("px-3 text-right font-mono", r.sharpe_ratio < 0.3 && "text-destructive")}>
@@ -126,8 +127,8 @@ export function StrategyEvaluationPanel() {
                 <div className="text-xs font-medium text-muted-foreground">淘汰标记</div>
                 {results
                   .filter((r) => r.elimination_flags.length > 0)
-                  .map((r) => (
-                    <div key={r.strategy_name} className="flex items-start gap-2 text-xs">
+                  .map((r, idx) => (
+                    <div key={r.strategy_name || `flag-${idx}`} className="flex items-start gap-2 text-xs">
                       <span className="font-medium">{r.strategy_name}:</span>
                       <div className="flex flex-wrap gap-1">
                         {r.elimination_flags.map((flag, i) => (
