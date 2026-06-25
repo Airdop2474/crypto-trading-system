@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ApiError } from "@/components/api-error"
 import { cn } from "@/lib/utils"
+import { STRATEGY_TYPE_LABEL } from "@/lib/strategy-meta"
 import type { MonteCarloResult } from "@/lib/types"
 
 export function MonteCarloPanel() {
@@ -49,18 +50,18 @@ export function MonteCarloPanel() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="grid-btc-usdt">grid</SelectItem>
-                <SelectItem value="rsi-btc-usdt">rsi</SelectItem>
-                <SelectItem value="ma-btc-usdt">ma</SelectItem>
-                <SelectItem value="donchian-btc-usdt">donchian</SelectItem>
-                <SelectItem value="structure-btc-usdt">structure</SelectItem>
-                <SelectItem value="supertrend-btc-usdt">supertrend</SelectItem>
-                <SelectItem value="reversal-btc-usdt">reversal</SelectItem>
-                <SelectItem value="buyhold-btc-usdt">buyhold</SelectItem>
-                <SelectItem value="priceaction-btc-usdt">priceaction</SelectItem>
-                <SelectItem value="bollinger-btc-usdt">bollinger</SelectItem>
-                <SelectItem value="macd-btc-usdt">macd</SelectItem>
-                <SelectItem value="composite-btc-usdt">composite</SelectItem>
+                <SelectItem value="grid-btc-usdt">{STRATEGY_TYPE_LABEL.grid}</SelectItem>
+                <SelectItem value="rsi-btc-usdt">{STRATEGY_TYPE_LABEL.rsi}</SelectItem>
+                <SelectItem value="ma-btc-usdt">{STRATEGY_TYPE_LABEL.ma}</SelectItem>
+                <SelectItem value="donchian-btc-usdt">{STRATEGY_TYPE_LABEL.donchian}</SelectItem>
+                <SelectItem value="structure-btc-usdt">{STRATEGY_TYPE_LABEL.structure}</SelectItem>
+                <SelectItem value="supertrend-btc-usdt">{STRATEGY_TYPE_LABEL.supertrend}</SelectItem>
+                <SelectItem value="reversal-btc-usdt">{STRATEGY_TYPE_LABEL.reversal}</SelectItem>
+                <SelectItem value="buyhold-btc-usdt">{STRATEGY_TYPE_LABEL.buyhold}</SelectItem>
+                <SelectItem value="priceaction-btc-usdt">{STRATEGY_TYPE_LABEL.priceaction}</SelectItem>
+                <SelectItem value="bollinger-btc-usdt">{STRATEGY_TYPE_LABEL.bollinger}</SelectItem>
+                <SelectItem value="macd-btc-usdt">{STRATEGY_TYPE_LABEL.macd}</SelectItem>
+                <SelectItem value="composite-btc-usdt">{STRATEGY_TYPE_LABEL.composite}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -112,7 +113,7 @@ export function MonteCarloPanel() {
                 label="模拟次数"
                 value={result.n_simulations.toLocaleString()}
                 icon={<Activity className="h-3.5 w-3.5 text-muted-foreground" />}
-                sub={result.method}
+                sub={result.method === "trade_bootstrap" ? "交易重采样" : "收益重采样"}
               />
             </div>
 
