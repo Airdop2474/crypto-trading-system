@@ -68,6 +68,7 @@ class MonteCarloResult:
     # 原始分布（用于绘图，可选）
     return_distribution: Optional[np.ndarray] = None
     max_dd_distribution: Optional[np.ndarray] = None
+    sharpe_distribution: Optional[np.ndarray] = None
 
     # 执行时间
     elapsed_seconds: float = 0.0
@@ -104,35 +105,56 @@ class MonteCarloResult:
         return "\n".join(lines)
 
     def to_dict(self) -> dict:
-        """转为字典（用于 API 返回和数据库存储）"""
+        """转为字典（用于 API 返回和数据库存储）
+
+        字段名与前端 MonteCarloResult 类型定义对齐：
+        return_distribution / max_dd_distribution / sharpe_distribution
+        """
         return {
             "n_simulations": self.n_simulations,
             "method": self.method,
-            "return": {
-                "median": round(self.return_median, 4),
+            "return_distribution": {
                 "mean": round(self.return_mean, 4),
+                "median": round(self.return_median, 4),
                 "std": round(self.return_std, 4),
                 "p5": round(self.return_p5, 4),
                 "p25": round(self.return_p25, 4),
                 "p75": round(self.return_p75, 4),
                 "p95": round(self.return_p95, 4),
+                "min": round(float(np.min(self.return_distribution)) if self.return_distribution is not None and len(self.return_distribution) > 0 else self.return_p5, 4),
+                "max": round(float(np.max(self.return_distribution)) if self.return_distribution is not None and len(self.return_distribution) > 0 else self.return_p95, 4),
             },
-            "max_drawdown": {
+            "max_dd_distribution": {
+                "mean": round(float(np.mean(self.max_dd_distribution)) if self.max_dd_distribution is not None and len(self.max_dd_distribution) > 0 else self.max_dd_median, 4),
                 "median": round(self.max_dd_median, 4),
+                "std": round(float(np.std(self.max_dd_distribution)) if self.max_dd_distribution is not None and len(self.max_dd_distribution) > 0 else 0.0, 4),
+                "p5": round(float(np.percentile(self.max_dd_distribution, 5)) if self.max_dd_distribution is not None and len(self.max_dd_distribution) > 0 else self.max_dd_median, 4),
+                "p25": round(float(np.percentile(self.max_dd_distribution, 25)) if self.max_dd_distribution is not None and len(self.max_dd_distribution) > 0 else self.max_dd_median, 4),
                 "p75": round(self.max_dd_p75, 4),
                 "p95": round(self.max_dd_p95, 4),
+                "min": round(float(np.min(self.max_dd_distribution)) if self.max_dd_distribution is not None and len(self.max_dd_distribution) > 0 else self.max_dd_p95, 4),
+                "max": round(float(np.max(self.max_dd_distribution)) if self.max_dd_distribution is not None and len(self.max_dd_distribution) > 0 else self.max_dd_p95, 4),
                 "cvar_95": round(self.max_dd_cvar_95, 4),
             },
-            "sharpe": {
+            "sharpe_distribution": {
+                "mean": round(float(np.mean(self.sharpe_distribution)) if self.sharpe_distribution is not None and len(self.sharpe_distribution) > 0 else self.sharpe_median, 2),
                 "median": round(self.sharpe_median, 2),
+                "std": round(float(np.std(self.sharpe_distribution)) if self.sharpe_distribution is not None and len(self.sharpe_distribution) > 0 else 0.0, 2),
                 "p5": round(self.sharpe_p5, 2),
+                "p25": round(float(np.percentile(self.sharpe_distribution, 25)) if self.sharpe_distribution is not None and len(self.sharpe_distribution) > 0 else self.sharpe_p5, 2),
+                "p75": round(float(np.percentile(self.sharpe_distribution, 75)) if self.sharpe_distribution is not None and len(self.sharpe_distribution) > 0 else self.sharpe_p95, 2),
                 "p95": round(self.sharpe_p95, 2),
+                "min": round(float(np.min(self.sharpe_distribution)) if self.sharpe_distribution is not None and len(self.sharpe_distribution) > 0 else self.sharpe_p5, 2),
+                "max": round(float(np.max(self.sharpe_distribution)) if self.sharpe_distribution is not None and len(self.sharpe_distribution) > 0 else self.sharpe_p95, 2),
             },
-            "risk": {
-                "ruin_probability": round(self.ruin_probability, 4),
-                "loss_probability": round(self.loss_probability, 4),
-                "profit_probability": round(self.profit_probability, 4),
-            },
+            "var_95": round(self.return_p5, 4),           # 95% VaR ≈ 5% 分位收益率
+            "cvar_95": round(self.max_dd_cvar_95, 4),     # CVaR (Expected Shortfall)
+            "ruin_probability": round(self.ruin_probability, 4),
+            "loss_probability": round(self.loss_probability, 4),
+            "profit_probability": round(self.profit_probability, 4),
+            "original_return": round(self.return_median, 4),
+            "original_max_dd": round(self.max_dd_median, 4),
+            "original_sharpe": round(self.sharpe_median, 2),
             "elapsed_seconds": round(self.elapsed_seconds, 2),
         }
 
@@ -370,6 +392,7 @@ class MonteCarloSimulator:
             profit_probability=float(profit_prob),
             return_distribution=returns,
             max_dd_distribution=max_dds,
+            sharpe_distribution=sharpes,
         )
 
     def _empty_result(self, method: str) -> MonteCarloResult:

@@ -179,7 +179,7 @@ class TestResultFormat:
     """结果格式测试"""
 
     def test_to_dict(self):
-        """to_dict 返回正确结构"""
+        """to_dict 返回正确结构（字段名与前端类型对齐）"""
         trades = _make_trades([100, -50, 200])
         mc = MonteCarloSimulator(n_simulations=100, random_seed=42)
         result = mc.run(trades=trades, initial_capital=10000)
@@ -187,14 +187,22 @@ class TestResultFormat:
 
         assert "n_simulations" in d
         assert "method" in d
-        assert "return" in d
-        assert "max_drawdown" in d
-        assert "sharpe" in d
-        assert "risk" in d
+        assert "return_distribution" in d
+        assert "max_dd_distribution" in d
+        assert "sharpe_distribution" in d
+        assert "var_95" in d
+        assert "cvar_95" in d
+        assert "ruin_probability" in d
+        assert "original_return" in d
+        assert "original_max_dd" in d
+        assert "original_sharpe" in d
         assert "elapsed_seconds" in d
-        assert "median" in d["return"]
-        assert "p95" in d["max_drawdown"]
-        assert "cvar_95" in d["max_drawdown"]
+        assert "median" in d["return_distribution"]
+        assert "mean" in d["return_distribution"]
+        assert "p95" in d["max_dd_distribution"]
+        assert "cvar_95" in d["max_dd_distribution"]
+        assert "min" in d["return_distribution"]
+        assert "max" in d["return_distribution"]
 
     def test_summary_string(self):
         """summary 返回可读字符串"""

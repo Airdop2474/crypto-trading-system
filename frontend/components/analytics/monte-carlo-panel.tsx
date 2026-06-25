@@ -175,10 +175,18 @@ function DistributionTable({
   isPct = false,
 }: {
   title: string
-  dist: MonteCarloResult["return_distribution"]
-  original: number
+  dist?: MonteCarloResult["return_distribution"]
+  original?: number
   isPct?: boolean
 }) {
+  if (!dist) {
+    return (
+      <div className="rounded-lg border p-3">
+        <span className="text-xs font-medium">{title}</span>
+        <div className="mt-2 text-xs text-muted-foreground">数据不可用</div>
+      </div>
+    )
+  }
   const fmt = (v: number) => (isPct ? `${(v * 100).toFixed(2)}%` : v.toFixed(3))
   const rows = [
     { label: "均值", value: dist.mean },
@@ -195,7 +203,7 @@ function DistributionTable({
       <div className="mb-2 flex items-center justify-between">
         <span className="text-xs font-medium">{title}</span>
         <Badge variant="outline" className="text-xs">
-          原始: {fmt(original)}
+          原始: {original != null ? fmt(original) : "N/A"}
         </Badge>
       </div>
       <div className="space-y-1">
