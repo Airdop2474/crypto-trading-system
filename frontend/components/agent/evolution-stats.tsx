@@ -5,12 +5,43 @@ import { api } from "@/lib/api"
 import type { EvolutionStats } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { TrendingUp } from "lucide-react"
+import { ApiError } from "@/components/api-error"
 
 export function EvolutionStatsCard() {
-  const { data } = useSWR<EvolutionStats>("getEvolutionStats", () => api.getEvolutionStats(), {
-    revalidateOnFocus: false,
-    dedupingInterval: 30_000,
-  })
+  const { data, isLoading, error, mutate } = useSWR<EvolutionStats>(
+    "getEvolutionStats",
+    () => api.getEvolutionStats(),
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 30_000,
+      refreshInterval: 30_000,
+    }
+  )
+
+  if (error && !data) {
+    return <ApiError error={error} onRetry={() => mutate()} />
+  }
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <TrendingUp className="size-4 text-emerald-400" />
+            进化统计
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid grid-cols-3 gap-4 text-center">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="space-y-2">
+              <div className="mx-auto h-5 w-12 animate-pulse rounded bg-muted" />
+              <div className="mx-auto h-3 w-12 animate-pulse rounded bg-muted" />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    )
+  }
 
   if (!data) return null
 

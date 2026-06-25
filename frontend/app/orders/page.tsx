@@ -40,7 +40,9 @@ export default function OrdersPage() {
 
   const { data, isLoading, error, mutate } = useSWR(swrKey, () =>
     api.getOrders(pageSize, offset),
-  )
+  {
+    refreshInterval: 10_000,
+  })
 
   const items = data?.items ?? []
   const total = data?.total ?? 0

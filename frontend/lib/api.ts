@@ -65,14 +65,67 @@ const API_BASE =
 
 const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN || ""
 
+/** 请求超时（毫秒） */
+const REQUEST_TIMEOUT_MS = 15000
+
+/** GET 请求最大重试次数 */
+const MAX_RETRIES = 2
+
+/** 重试基础延迟（毫秒），指数退避 */
+const RETRY_BASE_DELAY_MS = 500
+
+/**
+ * 带超时 + 指数退避重试的 GET 请求
+ *
+ * - 超时：15 秒后 abort
+ * - 重试：GET 请求失败后自动重试（最多 2 次），间隔 500ms → 1000ms
+ * - POST/PATCH/DELETE 不重试（避免重复写入）
+ */
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "X-API-Token": API_TOKEN },
-  })
-  if (!res.ok) {
-    throw new Error(`GET ${path} failed: ${res.status}`)
+  let lastError: Error | null = null
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+
+    try {
+      const res = await fetch(`${API_BASE}${path}`, {
+        headers: { "X-API-Token": API_TOKEN },
+        signal: controller.signal,
+      })
+      clearTimeout(timeoutId)
+
+      if (!res.ok) {
+        // 4xx 不重试（客户端错误），5xx 重试
+        if (res.status < 500 && attempt < MAX_RETRIES) {
+          throw new Error(`GET ${path} failed: ${res.status}`)
+        }
+        if (res.status >= 500 && attempt < MAX_RETRIES) {
+          lastError = new Error(`GET ${path} failed: ${res.status}`)
+          await sleep(RETRY_BASE_DELAY_MS * Math.pow(2, attempt))
+          continue
+        }
+        throw new Error(`GET ${path} failed: ${res.status}`)
+      }
+
+      return res.json() as Promise<T>
+    } catch (e) {
+      clearTimeout(timeoutId)
+      lastError = e instanceof Error ? e : new Error(String(e))
+
+      // abort（超时）或网络错误才重试
+      if (attempt < MAX_RETRIES) {
+        await sleep(RETRY_BASE_DELAY_MS * Math.pow(2, attempt))
+        continue
+      }
+    }
   }
-  return res.json() as Promise<T>
+
+  throw lastError ?? new Error(`GET ${path} failed after ${MAX_RETRIES + 1} attempts`)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 export const api = {

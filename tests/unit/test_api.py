@@ -40,8 +40,10 @@ def client():
 def test_health(client):
     d = client.get("/health").json()
     assert d["status"] == "ok"
-    # R-10: /health 仅返回 status，详细信息移至 /health/detailed（需认证）
-    assert len(d) == 1
+    # /health 返回 status + checks（DB/缓存连通性），无需认证
+    assert "checks" in d
+    assert "database" in d["checks"]
+    assert "cache" in d["checks"]
 
 
 def test_health_detailed_requires_auth(client):

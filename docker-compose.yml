@@ -1,6 +1,6 @@
 version: '3.8'
 
-# TODO: Use Docker secrets or *_FILE variants for production
+# 安全建议：生产环境使用 Docker secrets 或 *_FILE 变量替代明文密码
 # - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_password
 # - TIMESCALE_PASSWORD_FILE=/run/secrets/timescale_password
 
@@ -11,11 +11,24 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+# 安全基线（所有服务继承）
+x-security: &default-security
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
 services:
   timescaledb:
     image: timescale/timescaledb:2.17.0-pg16
     container_name: crypto_trading_db
     logging: *default-logging
+    <<: *default-security
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-crypto_trading}
@@ -23,6 +36,8 @@ services:
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
       - ./config/sql:/docker-entrypoint-initdb.d
+    # 生产环境：移除端口映射，仅通过内部网络访问
+    # 开发环境：保留端口映射便于本地调试
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     restart: unless-stopped
@@ -36,11 +51,17 @@ services:
     image: redis:7.4-alpine
     container_name: crypto_trading_redis
     logging: *default-logging
+    <<: *default-security
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
+    # 生产环境：移除端口映射
     ports:
       - "${REDIS_PORT:-6379}:6379"
     restart: unless-stopped
@@ -54,6 +75,7 @@ services:
     image: grafana/grafana-oss:10.4.12
     container_name: crypto_trading_grafana
     logging: *default-logging
+    <<: *default-security
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}
@@ -66,7 +88,8 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - timescaledb
+      timescaledb:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "--timeout=3", "http://localhost:3000/api/health"]
@@ -79,6 +102,8 @@ services:
     build: .
     container_name: crypto_trading_app
     logging: *default-logging
+    <<: *default-security
+    user: "1000:1000"
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -110,6 +135,8 @@ services:
     build: .
     container_name: crypto_trading_paper_daemon
     logging: *default-logging
+    <<: *default-security
+    user: "1000:1000"
     depends_on:
       timescaledb:
         condition: service_healthy

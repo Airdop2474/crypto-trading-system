@@ -11,13 +11,20 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart"
+import { ApiError } from "@/components/api-error"
 
 const config = {
   equity: { label: "账户权益", color: "var(--chart-1)" },
 } satisfies ChartConfig
 
 export function EquityChart() {
-  const { data, isLoading } = useSWR("pnl-history", api.getPnlHistory)
+  const { data, isLoading, error, mutate } = useSWR("pnl-history", api.getPnlHistory, {
+    refreshInterval: 30_000,
+  })
+
+  if (error && !data) {
+    return <ApiError error={error} onRetry={() => mutate()} />
+  }
 
   return (
     <Card className="h-full">

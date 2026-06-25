@@ -11,6 +11,7 @@
 
 import json
 import math
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +19,11 @@ from src.utils.logger import logger
 from src.utils.config import config as _cfg
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# ---- state 文件 TTL 缓存（避免每次 API 调用都重读全部文件）----
+_STATE_CACHE: list[dict] = []
+_STATE_CACHE_TS: float = 0.0
+_STATE_CACHE_TTL: float = 3.0  # 秒，3 秒内的重复请求使用缓存
 _DATA_DIR = _PROJECT_ROOT / "data"
 
 # 优先检查的模式顺序
@@ -46,13 +52,22 @@ def _find_active_mode() -> Optional[str]:
 
 
 def _load_all_states() -> list[dict]:
-    """加载当前活跃模式的所有策略 state 文件。
+    """加载当前活跃模式的所有策略 state 文件（带 3 秒 TTL 缓存）。
 
     优先读取 .final 文件（回放结束强制平仓后的最终状态），
     无 .final 时读主 state 文件（实时运行中的状态）。
     """
+    global _STATE_CACHE, _STATE_CACHE_TS
+
+    # TTL 缓存命中
+    now = time.monotonic()
+    if _STATE_CACHE and (now - _STATE_CACHE_TS) < _STATE_CACHE_TTL:
+        return _STATE_CACHE
+
     mode = _find_active_mode()
     if not mode:
+        _STATE_CACHE = []
+        _STATE_CACHE_TS = now
         return []
 
     files = sorted(_DATA_DIR.glob(f"paper_daemon_state_{mode}_*.json"))
@@ -70,6 +85,9 @@ def _load_all_states() -> list[dict]:
                 states.append(raw)
         except Exception as e:
             logger.debug(f"读取 state 文件失败 {sf.name}: {e}")
+
+    _STATE_CACHE = states
+    _STATE_CACHE_TS = now
     return states
 
 

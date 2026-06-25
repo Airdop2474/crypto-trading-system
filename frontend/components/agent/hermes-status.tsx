@@ -5,12 +5,43 @@ import { api } from "@/lib/api"
 import type { HermesStatus } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Bot, Wifi, WifiOff, FileText } from "lucide-react"
+import { ApiError } from "@/components/api-error"
 
 export function HermesStatusCard() {
-  const { data } = useSWR<HermesStatus>("getHermesStatus", () => api.getHermesStatus(), {
-    revalidateOnFocus: false,
-    dedupingInterval: 10_000,
-  })
+  const { data, isLoading, error, mutate } = useSWR<HermesStatus>(
+    "getHermesStatus",
+    () => api.getHermesStatus(),
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 10_000,
+      refreshInterval: 30_000,
+    }
+  )
+
+  if (error && !data) {
+    return <ApiError error={error} onRetry={() => mutate()} />
+  }
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Bot className="size-4 text-violet-400" />
+            Hermes Agent
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid grid-cols-3 gap-4 text-center">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="space-y-2">
+              <div className="mx-auto h-5 w-12 animate-pulse rounded bg-muted" />
+              <div className="mx-auto h-3 w-12 animate-pulse rounded bg-muted" />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    )
+  }
 
   return (
     <Card>

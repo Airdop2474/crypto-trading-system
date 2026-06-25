@@ -12,12 +12,12 @@ export function StrategyPerformanceDashboard() {
   const { data: summary, error: summaryError } = useSWR<MultiStrategySummary>(
     "multi-summary",
     () => api.getMultiSummary(),
-    { suspense: false }
+    { suspense: false, refreshInterval: 30_000 }
   )
   const { data: details, error: detailsError } = useSWR<MultiStrategyDetail[]>(
     "multi-details",
     () => api.getMultiDetails(),
-    { suspense: false }
+    { suspense: false, refreshInterval: 30_000 }
   )
 
   const isLoading = !summary && !details && !summaryError && !detailsError

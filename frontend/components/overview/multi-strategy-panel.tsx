@@ -14,12 +14,39 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
+import { ApiError } from "@/components/api-error"
 
 export function MultiStrategyPanel() {
-  const { data: summary, isLoading } = useSWR("multi-summary", api.getMultiSummary)
-  const { data: details, isLoading: detailsLoading } = useSWR("multi-details", api.getMultiDetails)
+  const {
+    data: summary,
+    isLoading,
+    error: summaryError,
+    mutate: reloadSummary,
+  } = useSWR("multi-summary", api.getMultiSummary, {
+    refreshInterval: 15_000,
+  })
+  const {
+    data: details,
+    isLoading: detailsLoading,
+    error: detailsError,
+    mutate: reloadDetails,
+  } = useSWR("multi-details", api.getMultiDetails, {
+    refreshInterval: 15_000,
+  })
 
   const loading = isLoading || detailsLoading
+
+  if ((summaryError && !summary) || (detailsError && !details)) {
+    return (
+      <ApiError
+        error={summaryError ?? detailsError}
+        onRetry={() => {
+          reloadSummary()
+          reloadDetails()
+        }}
+      />
+    )
+  }
 
   return (
     <Card>

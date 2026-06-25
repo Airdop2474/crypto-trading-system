@@ -132,19 +132,41 @@ async def add_security_headers(request, call_next):
     - script-src 'unsafe-inline' 'unsafe-eval'：Next.js hydration 需要内联 script；
       dev 模式 fast-refresh 需要 eval（生产可去掉 'unsafe-eval'）
     - style-src 'unsafe-inline'：Tailwind / next-themes 注入内联样式
-    - connect-src：允许同源 + ws/wss/http/https 到 API_BASE（前端连后端 + WebSocket）
+    - connect-src：从 CORS_ORIGINS 动态生成，包含 ws/wss/http/https
     - img-src 'self' data:：data URI 用于 SVG 图标
     - font-src 'self' data:：next/font 自托管 + data URI fallback
-
-    注：完整的 origin 应从 config 读（见 CORS_ORIGINS），这里先放宽到 localhost，
-    生产部署需根据实际域名收紧。
     """
     response = await call_next(request)
+
+    # 从 CORS_ORIGINS 动态生成 connect-src
+    origins = _cfg.CORS_ORIGINS or ["http://localhost:3000", "http://localhost:3001"]
+    # 补充 ws/wss 变体 + API server 同源
+    connect_sources = ["'self'"]
+    for origin in origins:
+        if origin.startswith("https://"):
+            ws_origin = "wss://" + origin[8:]
+        elif origin.startswith("http://"):
+            ws_origin = "ws://" + origin[7:]
+        else:
+            continue
+        if origin not in connect_sources:
+            connect_sources.append(origin)
+        if ws_origin not in connect_sources:
+            connect_sources.append(ws_origin)
+    # 确保后端 API 端口可达（从 request 推断）
+    api_base = f"{request.url.scheme}://{request.url.netloc}"
+    if api_base not in connect_sources:
+        connect_sources.append(api_base)
+    ws_api = ("wss://" if request.url.scheme == "https" else "ws://") + str(request.url.netloc)
+    if ws_api not in connect_sources:
+        connect_sources.append(ws_api)
+
+    connect_src = " ".join(connect_sources)
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
         "style-src 'self' 'unsafe-inline'; "
-        "connect-src 'self' ws://localhost:8000 wss://localhost:8000 http://localhost:8000 http://localhost:3000 http://localhost:3001; "
+        f"connect-src {connect_src}; "
         "img-src 'self' data:; "
         "font-src 'self' data:; "
         "object-src 'none'; "
@@ -194,7 +216,42 @@ async def verify_api_token(token: str = Security(_API_KEY_HEADER)):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """轻量健康检查（无需认证，供 Docker healthcheck / 负载均衡器使用）
+
+    检查关键依赖：DB 连通性 + Redis/缓存连通性。
+    任一失败返回 503，便于编排系统自动重启。
+    """
+    checks = {}
+    all_ok = True
+
+    # DB 连通性
+    try:
+        from src.utils.database import db
+        db_ok = db.is_postgres_available()
+        checks["database"] = "ok" if db_ok else "unavailable"
+        if not db_ok:
+            all_ok = False
+    except Exception as e:
+        checks["database"] = f"error: {e}"
+        all_ok = False
+
+    # 缓存连通性
+    try:
+        cache_ok = cache.ping()
+        checks["cache"] = "ok" if cache_ok else "unavailable"
+        if not cache_ok:
+            all_ok = False
+    except Exception as e:
+        checks["cache"] = f"error: {e}"
+        all_ok = False
+
+    if not all_ok:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "checks": checks},
+        )
+    return {"status": "ok", "checks": checks}
 
 
 @app.get("/health/detailed")

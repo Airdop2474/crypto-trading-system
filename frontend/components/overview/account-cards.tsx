@@ -5,9 +5,16 @@ import { Coins, TrendingUp, Wallet, Activity } from "lucide-react"
 import { api } from "@/lib/api"
 import { fmtPct, fmtSigned, fmtUsd, pnlColor } from "@/lib/format"
 import { StatCard } from "@/components/stat-card"
+import { ApiError } from "@/components/api-error"
 
 export function AccountCards() {
-  const { data, isLoading } = useSWR("account", api.getAccountSummary)
+  const { data, isLoading, error, mutate } = useSWR("account", api.getAccountSummary, {
+    refreshInterval: 10_000,
+  })
+
+  if (error && !data) {
+    return <ApiError error={error} onRetry={() => mutate()} />
+  }
 
   return (
     <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

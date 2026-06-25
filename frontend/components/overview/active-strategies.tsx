@@ -12,10 +12,17 @@ import {
 } from "@/lib/strategy-meta"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StrategyStatusBadge } from "@/components/status-badge"
+import { ApiError } from "@/components/api-error"
 
 export function ActiveStrategies() {
-  const { data } = useSWR("strategies", api.getStrategies)
+  const { data, isLoading, error, mutate } = useSWR("strategies", api.getStrategies, {
+    refreshInterval: 15_000,
+  })
   const top = (data ?? []).filter((s) => s.status === "running")
+
+  if (error && !data) {
+    return <ApiError error={error} onRetry={() => mutate()} />
+  }
 
   return (
     <Card className="h-full">
@@ -29,6 +36,13 @@ export function ActiveStrategies() {
         </Link>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
+        {isLoading && (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-14 animate-pulse rounded-md bg-muted" />
+            ))}
+          </div>
+        )}
         {top.map((s) => {
           const type = parseStrategyType(s.id)
           const Icon = type ? STRATEGY_TYPE_ICON[type] : STRATEGY_FALLBACK_ICON

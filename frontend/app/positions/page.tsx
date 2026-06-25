@@ -47,8 +47,12 @@ const assetColumns: CsvColumn<AssetBalance>[] = [
 ]
 
 export default function PositionsPage() {
-  const { data: positions, isLoading: posLoading, error: posError, mutate: reloadPos } = useSWR("positions", api.getPositions)
-  const { data: assets, isLoading: assetLoading, error: assetError, mutate: reloadAssets } = useSWR("assets", api.getAssets)
+  const { data: positions, isLoading: posLoading, error: posError, mutate: reloadPos } = useSWR("positions", api.getPositions, {
+    refreshInterval: 10_000,
+  })
+  const { data: assets, isLoading: assetLoading, error: assetError, mutate: reloadAssets } = useSWR("assets", api.getAssets, {
+    refreshInterval: 10_000,
+  })
 
   const [strategyFilter, setStrategyFilter] = useState<string>("all")
 
