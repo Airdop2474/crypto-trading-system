@@ -657,13 +657,13 @@ def monte_carlo_analysis(
     states = _load_all_states()
     if states:
         # 找到指定策略或用第一个
+        # 前端发送的 strategy_id 格式如 "grid-btc-usdt"，state 中 strategy_name 为 "grid"
+        strategy_prefix = strategy_name.split("-")[0] if strategy_name else ""
         target = None
-        if strategy_name:
+        if strategy_prefix:
             for s in states:
                 sname = s.get("strategy_name", "")
-                sid = s.get("strategy_id", "") or sname
-                # 匹配策略 ID（如 grid-btc-usdt）或策略类型名（如 grid）
-                if strategy_name in sid or strategy_name == sname:
+                if sname == strategy_prefix:
                     target = s
                     break
         if target is None:
