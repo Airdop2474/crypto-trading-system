@@ -547,6 +547,9 @@ export const api = {
     })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
+      if (res.status === 429) {
+        throw new Error("请求过于频繁，请等待约 1 分钟后再试")
+      }
       throw new Error(body.detail || `Monte Carlo 模拟失败: ${res.status}`)
     }
     return res.json()
@@ -563,6 +566,9 @@ export const api = {
     })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
+      if (res.status === 429) {
+        throw new Error("请求过于频繁，请等待约 1 分钟后再试")
+      }
       throw new Error(body.detail || `策略评估失败: ${res.status}`)
     }
     return res.json()

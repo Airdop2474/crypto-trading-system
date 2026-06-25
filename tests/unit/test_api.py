@@ -37,6 +37,23 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_live_data(monkeypatch):
+    """隔离 live_data：强制返回空，让端点走 service 层测试数据。
+
+    避免磁盘上真实 daemon state 文件干扰测试断言。
+    """
+    from src.api import live_data as _ld
+
+    # 清除 TTL 缓存
+    _ld._STATE_CACHE = []
+    _ld._STATE_CACHE_TS = 0.0
+
+    # patch 核心加载函数，所有依赖它的函数都会返回 None/空
+    monkeypatch.setattr(_ld, "_load_all_states", lambda: [])
+    monkeypatch.setattr(_ld, "has_live_data", lambda: False)
+
+
 def test_health(client):
     d = client.get("/health").json()
     assert d["status"] == "ok"

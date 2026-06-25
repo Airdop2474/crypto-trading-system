@@ -633,7 +633,7 @@ def strategy_correlation(_=Security(verify_api_token)):
 # Monte Carlo & 策略评估端点
 # --------------------------------------------------------------------------
 @app.post("/analytics/monte-carlo")
-@limiter.limit("2/minute")
+@limiter.limit("10/minute")
 def monte_carlo_analysis(
     request: Request,
     body: dict = None,
@@ -689,7 +689,7 @@ def monte_carlo_analysis(
 
 
 @app.post("/analytics/strategy-evaluation")
-@limiter.limit("1/minute")
+@limiter.limit("5/minute")
 def strategy_evaluation(
     request: Request,
     body: dict = None,

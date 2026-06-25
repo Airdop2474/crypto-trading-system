@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Activity, AlertTriangle, CheckCircle, Loader2, Play, TrendingDown, TrendingUp } from "lucide-react"
 import { api } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -18,6 +18,7 @@ export function MonteCarloPanel() {
   const [result, setResult] = useState<MonteCarloResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<Error | null>(null)
+  const [cooldown, setCooldown] = useState(0)
 
   // 策略 ID → 中文显示文本
   const strategyLabel = (() => {
@@ -28,6 +29,7 @@ export function MonteCarloPanel() {
   const methodLabel = method === "trade_bootstrap" ? "交易重采样" : "收益重采样"
 
   const handleRun = async () => {
+    if (cooldown > 0) return
     setLoading(true)
     setError(null)
     try {
@@ -37,8 +39,17 @@ export function MonteCarloPanel() {
       setError(e instanceof Error ? e : new Error("未知错误"))
     } finally {
       setLoading(false)
+      // 点击后冷却 6 秒，防止快速连续点击触发 429
+      setCooldown(6)
     }
   }
+
+  // 冷却倒计时
+  useEffect(() => {
+    if (cooldown <= 0) return
+    const timer = setInterval(() => setCooldown((c) => Math.max(0, c - 1)), 1000)
+    return () => clearInterval(timer)
+  }, [cooldown])
 
   return (
     <Card>
@@ -85,9 +96,9 @@ export function MonteCarloPanel() {
               </SelectContent>
             </Select>
           </div>
-          <Button onClick={handleRun} disabled={loading}>
+          <Button onClick={handleRun} disabled={loading || cooldown > 0}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            运行模拟
+            {cooldown > 0 ? `${cooldown}s` : "运行模拟"}
           </Button>
         </div>
 
