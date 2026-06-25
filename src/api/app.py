@@ -706,50 +706,68 @@ def strategy_evaluation(
     strategies = body.get("strategies")
     days = body.get("days", 365)
 
-    # 从 live_data 获取已有回测结果
-    live = live_data.multi_strategy_details()
-    if not live:
+    # 直接读取原始 state 文件（需要 closed_trades 明细，multi_strategy_details 不包含）
+    from src.api.live_data import _load_all_states
+    states = _load_all_states()
+    if not states:
         raise HTTPException(503, "No live data available.")
 
     from src.backtest.monte_carlo import MonteCarloSimulator
 
     results = []
-    for s in live:
-        sid = s.get("id", "")
-        sname = sid.split("-")[0] if "-" in sid else sid
+    from src.strategy.registry import get_strategy_label
+    for s in states:
+        strat_name = s.get("strategy_name", "unknown")
+        sname = get_strategy_label(strat_name) or strat_name
 
         # 跳过不在指定列表中的策略
-        if strategies and sname not in strategies:
+        if strategies and strat_name not in strategies:
             continue
 
+        # 从原始 state 获取交易明细
+        runner_state = s.get("runner", {})
+        closed_trades_raw = runner_state.get("closed_trades", [])
         trades = []
-        for ct in s.get("closed_trades", []):
+        for ct in closed_trades_raw:
             trades.append({
                 "type": "SELL",
                 "profit": float(ct.get("profit", 0)),
             })
 
-        initial = float(s.get("investment", 10000))
-        realized = float(s.get("pnl", 0))
+        initial = float(s.get("initial_capital", 10000))
+        realized = float(runner_state.get("realized_pnl", 0))
 
         # Monte Carlo（1000 次模拟，与脚本版一致）
         n_sim = int(body.get("n_mc_simulations", 1000))
         mc = MonteCarloSimulator(n_simulations=n_sim, random_seed=42)
         mc_result = mc.run(trades=trades, initial_capital=initial)
 
-        # 简化评分（基于 live_data）
+        # 简化评分（基于 state 数据）
         total_trades = len(trades)
         wins = sum(1 for t in trades if t["profit"] > 0)
         win_rate = wins / total_trades if total_trades > 0 else 0
         return_pct = realized / initial if initial > 0 else 0
 
-        # 最大回撤（从 live_data 获取，回退到 MC p95）
-        max_dd = float(s.get("max_drawdown", 0))
+        # 从 closed_trades 计算 Sharpe 和最大回撤
+        import numpy as np
+        if total_trades >= 2:
+            profits_arr = np.array([t["profit"] for t in trades])
+            # 简易 Sharpe：均值/标准差 * sqrt(交易数)
+            std_profit = float(np.std(profits_arr))
+            mean_profit = float(np.mean(profits_arr))
+            sharpe_ratio = float(mean_profit / std_profit * np.sqrt(total_trades)) if std_profit > 0 else 0.0
+            # 最大回撤：从累积权益曲线计算
+            equity_curve = initial + np.cumsum(profits_arr)
+            running_peak = np.maximum.accumulate(equity_curve)
+            drawdowns = (equity_curve - running_peak) / running_peak
+            max_dd = float(abs(np.min(drawdowns))) if len(drawdowns) > 0 else 0.0
+        else:
+            sharpe_ratio = 0.0
+            max_dd = 0.0
+
+        # 回退到 MC 指标
         if max_dd == 0:
             max_dd = mc_result.max_dd_p95
-
-        # Sharpe（从 live_data 获取，回退到 MC median）
-        sharpe_ratio = float(s.get("sharpe_ratio", 0))
         if sharpe_ratio == 0:
             sharpe_ratio = mc_result.sharpe_median
 
