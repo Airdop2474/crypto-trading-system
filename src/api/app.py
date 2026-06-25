@@ -647,7 +647,8 @@ def monte_carlo_analysis(
         method: "trade_bootstrap" 或 "return_resample"
     """
     body = body or {}
-    strategy_name = body.get("strategy", "")
+    # 前端发送 strategy_id，兼容旧字段 strategy
+    strategy_name = body.get("strategy_id", "") or body.get("strategy", "")
     n_sim = body.get("n_simulations", 1000)
     method = body.get("method", "trade_bootstrap")
 
@@ -681,7 +682,7 @@ def monte_carlo_analysis(
                 method=method,
             )
             return {
-                "strategy": target.get("id", ""),
+                "strategy_id": target.get("id", ""),
                 **result.to_dict(),
             }
 
@@ -732,7 +733,8 @@ def strategy_evaluation(
         realized = float(s.get("pnl", 0))
 
         # Monte Carlo（1000 次模拟，与脚本版一致）
-        mc = MonteCarloSimulator(n_simulations=1000, random_seed=42)
+        n_sim = int(body.get("n_mc_simulations", 1000))
+        mc = MonteCarloSimulator(n_simulations=n_sim, random_seed=42)
         mc_result = mc.run(trades=trades, initial_capital=initial)
 
         # 简化评分（基于 live_data）
@@ -741,34 +743,54 @@ def strategy_evaluation(
         win_rate = wins / total_trades if total_trades > 0 else 0
         return_pct = realized / initial if initial > 0 else 0
 
-        # 参数稳定性评分：基于交易盈亏的变异系数
+        # 最大回撤（从 live_data 获取，回退到 MC p95）
+        max_dd = float(s.get("max_drawdown", 0))
+        if max_dd == 0:
+            max_dd = mc_result.max_dd_p95
+
+        # Sharpe（从 live_data 获取，回退到 MC median）
+        sharpe_ratio = float(s.get("sharpe_ratio", 0))
+        if sharpe_ratio == 0:
+            sharpe_ratio = mc_result.sharpe_median
+
+        # 参数稳定性：基于交易盈亏的变异系数，归一化到 0-1
         if total_trades >= 5:
             profits = [t["profit"] for t in trades]
             import numpy as np
             mean_profit = float(np.mean(profits))
             std_profit = float(np.std(profits))
             cv = std_profit / abs(mean_profit) if abs(mean_profit) > 1e-8 else 1.0
-            param_stability = max(0, min(100, 100 - cv * 30))
+            param_stability = max(0, min(1, 1 - cv * 0.3))
         else:
-            param_stability = 50.0  # 交易不足，给中等分
+            param_stability = 0.5  # 交易不足，给中等分
+
+        # IS-OS 差异（简化版：用 MC p5-p95 跨度近似）
+        is_os_diff = abs(mc_result.return_p95 - mc_result.return_p5)
 
         # 五维评分（与 StrategyEvaluator 对齐）
         profitability = min(100, max(0, return_pct * 200))
         risk = max(0, 100 - mc_result.max_dd_p95 * 200)
         stability = max(0, 100 - abs(mc_result.return_p95 - mc_result.return_p5) * 200)
         trade_quality = min(100, win_rate * 150) if total_trades > 0 else 0
+        param_stability_score = param_stability * 100
         total_score = (
             profitability * 0.25 + risk * 0.20 +
             stability * 0.20 + trade_quality * 0.15 +
-            param_stability * 0.20
+            param_stability_score * 0.20
         )
 
-        # 淘汰检查
+        # 淘汰检查（与前端类型注释对齐）
         flags = []
         if total_trades > 0 and return_pct < 0:
             flags.append("收益为负")
         if mc_result.ruin_probability > 0.1:
             flags.append(f"破产概率 {mc_result.ruin_probability:.0%} > 10%")
+        if sharpe_ratio < 0.3:
+            flags.append(f"Sharpe {sharpe_ratio:.2f} < 0.3")
+        if max_dd > 0.25:
+            flags.append(f"最大回撤 {max_dd:.0%} > 25%")
+        if param_stability < 0.4:
+            flags.append(f"参数稳定性 {param_stability:.2f} < 0.4")
 
         verdict = "KEEP"
         if len(flags) >= 2:
@@ -778,27 +800,23 @@ def strategy_evaluation(
 
         results.append({
             "strategy_name": sname,
-            "strategy_label": s.get("name", sname),
             "total_score": round(total_score, 1),
             "verdict": verdict,
-            "scores": {
-                "profitability": round(profitability, 1),
-                "risk": round(risk, 1),
-                "stability": round(stability, 1),
-                "trade_quality": round(trade_quality, 1),
-                "param_stability": round(param_stability, 1),
-            },
-            "metrics": {
-                "total_return": round(return_pct, 4),
-                "total_trades": total_trades,
-                "win_rate": round(win_rate, 4),
-            },
-            "monte_carlo": mc_result.to_dict(),
+            "sharpe_ratio": round(sharpe_ratio, 3),
+            "max_drawdown": round(max_dd, 4),
+            "total_return": round(return_pct, 4),
+            "total_trades": total_trades,
+            "win_rate": round(win_rate, 4),
+            "mc_return_median": round(mc_result.return_median, 4),
+            "mc_max_dd_median": round(mc_result.max_dd_median, 4),
+            "mc_ruin_prob": round(mc_result.ruin_probability, 4),
+            "param_stability": round(param_stability, 3),
+            "is_os_diff": round(is_os_diff, 4),
             "elimination_flags": flags,
         })
 
     results.sort(key=lambda x: x["total_score"], reverse=True)
-    return {"strategies": results, "total": len(results)}
+    return results
 
 
 # --------------------------------------------------------------------------
