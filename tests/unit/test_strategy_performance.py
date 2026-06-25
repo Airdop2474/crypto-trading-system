@@ -66,16 +66,16 @@ class TestRSIPerformance:
     """RSI 策略性能基准"""
 
     @_skip_if_traced
-    def test_rsi_10k_bars_under_2_seconds(self):
-        """10000 bar 数据集应在 2 秒内完成"""
+    def test_rsi_10k_bars_under_3_seconds(self):
+        """10000 bar 数据集应在 3 秒内完成（含 CI 环境容差）"""
         df = _generate_data(10000)
         strategy = RSIMomentumStrategy(rsi_period=14, ema_period=50)
         elapsed = _run_strategy(strategy, df)
         assert elapsed < 3.0, f"RSI 10k bars took {elapsed:.2f}s (expected < 3s)"
 
     @_skip_if_traced
-    def test_rsi_5k_bars_under_1_second(self):
-        """5000 bar 数据集应在 1 秒内完成"""
+    def test_rsi_5k_bars_under_1_5_seconds(self):
+        """5000 bar 数据集应在 1.5 秒内完成（含 CI 环境容差）"""
         df = _generate_data(5000)
         strategy = RSIMomentumStrategy(rsi_period=14, ema_period=50)
         elapsed = _run_strategy(strategy, df)
@@ -116,8 +116,8 @@ class TestGridPerformance:
     """Grid 策略性能基准"""
 
     @_skip_if_traced
-    def test_grid_10k_bars_under_5_seconds(self):
-        """10000 bar 数据集应在合理时间内完成（开发机容差 10s）"""
+    def test_grid_10k_bars_under_10_seconds(self):
+        """10000 bar 数据集应在 10 秒内完成（含 CI 环境容差）"""
         df = _generate_data(10000)
         lo, hi = float(df["low"].min()), float(df["high"].max())
         span = hi - lo
@@ -131,8 +131,8 @@ class TestGridPerformance:
         assert elapsed < 10.0, f"Grid 10k bars took {elapsed:.2f}s (expected < 10s)"
 
     @_skip_if_traced
-    def test_grid_5k_bars_under_3_seconds(self):
-        """5000 bar 数据集应在合理时间内完成（开发机容差 5s）"""
+    def test_grid_5k_bars_under_5_seconds(self):
+        """5000 bar 数据集应在 5 秒内完成（含 CI 环境容差）"""
         df = _generate_data(5000)
         lo, hi = float(df["low"].min()), float(df["high"].max())
         span = hi - lo

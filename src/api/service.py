@@ -37,6 +37,7 @@ from src.monitor import MetricsCollector
 from src.strategy.registry import get_strategy
 from src.utils.logger import logger
 from src.utils.cache import cache, CacheKeys
+from src.utils.config import config as _cfg
 from src.utils.database import db
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -270,7 +271,14 @@ def _build_multi_results(
     )
     shared_collector = MetricsCollector()
 
-    risk_manager = RiskManager(capital_base=INITIAL_CAPITAL)
+    risk_manager = RiskManager(
+        capital_base=INITIAL_CAPITAL,
+        max_daily_loss=_cfg.MAX_DAILY_LOSS,
+        max_consecutive_losses=_cfg.MAX_CONSECUTIVE_LOSSES,
+        max_total_position=_cfg.MAX_TOTAL_POSITION,
+        max_api_failures=_cfg.MAX_API_FAILURES,
+        max_total_drawdown=_cfg.MAX_TOTAL_DRAWDOWN,
+    )
 
     multi_runner = MultiStrategyRunner(
         broker=shared_broker,

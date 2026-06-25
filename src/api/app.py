@@ -13,8 +13,17 @@ from datetime import datetime
 from typing import Optional
 
 import secrets
+import os
 import pandas as pd
 from loguru import logger
+from src.utils.logger import setup_logger as _setup_logger
+
+# 确保 API server 路径（非 main.py 启动）也初始化日志
+_setup_logger(
+    log_dir=os.getenv("LOG_PATH", "logs"),
+    log_level=os.getenv("LOG_LEVEL", "INFO"),
+)
+
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect, Security, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
@@ -186,6 +195,29 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["50/second"])
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+
+# --------------------------------------------------------------------------
+# 预热期异常处理 — get_state() 预热中抛 RuntimeError 时返回 503
+# --------------------------------------------------------------------------
+@app.exception_handler(RuntimeError)
+async def runtime_error_handler(request, exc: RuntimeError):
+    """将预热期 RuntimeError 转为 HTTP 503 + Retry-After，避免裸 500"""
+    msg = str(exc)
+    if "PAPER_TRADING_BUILDING" in msg or "预热" in msg:
+        from fastapi.responses import JSONResponse
+        logger.debug(f"预热期请求被拦截: {request.url.path}")
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "系统启动中，请稍候", "status": "building"},
+            headers={"Retry-After": "10"},
+        )
+    # 非预热相关 RuntimeError 仍返回 500
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=500,
+        content={"detail": msg},
+    )
 
 # --------------------------------------------------------------------------
 # API Token 验证
@@ -509,7 +541,7 @@ def update_stop_config(
 
     stype = body.strategy_type
     if stype not in STRATEGY_STOP_CONFIGS:
-        return {"ok": False, "message": f"未知策略类型: {stype}"}
+        raise HTTPException(400, f"未知策略类型: {stype}")
 
     # 构建新配置（StopLossConfig 会自动 clamp 到安全范围）
     new_cfg = StopLossConfig(
@@ -641,7 +673,7 @@ def monte_carlo_analysis(
                 **result.to_dict(),
             }
 
-    return {"error": "No live data available. Run a strategy first."}
+    raise HTTPException(503, "No live data available. Run a strategy first.")
 
 
 @app.post("/analytics/strategy-evaluation")
@@ -664,7 +696,7 @@ def strategy_evaluation(
     # 从 live_data 获取已有回测结果
     live = live_data.multi_strategy_details()
     if not live:
-        return {"error": "No live data available."}
+        raise HTTPException(503, "No live data available.")
 
     from src.backtest.monte_carlo import MonteCarloSimulator
 
@@ -1091,7 +1123,7 @@ def agent_analyze(request: Request, body: AnalyzeRequest, _=Security(verify_api_
                 base_params=live["base_params"],
             )
         else:
-            return {"error": f"Unknown task type: {body.task}"}
+            raise HTTPException(400, f"Unknown task type: {body.task}")
 
         strategy_name = live.get("strategy_name", "LivePaper")
     else:
@@ -1146,7 +1178,7 @@ def agent_analyze(request: Request, body: AnalyzeRequest, _=Security(verify_api_
                 base_params=base_params,
             )
         else:
-            return {"error": f"Unknown task type: {body.task}"}
+            raise HTTPException(400, f"Unknown task type: {body.task}")
 
         strategy_name = getattr(state.get("strategy", ""), "name", "GridTrading")
 

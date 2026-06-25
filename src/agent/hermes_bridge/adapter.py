@@ -87,7 +87,10 @@ def push_analysis_request(task: str, strategy_id: str, strategy_name: str, data:
         "strategy_id": strategy_id,
         "strategy_name": strategy_name,
         "data": data,
-        "callback_url": "http://localhost:8000/agent/hermes/callback",
+        "callback_url": os.getenv(
+            "HERMES_CALLBACK_BASE_URL",
+            "http://localhost:8000",
+        ).rstrip("/") + "/agent/hermes/callback",
     })
 
 
