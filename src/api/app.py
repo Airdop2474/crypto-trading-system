@@ -681,7 +681,7 @@ def monte_carlo_analysis(
                     "profit": float(ct.get("profit", 0)),
                 })
 
-            mc = MonteCarloSimulator(n_simulations=n_sim, random_seed=42)
+            mc = MonteCarloSimulator(n_simulations=n_sim)
             result = mc.run(
                 trades=trades,
                 initial_capital=float(target.get("initial_capital", 10000)),
@@ -746,7 +746,7 @@ def strategy_evaluation(
 
         # Monte Carlo（1000 次模拟，与脚本版一致）
         n_sim = int(body.get("n_mc_simulations", 1000))
-        mc = MonteCarloSimulator(n_simulations=n_sim, random_seed=42)
+        mc = MonteCarloSimulator(n_simulations=n_sim)
         mc_result = mc.run(trades=trades, initial_capital=initial)
 
         # 简化评分（基于 state 数据）
