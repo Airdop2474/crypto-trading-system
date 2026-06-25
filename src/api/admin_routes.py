@@ -65,8 +65,8 @@ def admin_clear_cache(confirm: bool = Query(False)):
                 with _db.engine.connect() as conn:
                     conn.execute(sa_text("TRUNCATE monitor_metrics"))
                     conn.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"TRUNCATE monitor_metrics 失败（非致命）: {e}")
         else:
             warnings.append("数据库未初始化（engine is None）")
     except Exception as e:

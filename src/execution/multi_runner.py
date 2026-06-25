@@ -306,8 +306,8 @@ class MultiStrategyRunner:
                             f"strategy_crash:{slot.config.strategy_id}:"
                             f"{type(e).__name__}:{e}",
                         )
-                    except Exception:
-                        pass  # _log_event 内部错误不应影响其他策略
+                    except Exception as log_e:
+                        logger.debug(f"_log_event 失败（不影响其他策略）: {log_e}")
                 self._pending_map[slot.config.strategy_id] = pending  # 保持旧 pending
                 slot.bars_processed += 1
                 results[slot.config.strategy_id] = pending

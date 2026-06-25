@@ -298,8 +298,8 @@ class PaperTradingRunner:
             try:
                 from src.agent.hermes_bridge import push_trade_closed
                 push_trade_closed({"tag": tag, "time": time, "profit": profit})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Hermes trade_closed 推送失败 (tag={tag}): {e}")
         self.lots.pop(tag, None)
         self._notify_fill(strategy, result, "sell", tag, time, profit=profit)
 

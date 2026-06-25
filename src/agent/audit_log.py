@@ -41,7 +41,8 @@ class AuditLog:
             if str(self.log_dir).startswith(temp_root):
                 return False
             return db.is_postgres_available()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"_should_use_db 检查失败: {e}")
             return False
 
     def record(
@@ -209,7 +210,8 @@ class AuditLog:
             return []
         try:
             return json.loads(self._log_file.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"加载审计日志文件失败: {e}")
             return []
 
     def _save_logs(self, logs: List[Dict]) -> None:

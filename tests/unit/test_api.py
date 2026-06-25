@@ -184,7 +184,7 @@ def test_tickers_fallback_when_exchange_down(client, monkeypatch):
         raise RuntimeError("simulated offline")
 
     monkeypatch.setattr(market, "get_live_tickers", boom)
-    r = client.get("/market/tickers")
+    r = client.get("/market/tickers", headers=_TOKEN_HEADER)
     assert r.status_code == 200
     rows = r.json()
     assert rows

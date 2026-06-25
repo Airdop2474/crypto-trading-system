@@ -384,7 +384,8 @@ def _persist_to_db(state: dict) -> None:
     try:
         if not db.is_postgres_available():
             return
-    except Exception:
+    except Exception as e:
+        logger.debug(f"_persist_to_db: DB 可用性检查失败: {e}")
         return
 
     try:
@@ -474,7 +475,8 @@ def get_cached_summary() -> Optional[dict]:
     """获取 Redis 缓存的 Paper Trading 摘要（无需完整重建状态）"""
     try:
         return cache.get(CacheKeys.PAPER_STATE)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"get_cached_summary: 缓存读取失败: {e}")
         return None
 
 
@@ -957,7 +959,8 @@ def strategy_correlation(state: dict) -> dict:
             # 单策略时 corrcoef 返回标量，强制转 2D
             if corr.ndim == 0:
                 corr = np.array([[float(corr)]])
-        except Exception:
+        except Exception as e:
+            logger.debug(f"corrcoef 计算失败，回退单位矩阵: {e}")
             n = len(sids)
             corr = np.eye(n)
 
@@ -1494,7 +1497,8 @@ def get_registry(state: dict) -> list[dict]:
                     k: v for k, v in (instance.parameters or {}).items()
                     if k not in _RISK_PARAM_KEYS
                 }
-        except Exception:
+        except Exception as e:
+            logger.debug(f"策略默认参数读取失败 ({key}): {e}")
             pass
 
         # 当前有多少个此类型的实例在运行
@@ -1629,7 +1633,8 @@ def cleanup_data(scope: str = "all", keep_latest: bool = False) -> dict:
     try:
         if not db.is_postgres_available():
             return {"error": "数据库不可用"}
-    except Exception:
+    except Exception as e:
+        logger.warning(f"admin_data_cleanup: DB 连接检查失败: {e}")
         return {"error": "数据库连接失败"}
 
     try:

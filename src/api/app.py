@@ -216,7 +216,7 @@ def account_summary(_=Security(verify_api_token)):
 
 
 @app.get("/market/tickers")
-def tickers():
+def tickers(_=Security(verify_api_token)):
     # 优先使用 WebSocket 缓存（实时），回退到 REST 轮询
     ws_tickers = ws_feed.get_tickers()
     if ws_tickers:
@@ -1076,7 +1076,7 @@ def hermes_status(_=Security(verify_api_token)):
 
 
 @app.post("/agent/hermes/callback")
-def hermes_callback(body: dict):
+def hermes_callback(body: dict, _=Security(verify_api_token)):
     """Hermes 分析结果回调（Hermes 调此接口返回分析结论）"""
     from src.agent.hermes_bridge import handle_callback
     return handle_callback(body)

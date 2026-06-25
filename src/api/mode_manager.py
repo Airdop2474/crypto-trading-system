@@ -154,8 +154,8 @@ class ModeManager:
             for p in st.processes:
                 try:
                     p.kill()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"清理进程失败 (pid={getattr(p, 'pid', '?')}): {e}")
             st.processes = []
             return {"error": f"启动子进程失败: {e}"}
 
@@ -286,7 +286,8 @@ class ModeManager:
         for sf in state_files:
             try:
                 raw = json.loads(sf.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"解析 state 文件失败 {sf.name}: {e}")
                 continue
 
             # 跳过没有 strategy_name 的旧格式文件（避免显示 default 策略）
@@ -559,7 +560,8 @@ class ModeManager:
             return None
         try:
             return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"_load_mode_state({key}) 读取失败: {e}")
             return None
 
     def _clear_mode_state(self, key: str):

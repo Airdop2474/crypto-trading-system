@@ -143,8 +143,8 @@ class RiskManager:
         try:
             from src.agent.hermes_bridge import push_risk_event
             push_risk_event("PAUSE", reason, self.state)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Hermes 风控事件推送失败 (PAUSE): {e}")
 
     # ---- 日切恢复（守护进程每根 bar 调用）----
 
@@ -285,8 +285,8 @@ class RiskManager:
             try:
                 from src.agent.hermes_bridge import push_risk_event
                 push_risk_event("EMERGENCY_STOP", reason, self.state)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Hermes 风控事件推送失败 (EMERGENCY_STOP): {e}")
 
     def reset(self) -> None:
         """完全重置到 ACTIVE（清空所有状态，含 STOPPED）。

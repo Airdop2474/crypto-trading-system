@@ -383,8 +383,8 @@ class TradingAnalyzer:
                         "unique_values": int(values.nunique()),
                         "range": [float(values.min()), float(values.max())],
                     }
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"参数敏感性分析失败 (col={col}): {e}")
 
         # 识别最敏感参数
         sorted_sens = sorted(
@@ -717,8 +717,8 @@ class TradingAnalyzer:
                 try:
                     hour = pd.Timestamp(time).hour
                     dist[str(hour)] = dist.get(str(hour), 0) + 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"交易时间解析失败 (time={time}): {e}")
         return dist
 
     def _assess_overfit_risk(

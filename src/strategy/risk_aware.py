@@ -275,8 +275,8 @@ class RiskAwareStrategy(Strategy):
                     f"• 止损类型: {info.get('stop_type')}"
                 )
                 notifier.send_warning_sync(msg)
-            except Exception:
-                pass  # 通知失败不影响止损逻辑
+            except Exception as e:
+                logger.debug(f"止损 Telegram 通知失败: {e}")  # 通知失败不影响止损逻辑
 
         return triggered, reason
 

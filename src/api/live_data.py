@@ -31,8 +31,8 @@ def _is_mode_running(mode: str) -> bool:
         st = mode_manager._modes.get(mode)
         if st:
             return st.status in (ModeStatus.RUNNING, ModeStatus.STOPPING)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"_is_mode_running({mode}) 检查失败: {e}")
     return False
 
 

@@ -145,8 +145,8 @@ class DatabaseManager:
         try:
             if self._pg_connection is not None:
                 self._pg_connection.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"关闭 PG 连接失败（非致命）: {e}")
         finally:
             self._pg_connection = None
 

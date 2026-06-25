@@ -270,7 +270,8 @@ class MemoryStore:
             return []
         try:
             return json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"加载记忆文件失败: {e}")
             return []
 
     def _save_json(self, data: List[dict]) -> None:
