@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { ApiError } from "@/components/api-error"
 import { cn } from "@/lib/utils"
+import { getStrategyLabelColor } from "@/lib/strategy-meta"
 
 export function PortfolioHeatCard() {
   const { data, error, isLoading, mutate } = useSWR(
@@ -111,9 +112,10 @@ export function PortfolioHeatCard() {
             <div className="space-y-1.5">
               {strategyEntries.map(([name, info]) => {
                 const pct = heat.max_heat > 0 ? (info.heat / heat.max_heat) * 100 : 0
+                const { label, color } = getStrategyLabelColor(name)
                 return (
                   <div key={name} className="flex items-center gap-2 text-sm">
-                    <span className="w-20 truncate text-muted-foreground">{name}</span>
+                    <span className={cn("inline-block rounded px-1.5 py-0.5 text-xs shrink-0", color)}>{label}</span>
                     <div className="h-1.5 flex-1 overflow-hidden rounded bg-muted">
                       <div
                         className={cn(

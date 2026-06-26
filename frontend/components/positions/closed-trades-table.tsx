@@ -14,7 +14,30 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ApiError } from "@/components/api-error"
+import { getStrategyLabelColor } from "@/lib/strategy-meta"
 import type { ClosedTradeHistory } from "@/lib/types"
+
+/**
+ * 平仓标签 → 中文 + 样式
+ *
+ * tag 是策略在 Order 上自带的仓位标记，用于配对买入/卖出。
+ * 常见值：_all（默认全仓）、stop_loss（止损触发）、bb/macd/composite（信号退出）、
+ * 数字（网格档位索引）。
+ */
+const TAG_LABEL: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+  _all: { label: "全仓", variant: "secondary" },
+  stop_loss: { label: "止损", variant: "destructive" },
+  bb: { label: "布林信号", variant: "outline" },
+  macd: { label: "MACD信号", variant: "outline" },
+  composite: { label: "复合信号", variant: "outline" },
+}
+
+function formatTag(tag: string): { label: string; variant: "default" | "secondary" | "destructive" | "outline" } {
+  if (!tag) return { label: "—", variant: "secondary" }
+  // 纯数字 → 网格档位
+  if (/^\d+$/.test(tag)) return { label: `网格${tag}`, variant: "outline" }
+  return TAG_LABEL[tag] || { label: tag, variant: "secondary" }
+}
 
 /**
  * 平仓历史表
@@ -75,14 +98,19 @@ export function ClosedTradesTable() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((t) => (
+                {rows.map((t) => {
+                  const tagInfo = formatTag(t.tag)
+                  const strat = getStrategyLabelColor(t.strategy_name)
+                  return (
                   <TableRow key={t.id}>
                     <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">
                       {fmtTime(t.close_time)}
                     </TableCell>
-                    <TableCell className="text-xs">{t.strategy_name}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {t.tag || "—"}
+                    <TableCell className="text-xs">
+                      <span className={`inline-block rounded px-1.5 py-0.5 text-xs ${strat.color}`}>{strat.label}</span>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={tagInfo.variant} className="text-xs">{tagInfo.label}</Badge>
                     </TableCell>
                     <TableCell
                       className={`text-right font-mono text-sm tabular-nums ${pnlColor(t.profit)}`}
@@ -95,7 +123,8 @@ export function ClosedTradesTable() {
                       {fmtPct(t.profit_pct).replace("+", "")}
                     </TableCell>
                   </TableRow>
-                ))}
+                  )
+                })}
               </TableBody>
             </Table>
           </div>

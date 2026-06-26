@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { toast } from "sonner"
-import { Shield, Loader2, Save } from "lucide-react"
+import { Shield, Loader2, Save, Sparkles } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -30,6 +30,7 @@ export function StopLossConfigCard({ configs }: { configs: StopConfigMap | undef
   const [editingType, setEditingType] = useState<string>("")
   const [form, setForm] = useState<StopConfig | null>(null)
   const [saving, setSaving] = useState(false)
+  const [optimizing, setOptimizing] = useState(false)
 
   const strategyTypes = Object.keys(configs || {}).sort()
 
@@ -65,6 +66,28 @@ export function StopLossConfigCard({ configs }: { configs: StopConfigMap | undef
     setForm(prev => prev ? { ...prev, [field]: value } : prev)
   }
 
+  const handleAutoOptimize = async () => {
+    if (!editingType) return
+    setOptimizing(true)
+    try {
+      const result = await api.autoOptimizeStopConfig(editingType)
+      if (result.ok) {
+        setForm({ ...result.config })
+        const stats = result.stats
+        const statsStr = stats
+          ? `（${stats.total_trades} 笔交易，胜率 ${(stats.win_rate * 100).toFixed(1)}%，均盈 ${stats.avg_win.toFixed(1)}，均亏 ${stats.avg_loss.toFixed(1)}）`
+          : ""
+        toast.success(result.message, { description: statsStr })
+      } else {
+        toast.info(result.message)
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "AI 优化失败")
+    } finally {
+      setOptimizing(false)
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -82,7 +105,9 @@ export function StopLossConfigCard({ configs }: { configs: StopConfigMap | undef
             onValueChange={(v: string | null) => v && handleSelectStrategy(v)}
           >
             <SelectTrigger className="w-full">
-              <SelectValue placeholder="选择要编辑的策略" />
+              <SelectValue placeholder="选择要编辑的策略">
+                {editingType ? (STRATEGY_TYPE_LABEL[editingType as keyof typeof STRATEGY_TYPE_LABEL] || editingType) : undefined}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {strategyTypes.map((type) => (
@@ -110,7 +135,9 @@ export function StopLossConfigCard({ configs }: { configs: StopConfigMap | undef
                 onValueChange={(v: string | null) => v && update("stop_type", v)}
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue />
+                  <SelectValue>
+                    {STOP_TYPE_LABELS[form.stop_type] || form.stop_type}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">不止损</SelectItem>
@@ -194,20 +221,41 @@ export function StopLossConfigCard({ configs }: { configs: StopConfigMap | undef
               />
             )}
 
-            {/* 保存按钮 */}
-            <Button onClick={handleSave} disabled={saving} className="w-full" size="sm">
-              {saving ? (
-                <>
-                  <Loader2 className="mr-2 size-3.5 animate-spin" />
-                  保存中...
-                </>
-              ) : (
-                <>
-                  <Save className="mr-2 size-3.5" />
-                  保存配置
-                </>
-              )}
-            </Button>
+            {/* 按钮组：AI 优化 + 保存 */}
+            <div className="flex gap-2">
+              <Button
+                onClick={handleAutoOptimize}
+                disabled={optimizing || saving}
+                variant="outline"
+                className="flex-1"
+                size="sm"
+              >
+                {optimizing ? (
+                  <>
+                    <Loader2 className="mr-2 size-3.5 animate-spin" />
+                    AI 分析中...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="mr-2 size-3.5" />
+                    AI 自动优化
+                  </>
+                )}
+              </Button>
+              <Button onClick={handleSave} disabled={saving || optimizing} className="flex-1" size="sm">
+                {saving ? (
+                  <>
+                    <Loader2 className="mr-2 size-3.5 animate-spin" />
+                    保存中...
+                  </>
+                ) : (
+                  <>
+                    <Save className="mr-2 size-3.5" />
+                    保存配置
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         )}
 

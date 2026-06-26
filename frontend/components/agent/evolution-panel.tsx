@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
 import {
   Dna,
   Loader2,
@@ -83,6 +83,20 @@ export function EvolutionPanel() {
     }
   }, [selected, autoApply])
 
+  // 防重复点击：进化完成后 30 秒内禁止再次点击
+  const [cooldown, setCooldown] = useState(0)
+  useEffect(() => {
+    if (cooldown <= 0) return
+    const t = setInterval(() => setCooldown((c) => Math.max(0, c - 1)), 1000)
+    return () => clearInterval(t)
+  }, [cooldown])
+
+  const onEvolveClick = () => {
+    if (cooldown > 0) return
+    handleEvolve()
+    setCooldown(30)
+  }
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -130,14 +144,19 @@ export function EvolutionPanel() {
           </label>
           <Button
             size="sm"
-            onClick={handleEvolve}
-            disabled={loading || selected.size === 0}
+            onClick={onEvolveClick}
+            disabled={loading || selected.size === 0 || cooldown > 0}
             className="ml-auto bg-purple-600 hover:bg-purple-700 text-white"
           >
             {loading ? (
               <>
                 <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
                 参数搜索中...
+              </>
+            ) : cooldown > 0 ? (
+              <>
+                <Sparkles className="h-4 w-4 mr-1.5" />
+                冷却中 {cooldown}s
               </>
             ) : (
               <>

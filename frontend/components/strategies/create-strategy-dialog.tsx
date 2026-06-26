@@ -7,6 +7,7 @@ import useSWR from "swr"
 import { api } from "@/lib/api"
 import type { StrategyType, ParamConstraint } from "@/lib/types"
 import { getParamLabel } from "@/lib/param-labels"
+import { STRATEGY_TYPE_LABEL } from "@/lib/strategy-meta"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -157,7 +158,7 @@ export function CreateStrategyDialog({ children }: Props) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={children as React.ReactElement} />
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>创建策略</DialogTitle>
           <DialogDescription>
@@ -172,7 +173,9 @@ export function CreateStrategyDialog({ children }: Props) {
               onValueChange={(v) => v && handleTypeChange(v)}
             >
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="请选择策略类型" />
+                <SelectValue placeholder="请选择策略类型">
+                  {selectedType ? (STRATEGY_TYPE_LABEL[selectedType as StrategyType] || selectedType) : undefined}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {strategies.map((s) => (
@@ -235,7 +238,7 @@ export function CreateStrategyDialog({ children }: Props) {
           </div>
 
           {userParams.length > 0 && (
-            <div className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/30 p-3">
+            <div className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/30 p-3 max-h-[45vh] overflow-y-auto">
               <span className="text-xs font-medium text-muted-foreground">
                 策略参数
               </span>

@@ -50,6 +50,7 @@ import type {
   TelegramConfig,
   TelegramConfigUpdate,
   TelegramTestResult,
+  StopConfig,
   StopConfigMap,
   StopConfigUpdate,
   WinRateTrendPoint,
@@ -255,6 +256,31 @@ export const api = {
   // GET /risk/status
   getRiskStatus: (): Promise<RiskStatus> => get("/risk/status"),
 
+  // POST /risk/control — 手动控制风控状态机（pause/resume/emergency_stop/reset）
+  controlRiskStatus: async (
+    action: "resume" | "pause" | "emergency_stop" | "reset",
+    reason?: string,
+  ): Promise<{
+    ok: boolean
+    action: string
+    reason: string
+    signals_written: string[]
+    immediate_applied: boolean
+    current_state: RiskStatus
+    message: string
+  }> => {
+    const res = await fetch(`${API_BASE}/risk/control`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify({ action, reason }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `风控控制失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
   // --------------------------------------------------------------------------
   // 持仓历史 / 盈亏分布
   // --------------------------------------------------------------------------
@@ -361,6 +387,13 @@ export const api = {
       body: JSON.stringify(req),
     })
     if (!res.ok) {
+      if (res.status === 429) {
+        throw new Error("请求过于频繁，请等待 1 分钟后再试")
+      }
+      if (res.status === 503) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.detail || "行情数据未就绪，请先启动 daemon 或等待预跑完成")
+      }
       throw new Error(`POST /agent/evolve failed: ${res.status}`)
     }
     return res.json()
@@ -618,6 +651,24 @@ export const api = {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       throw new Error(body.detail || `保存止损配置失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  autoOptimizeStopConfig: async (strategy_type: string): Promise<{
+    ok: boolean
+    message: string
+    config: StopConfig
+    stats?: { total_trades: number; win_rate: number; avg_win: number; avg_loss: number; avg_duration_bars: number }
+  }> => {
+    const res = await fetch(`${API_BASE}/risk/stop-config/auto-optimize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },
+      body: JSON.stringify({ strategy_type }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `AI 优化失败: ${res.status}`)
     }
     return res.json()
   },

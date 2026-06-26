@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Activity, AlertTriangle, CheckCircle, Loader2, Play, TrendingDown, TrendingUp } from "lucide-react"
+import { Activity, AlertTriangle, CheckCircle, Loader2, Play, TrendingDown, TrendingUp, MessageSquare } from "lucide-react"
 import { api } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -11,6 +11,73 @@ import { ApiError } from "@/components/api-error"
 import { cn } from "@/lib/utils"
 import { STRATEGY_TYPE_LABEL } from "@/lib/strategy-meta"
 import type { MonteCarloResult } from "@/lib/types"
+
+/**
+ * 基于 MC 结果生成自然语言解读：优点 / 缺点 / 建议
+ */
+function interpretMC(result: MonteCarloResult, strategyLabel: string): {
+  pros: string[]
+  cons: string[]
+  advice: string
+  rating: "优秀" | "良好" | "一般" | "谨慎" | "不建议"
+} {
+  const pros: string[] = []
+  const cons: string[] = []
+  const ruin = result.ruin_probability
+  const retMedian = result.return_distribution?.median ?? 0
+  const retP5 = result.return_distribution?.p5 ?? 0
+  const ddP95 = result.max_dd_distribution?.p95 ?? 0
+  const sharpeMedian = result.sharpe_distribution?.median ?? 0
+  const sharpeP5 = result.sharpe_distribution?.p5 ?? 0
+
+  // 优点
+  if (retMedian > 0.1) pros.push(`中位预期收益 ${(retMedian * 100).toFixed(1)}%，盈利预期明确`)
+  else if (retMedian > 0) pros.push(`中位预期收益为正（${(retMedian * 100).toFixed(1)}%）`)
+  if (sharpeMedian > 1.0) pros.push(`风险调整后收益优秀（Sharpe 中位 ${sharpeMedian.toFixed(2)}）`)
+  else if (sharpeMedian > 0.5) pros.push(`Sharpe 中位 ${sharpeMedian.toFixed(2)}，风险收益比可接受`)
+  if (ruin < 0.01) pros.push(`破产概率极低（${(ruin * 100).toFixed(2)}%），资金安全`)
+  if (ddP95 < 0.15) pros.push(`最差回撤可控（95% 分位 ${(ddP95 * 100).toFixed(1)}%）`)
+
+  // 缺点
+  if (ruin > 0.05) cons.push(`破产概率${ruin > 0.2 ? "过高" : "偏高"}（${(ruin * 100).toFixed(1)}%），存在爆仓风险`)
+  else if (ruin > 0.01) cons.push(`破产概率 ${(ruin * 100).toFixed(2)}%，需关注尾部风险`)
+  if (retMedian < 0) cons.push(`中位预期收益为负（${(retMedian * 100).toFixed(1)}%），长期会亏损`)
+  if (retP5 < -0.2) cons.push(`5% 分位收益 ${(retP5 * 100).toFixed(1)}%，极端情况下亏损较大`)
+  if (ddP95 > 0.3) cons.push(`95% 分位最大回撤 ${(ddP95 * 100).toFixed(1)}%，回撤幅度大`)
+  if (sharpeP5 < 0) cons.push(`5% 分位 Sharpe 为负（${sharpeP5.toFixed(2)}），部分场景表现差`)
+  if (sharpeMedian < 0.3) cons.push(`Sharpe 中位 ${sharpeMedian.toFixed(2)} 偏低，风险收益比不佳`)
+
+  // 评级
+  let rating: "优秀" | "良好" | "一般" | "谨慎" | "不建议" = "一般"
+  if (ruin > 0.1 || retMedian < -0.1) rating = "不建议"
+  else if (ruin > 0.05 || ddP95 > 0.35 || sharpeMedian < 0.3) rating = "谨慎"
+  else if (retMedian > 0.15 && sharpeMedian > 1.0 && ruin < 0.01 && ddP95 < 0.2) rating = "优秀"
+  else if (retMedian > 0.05 && sharpeMedian > 0.5 && ruin < 0.05) rating = "良好"
+
+  // 建议
+  let advice = ""
+  if (rating === "不建议") {
+    advice = `${strategyLabel} 在蒙特卡洛重采样下表现不佳，建议优化参数或暂停使用。`
+  } else if (rating === "谨慎") {
+    advice = `${strategyLabel} 风险较高，建议减小仓位或结合其他策略对冲，并设置严格止损。`
+  } else if (rating === "一般") {
+    advice = `${strategyLabel} 表现中规中矩，可作为辅助策略使用，但不宜重仓。`
+  } else if (rating === "良好") {
+    advice = `${strategyLabel} 整体稳健，适合纳入组合，建议控制单策略仓位在 20-30%。`
+  } else {
+    advice = `${strategyLabel} 各项指标优秀，可作为核心策略使用，但仍建议分散持仓降低单一策略风险。`
+  }
+
+  return { pros, cons, advice, rating }
+}
+
+const RATING_COLOR: Record<string, string> = {
+  "优秀": "bg-green-500/15 text-green-600 border-green-500/30",
+  "良好": "bg-blue-500/15 text-blue-600 border-blue-500/30",
+  "一般": "bg-yellow-500/15 text-yellow-600 border-yellow-500/30",
+  "谨慎": "bg-orange-500/15 text-orange-600 border-orange-500/30",
+  "不建议": "bg-red-500/15 text-red-600 border-red-500/30",
+}
 
 export function MonteCarloPanel() {
   const [strategyId, setStrategyId] = useState("supertrend-btc-usdt")
@@ -142,6 +209,48 @@ export function MonteCarloPanel() {
               <DistributionTable title="最大回撤分布" dist={result.max_dd_distribution} original={result.original_max_dd} isPct />
               <DistributionTable title="Sharpe 分布" dist={result.sharpe_distribution} original={result.original_sharpe} />
             </div>
+
+            {/* 自然语言解读 */}
+            {(() => {
+              const interp = interpretMC(result, strategyLabel)
+              return (
+                <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <MessageSquare className="h-4 w-4 text-primary" />
+                      <span className="text-sm font-medium">AI 解读</span>
+                    </div>
+                    <Badge variant="outline" className={cn("border", RATING_COLOR[interp.rating])}>
+                      评级：{interp.rating}
+                    </Badge>
+                  </div>
+                  {interp.pros.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-green-600">
+                        <CheckCircle className="h-3 w-3" /> 优点
+                      </div>
+                      <ul className="ml-5 list-disc space-y-0.5 text-xs text-muted-foreground">
+                        {interp.pros.map((p, i) => <li key={i}>{p}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {interp.cons.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-red-600">
+                        <AlertTriangle className="h-3 w-3" /> 缺点
+                      </div>
+                      <ul className="ml-5 list-disc space-y-0.5 text-xs text-muted-foreground">
+                        {interp.cons.map((c, i) => <li key={i}>{c}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  <div className="rounded bg-primary/5 px-3 py-2 text-xs">
+                    <span className="font-medium text-primary">建议：</span>
+                    <span className="text-muted-foreground">{interp.advice}</span>
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         )}
 

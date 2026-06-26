@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { OrderStatusBadge, SideBadge } from "@/components/status-badge"
+import { getStrategyLabelColor } from "@/lib/strategy-meta"
 import {
   ChevronLeft,
   ChevronRight,
@@ -164,7 +165,12 @@ export function OrdersTable({
                   <TableCell>
                     <OrderStatusBadge status={o.status} />
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{o.strategyName}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {(() => {
+                      const { label, color } = getStrategyLabelColor(o.strategyName)
+                      return <span className={`inline-block rounded px-1.5 py-0.5 text-xs ${color}`}>{label}</span>
+                    })()}
+                  </TableCell>
                 </TableRow>
               ))
             )}
