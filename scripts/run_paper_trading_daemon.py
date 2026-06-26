@@ -425,6 +425,26 @@ class PaperTradingDaemon:
 
     # ---- 人工恢复 ----
     def _check_resume(self):
+        # 优先检查统一信号文件 data/.risk_resume（API /risk/control 写入）
+        unified_resume = Path("data/.risk_resume")
+        if unified_resume.exists():
+            try:
+                unified_resume.unlink()
+            except OSError:
+                pass
+            # 即使当前不是 PAUSED 也写 resume_flag，确保所有策略都能恢复
+            # 包括策略级 _paused 标志
+            if self.risk.is_paused() or getattr(self.strategy, '_paused', False):
+                self.risk.resume()
+                # 策略级熔断也一并人工解除（grid 有独立 _paused 标志）
+                self.strategy._paused = False
+                self.strategy._paused_reason = None
+                self.strategy._consecutive_losses = 0
+                self.strategy._daily_pnl = 0.0
+                self.strategy._auto_resume_count = 0
+                logger.warning("检测到统一 resume 信号，风控/策略已人工恢复 -> ACTIVE")
+            return
+
         if self.resume_flag.exists() and (self.risk.is_paused() or self.strategy._paused):
             self.risk.resume()
             # 策略级熔断也一并人工解除（grid 有独立 _paused 标志）
@@ -435,6 +455,74 @@ class PaperTradingDaemon:
             self.strategy._auto_resume_count = 0
             self.resume_flag.unlink(missing_ok=True)
             logger.warning("检测到 resume 标志，风控/策略已人工恢复 -> ACTIVE")
+
+    # ---- 人工暂停信号（API /risk/control pause）----
+    _RISK_PAUSE_FILE = "data/.risk_pause"
+
+    def _check_pause_signal(self) -> bool:
+        """检查 API 写入的人工暂停信号文件。存在则删除并触发 PAUSE。
+
+        仅在当前为 ACTIVE 时触发；PAUSED/STOPPED 状态不降级。
+        返回 True 表示本次触发了暂停。
+        """
+        p = Path(self._RISK_PAUSE_FILE)
+        if not p.exists():
+            return False
+        try:
+            import json as _json
+            data = _json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            data = {"reason": "manual pause via API"}
+        try:
+            p.unlink()
+        except OSError:
+            pass
+        reason = data.get("reason", "manual pause via API")
+        # 仅 ACTIVE 时触发暂停；PAUSED/STOPPED 不处理
+        if self.risk.state == "ACTIVE":
+            self.risk._trip_pause(reason)
+            logger.warning(f"收到远程 pause 信号，RiskManager -> PAUSED：{reason}")
+            return True
+        return False
+
+    # ---- 人工重置信号（API /risk/control reset）----
+    _RISK_RESET_FILE = "data/.risk_reset"
+
+    def _check_reset_signal(self) -> bool:
+        """检查 API 写入的人工重置信号文件。存在则删除并触发 reset。
+
+        reset 会完全重置到 ACTIVE（含防抖：5分钟冷却，1小时3次上限），
+        STOPPED 状态也能通过 reset 恢复。
+        返回 True 表示本次触发了重置。
+        """
+        p = Path(self._RISK_RESET_FILE)
+        if not p.exists():
+            return False
+        try:
+            import json as _json
+            data = _json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            data = {"reason": "manual reset via API"}
+        try:
+            p.unlink()
+        except OSError:
+            pass
+        reason = data.get("reason", "manual reset via API")
+        # reset() 内置防抖：5分钟冷却 + 1小时3次上限
+        before_state = self.risk.state
+        self.risk.reset()
+        after_state = self.risk.state
+        if after_state == "ACTIVE" and before_state != "ACTIVE":
+            logger.warning(f"收到远程 reset 信号，RiskManager {before_state} -> ACTIVE：{reason}")
+            return True
+        elif after_state == "ACTIVE" and before_state == "ACTIVE":
+            logger.info(f"收到远程 reset 信号，状态已为 ACTIVE（reset 已执行但无变化）：{reason}")
+            return True
+        else:
+            logger.warning(
+                f"远程 reset 信号被防抖拒绝（冷却期或频次超限），状态仍为 {after_state}：{reason}"
+            )
+            return False
 
     # ---- 持仓漂移对账（exchange 模式）----
     def _reconcile_drift(self):
@@ -634,6 +722,12 @@ class PaperTradingDaemon:
                 f"急停触发\n策略: {self.args.strategy}\n原因: 远程 API 急停信号\n时间: {bar['timestamp']}"
             )
             return
+
+        # 检查人工暂停信号（ACTIVE -> PAUSED）
+        self._check_pause_signal()
+
+        # 检查人工重置信号（任意状态 -> ACTIVE，含防抖）
+        self._check_reset_signal()
 
         self._check_resume()
 

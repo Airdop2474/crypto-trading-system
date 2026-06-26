@@ -478,8 +478,137 @@ def risk_drawdown_curve(_=Security(verify_api_token)):
 
 @app.get("/risk/status")
 def risk_status(_=Security(verify_api_token)):
-    """账户级风控状态（来自 RiskManager 状态机）"""
+    """账户级风控状态（来自 RiskManager 状态机）
+
+    优先读 daemon state 文件聚合的最严格状态；
+    无 daemon state 时回退到预跑路径的 RiskManager 实例。
+    """
+    live = live_data.risk_status()
+    if live is not None:
+        return live
     return service.risk_status(service.get_state())
+
+
+# --------------------------------------------------------------------------
+# 风控手动控制（通过共享文件信号传递给 daemon，与已有的急停信号机制一致）
+# --------------------------------------------------------------------------
+# 信号文件路径（与 daemon._check_*_signal 中的常量对齐）
+_RISK_PAUSE_FILE = os.path.join("data", ".risk_pause")
+_RISK_EMERGENCY_STOP_FILE = os.path.join("data", ".emergency_stop")
+_RISK_RESET_FILE = os.path.join("data", ".risk_reset")
+
+
+class RiskControlRequest(BaseModel):
+    """风控手动控制请求。
+
+    action:
+        - resume: PAUSED -> ACTIVE（重置瞬时熔断计数）
+        - pause: ACTIVE -> PAUSED（人工暂停，仅允许平仓）
+        - emergency_stop: -> STOPPED（最强保护，需 reset 才能恢复）
+        - reset: 完全重置到 ACTIVE（含防抖：5分钟冷却，1小时3次上限）
+    """
+    action: Literal["resume", "pause", "emergency_stop", "reset"]
+    reason: Optional[str] = None
+
+
+@app.post("/risk/control")
+@limiter.limit("10/minute")
+def risk_control(
+    request: Request,
+    body: RiskControlRequest,
+    _=Security(verify_api_token),
+):
+    """手动控制风控状态机。
+
+    通过共享文件信号传递指令给 daemon（daemon 每根 bar 轮询检查），
+    与已有的 `_check_emergency_stop_signal` / `_check_resume` 机制一致。
+
+    同时在 API 进程的预跑 _state.risk_manager（若存在）上立即生效，
+    保证无 daemon 时也能控制。
+
+    返回操作结果和最新状态。
+    """
+    from src.utils.logger import logger as _logger
+
+    action = body.action
+    reason = body.reason or f"manual {action} via API"
+    timestamp = datetime.utcnow().isoformat()
+
+    # 1. 写入信号文件（daemon 轮询消费）
+    signal_map = {
+        "pause": _RISK_PAUSE_FILE,
+        "emergency_stop": _RISK_EMERGENCY_STOP_FILE,
+        "reset": _RISK_RESET_FILE,
+        # resume 信号文件路径与 daemon 的 resume_flag 一致，
+        # 但因 daemon 使用 state_file + ".resume"，这里需要按策略写入；
+        # 为简化：resume 使用统一的 .risk_resume 信号文件，daemon 检查并广播到所有策略
+    }
+    signals_written = []
+
+    if action == "resume":
+        # resume：写入统一信号文件
+        sig_path = os.path.join("data", ".risk_resume")
+        try:
+            with open(sig_path, "w", encoding="utf-8") as f:
+                json.dump({"action": "resume", "reason": reason, "ts": timestamp}, f)
+            signals_written.append(sig_path)
+            _logger.info(f"风控 resume 信号已写入: {sig_path}")
+        except OSError as e:
+            _logger.error(f"写入 resume 信号失败: {e}")
+            raise HTTPException(500, f"写入信号文件失败: {e}")
+    else:
+        sig_path = signal_map[action]
+        try:
+            with open(sig_path, "w", encoding="utf-8") as f:
+                json.dump({"action": action, "reason": reason, "ts": timestamp}, f)
+            signals_written.append(sig_path)
+            _logger.info(f"风控 {action} 信号已写入: {sig_path}")
+        except OSError as e:
+            _logger.error(f"写入 {action} 信号失败: {e}")
+            raise HTTPException(500, f"写入信号文件失败: {e}")
+
+    # 2. 在 API 进程的预跑 multi_runner.risk_manager（若存在）上立即生效
+    #    注意：state dict 里没有 "risk_manager" 字段，需要从 _multi_runner 取
+    #    RiskManager 的方法内部会自己加锁，这里不要外层加锁（否则死锁）
+    immediate_applied = False
+    try:
+        st = service.get_state()
+        multi_runner = st.get("_multi_runner")
+        rm = getattr(multi_runner, "risk_manager", None) if multi_runner else None
+        if rm is not None:
+            # 不在外层加锁：rm.resume()/reset() 等方法内部会获取 self._lock
+            if action == "resume" and rm.state == "PAUSED":
+                rm.resume()
+                immediate_applied = True
+            elif action == "pause" and rm.state == "ACTIVE":
+                rm._trip_pause(reason)
+                immediate_applied = True
+            elif action == "emergency_stop" and rm.state != "STOPPED":
+                rm.emergency_stop(reason)
+                immediate_applied = True
+            elif action == "reset":
+                rm.reset()
+                immediate_applied = True
+    except Exception as e:
+        _logger.debug(f"API 进程 RiskManager 即时同步失败（非致命）: {e}")
+
+    # 3. 返回最新状态
+    live = live_data.risk_status()
+    current_state = live if live is not None else service.risk_status(service.get_state())
+
+    return {
+        "ok": True,
+        "action": action,
+        "reason": reason,
+        "signals_written": signals_written,
+        "immediate_applied": immediate_applied,
+        "current_state": current_state,
+        "message": (
+            f"已发送 {action} 信号，daemon 将在下一根 bar 生效"
+            if not immediate_applied
+            else f"已立即应用 {action}（预跑路径）"
+        ),
+    }
 
 
 @app.get("/risk/portfolio-heat")
@@ -584,6 +713,158 @@ def update_stop_config(
     }
 
 
+class AutoOptimizeRequest(BaseModel):
+    strategy_type: str
+
+
+@app.post("/risk/stop-config/auto-optimize")
+@limiter.limit("3/minute")
+def auto_optimize_stop_config(
+    request: Request,
+    body: AutoOptimizeRequest,
+    _=Security(verify_api_token),
+):
+    """AI 自动优化止损配置：参考历史交易数据，为指定策略类型推荐止损参数。
+
+    基于已平仓交易的盈亏分布和持仓时长，用启发式规则计算建议值。
+    所有建议值会被 StopLossConfig 自动 clamp 到安全范围。
+    """
+    import numpy as np
+    from src.strategy.stop_configs import STRATEGY_STOP_CONFIGS, get_stop_config
+    from src.strategy.stop_loss import StopLossConfig
+
+    stype = body.strategy_type
+    if stype not in STRATEGY_STOP_CONFIGS:
+        raise HTTPException(400, f"未知策略类型: {stype}")
+
+    current_cfg = get_stop_config(stype)
+
+    # 收集该策略类型的所有已平仓交易
+    state = service.get_state()
+    multi_runner = state.get("_multi_runner")
+    all_trades: list[dict] = []
+    if multi_runner:
+        for slot in multi_runner.slots:
+            if slot.config.strategy_id.startswith(f"{stype}-"):
+                all_trades.extend(slot.runner.closed_trades)
+
+    # 交易数据不足时回退到当前配置
+    if len(all_trades) < 10:
+        return {
+            "ok": False,
+            "message": f"历史交易仅 {len(all_trades)} 笔（需 ≥10 笔），数据不足，保持当前配置",
+            "config": {
+                "stop_type": current_cfg.stop_type,
+                "atr_mult": current_cfg.atr_mult,
+                "trailing_activation": current_cfg.trailing_activation,
+                "trailing_drawback": current_cfg.trailing_drawback,
+                "range_breakout_pct": current_cfg.range_breakout_pct,
+                "max_bars": current_cfg.max_bars,
+                "min_stop_pct": current_cfg.min_stop_pct,
+            },
+            "stats": {"total_trades": len(all_trades)},
+        }
+
+    profits = np.array([float(t.get("profit", 0)) for t in all_trades])
+    wins = profits[profits > 0]
+    losses = profits[profits <= 0]
+    win_rate = len(wins) / len(profits) if len(profits) > 0 else 0
+    avg_win = float(wins.mean()) if len(wins) > 0 else 0
+    avg_loss = float(abs(losses.mean())) if len(losses) > 0 else 0
+    # 用盈亏占初始资金的比例近似（初始资金 10000）
+    initial_capital = 10000.0
+    avg_win_pct = avg_win / initial_capital
+    avg_loss_pct = avg_loss / initial_capital
+
+    # 估算平均持仓 K 线数（用交易时间戳跨度近似）
+    try:
+        import pandas as pd
+        times = [pd.Timestamp(t.get("time")) for t in all_trades if t.get("time")]
+        if len(times) >= 2:
+            # 按时间排序后取相邻平仓的间隔中位数 × 交易数 ≈ 平均持仓时长
+            times_sorted = sorted(times)
+            diffs = [(times_sorted[i+1] - times_sorted[i]).total_seconds() / 3600
+                     for i in range(len(times_sorted)-1)]
+            avg_bar_hours = float(np.median(diffs)) if diffs else 4.0
+            avg_duration_bars = max(5, int(avg_bar_hours / 4))  # 4h K线
+        else:
+            avg_duration_bars = 50
+    except Exception:
+        avg_duration_bars = 50
+
+    # ── 启发式规则 ──
+    suggested_max_bars = int(min(150, max(20, avg_duration_bars * 2)))
+
+    if current_cfg.stop_type == "atr_trailing":
+        # 盈亏比越低，止损越紧
+        if avg_loss_pct > 0:
+            atr_mult = min(4.0, max(0.5, 1.0 + avg_loss_pct * 15))
+        else:
+            atr_mult = 1.5
+        # 激活阈值：平均盈利的一半，让利润先跑
+        trailing_activation = min(0.10, max(0.01, avg_win_pct * 0.5)) if avg_win_pct > 0 else 0.03
+        # 回撤：胜率高时收紧（保护利润），胜率低时放宽（给波动空间）
+        trailing_drawback = min(0.08, max(0.01, 0.05 - win_rate * 0.03))
+        min_stop_pct = 0.01
+        range_breakout_pct = 0.05
+        suggested_cfg = StopLossConfig(
+            stop_type="atr_trailing",
+            atr_mult=round(atr_mult, 2),
+            trailing_activation=round(trailing_activation, 4),
+            trailing_drawback=round(trailing_drawback, 4),
+            range_breakout_pct=range_breakout_pct,
+            max_bars=suggested_max_bars,
+            min_stop_pct=min_stop_pct,
+        )
+    elif current_cfg.stop_type == "range_breakout":
+        # 突破止损比例：基于平均亏损
+        range_breakout_pct = min(0.10, max(0.02, avg_loss_pct * 1.2)) if avg_loss_pct > 0 else 0.05
+        suggested_cfg = StopLossConfig(
+            stop_type="range_breakout",
+            atr_mult=current_cfg.atr_mult,
+            trailing_activation=current_cfg.trailing_activation,
+            trailing_drawback=current_cfg.trailing_drawback,
+            range_breakout_pct=round(range_breakout_pct, 4),
+            max_bars=suggested_max_bars,
+            min_stop_pct=current_cfg.min_stop_pct,
+        )
+    else:
+        # time_only / none：仅优化 max_bars
+        suggested_cfg = StopLossConfig(
+            stop_type=current_cfg.stop_type,
+            atr_mult=current_cfg.atr_mult,
+            trailing_activation=current_cfg.trailing_activation,
+            trailing_drawback=current_cfg.trailing_drawback,
+            range_breakout_pct=current_cfg.range_breakout_pct,
+            max_bars=suggested_max_bars,
+            min_stop_pct=current_cfg.min_stop_pct,
+        )
+
+    # 热更新
+    STRATEGY_STOP_CONFIGS[stype] = suggested_cfg
+
+    return {
+        "ok": True,
+        "message": f"AI 已基于 {len(all_trades)} 笔历史交易优化止损配置",
+        "config": {
+            "stop_type": suggested_cfg.stop_type,
+            "atr_mult": suggested_cfg.atr_mult,
+            "trailing_activation": suggested_cfg.trailing_activation,
+            "trailing_drawback": suggested_cfg.trailing_drawback,
+            "range_breakout_pct": suggested_cfg.range_breakout_pct,
+            "max_bars": suggested_cfg.max_bars,
+            "min_stop_pct": suggested_cfg.min_stop_pct,
+        },
+        "stats": {
+            "total_trades": len(all_trades),
+            "win_rate": round(win_rate, 4),
+            "avg_win": round(avg_win, 2),
+            "avg_loss": round(avg_loss, 2),
+            "avg_duration_bars": avg_duration_bars,
+        },
+    }
+
+
 # --------------------------------------------------------------------------
 # 持仓历史 / 盈亏分布
 # --------------------------------------------------------------------------
@@ -674,6 +955,7 @@ def monte_carlo_analysis(
             # 从原始 state 获取交易明细
             runner_state = target.get("runner", {})
             closed_trades_raw = runner_state.get("closed_trades", [])
+            initial_cap = float(target.get("initial_capital", 10000))
             trades = []
             for ct in closed_trades_raw:
                 trades.append({
@@ -681,10 +963,19 @@ def monte_carlo_analysis(
                     "profit": float(ct.get("profit", 0)),
                 })
 
+            # 收益重采样需要 equity_curve，但 daemon state 不保存权益曲线。
+            # 从 closed_trades 累积构造一条合成权益曲线供 return_resample 使用。
+            equity_curve = []
+            cum_equity = initial_cap
+            for ct in closed_trades_raw:
+                cum_equity += float(ct.get("profit", 0))
+                equity_curve.append({"total_equity": cum_equity})
+
             mc = MonteCarloSimulator(n_simulations=n_sim)
             result = mc.run(
                 trades=trades,
-                initial_capital=float(target.get("initial_capital", 10000)),
+                equity_curve=equity_curve if equity_curve else None,
+                initial_capital=initial_cap,
                 method=method,
             )
             sid = target.get("strategy_id", "") or target.get("strategy_name", "")
@@ -1275,18 +1566,50 @@ class EvolveRequest(BaseModel):
 
 
 @app.post("/agent/evolve")
-@limiter.limit("2/minute")
+@limiter.limit("10/minute")
 def agent_evolve(request: Request, body: EvolveRequest, _=Security(verify_api_token)):
     """触发策略参数进化（Walk-Forward 搜索 + 安全校验 + 自动应用）"""
     from src.agent import EvolutionEngine
 
+    # 获取状态；若 service 未激活（daemon 模式下常见），同步构建一次
     state = service.get_state()
     multi_runner = state.get("_multi_runner")
-    risk_manager = getattr(multi_runner, "risk_manager", None) if multi_runner else None
-    risk_state = getattr(risk_manager, "state", "ACTIVE")
+    df = state.get("df")
+
+    if (multi_runner is None) or (df is None) or (df.empty):
+        # service 未激活 → 同步构建预跑状态（一次性）
+        try:
+            service.activate()
+            state = service._build_state()
+            # 写回缓存，避免下次重复构建
+            with service._lock:
+                service._state = state
+                service._build_status = service.BUILD_STATUS_READY
+        except Exception as e:
+            logger.warning(f"进化前预跑构建失败: {type(e).__name__}: {e}")
+            raise HTTPException(503, f"行情数据未就绪，预跑构建失败: {e}")
+        multi_runner = state.get("_multi_runner")
+        df = state.get("df")
+
+    if multi_runner is None:
+        raise HTTPException(503, "MultiStrategyRunner 未初始化，请先启动 daemon 或预跑回测")
+    if df is None or df.empty:
+        raise HTTPException(503, "行情数据未就绪，请先启动 daemon 或等待预跑完成")
+
+    risk_manager = getattr(multi_runner, "risk_manager", None)
+
+    # 风控状态优先级：
+    # 1. daemon 实时状态（live_data.risk_status()，读 daemon state 文件聚合）
+    # 2. 预跑路径的 multi_runner.risk_manager（API 进程内存）
+    # 这样用户通过 /risk/control reset 重置 daemon 后，进化端点能立即看到 ACTIVE
+    risk_state = "ACTIVE"
+    live_risk = live_data.risk_status()
+    if live_risk is not None:
+        risk_state = live_risk.get("state", "ACTIVE")
+    elif risk_manager is not None:
+        risk_state = getattr(risk_manager, "state", "ACTIVE")
 
     # 构建行情数据 dict：{symbol: DataFrame}
-    df = state["df"]
     data_map = {service.SYMBOL: df}
 
     engine = EvolutionEngine(
@@ -1294,10 +1617,6 @@ def agent_evolve(request: Request, body: EvolveRequest, _=Security(verify_api_to
         audit_log=_audit_log,
         auto_apply=body.auto_apply,
     )
-
-    # 确定要进化的策略列表
-    if multi_runner is None:
-        raise HTTPException(500, "MultiStrategyRunner 未初始化")
 
     if body.strategy_ids:
         slots = [

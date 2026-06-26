@@ -1003,3 +1003,113 @@ def portfolio_heat() -> Optional[dict]:
         },
         "updated_at": data.get("updated_at"),
     }
+
+
+def risk_status() -> Optional[dict]:
+    """从 daemon state 文件聚合账户级风控状态。
+
+    聚合所有策略 state 中的 risk 字段，返回与 service.risk_status() 相同结构。
+    若任一策略处于 PAUSED/STOPPED，账户状态取最严格（STOPPED > PAUSED > ACTIVE）。
+    无 state 文件时返回 None（调用方回退到 service.risk_status() 预跑路径）。
+
+    乐观信号文件检查：如果存在未消费的 reset/resume/pause/emergency_stop 信号文件，
+    按用户操作意图返回预期状态，避免 daemon 未消费信号前卡住前端和进化端点。
+    """
+    states = _load_all_states()
+    if not states:
+        return None
+
+    # 配置上限（与 RiskManager 默认值对齐）
+    max_daily_loss = float(_cfg.MAX_DAILY_LOSS)
+    max_consecutive_losses = int(_cfg.MAX_CONSECUTIVE_LOSSES)
+    max_total_position = float(_cfg.MAX_TOTAL_POSITION)
+    max_total_drawdown = float(_cfg.MAX_TOTAL_DRAWDOWN)
+
+    # 聚合：取最严格状态
+    state_priority = {"STOPPED": 3, "PAUSED": 2, "ACTIVE": 1}
+    worst_state = "ACTIVE"
+    daily_pnl_sum = 0.0
+    cumulative_pnl_sum = 0.0
+    consecutive_losses_max = 0
+    peak_equity_max = 0.0
+    events_all: list[dict] = []
+    last_pause_reason: Optional[str] = None
+
+    for s in states:
+        r = s.get("risk", {})
+        if not r:
+            continue
+        st = r.get("state", "ACTIVE")
+        if state_priority.get(st, 0) > state_priority.get(worst_state, 0):
+            worst_state = st
+        daily_pnl_sum += float(r.get("daily_pnl", 0))
+        cumulative_pnl_sum += float(r.get("cumulative_pnl", 0))
+        cl = int(r.get("consecutive_losses", 0))
+        if cl > consecutive_losses_max:
+            consecutive_losses_max = cl
+        pe = float(r.get("peak_equity", 0))
+        if pe > peak_equity_max:
+            peak_equity_max = pe
+        reason = r.get("last_pause_reason")
+        if reason:
+            last_pause_reason = reason
+
+    # 乐观信号文件检查：覆盖 daemon state 的滞后状态
+    # 优先级：emergency_stop > pause > reset > resume > state 文件
+    # （高优先级信号会覆盖低优先级，避免冲突）
+    pending_note = None
+    sig_emergency = _DATA_DIR / ".emergency_stop"
+    sig_pause = _DATA_DIR / ".risk_pause"
+    sig_reset = _DATA_DIR / ".risk_reset"
+    sig_resume = _DATA_DIR / ".risk_resume"
+
+    if sig_emergency.exists():
+        worst_state = "STOPPED"
+        pending_note = "紧急停止信号待 daemon 消费"
+    elif sig_pause.exists():
+        worst_state = "PAUSED"
+        pending_note = "暂停信号待 daemon 消费"
+    elif sig_reset.exists() or sig_resume.exists():
+        # reset/resume 信号：乐观返回 ACTIVE，清零瞬时计数
+        worst_state = "ACTIVE"
+        consecutive_losses_max = 0
+        pending_note = "恢复/重置信号待 daemon 消费"
+
+    # 计算总回撤（基于最严格 peak_equity 和累计盈亏）
+    initial_total = sum(float(s.get("initial_capital", 10000)) for s in states) or 10000.0
+    current_equity = initial_total + cumulative_pnl_sum
+    if peak_equity_max > 0:
+        total_dd = (peak_equity_max - current_equity) / peak_equity_max * 100
+    else:
+        total_dd = 0.0
+
+    daily_used_pct = (abs(daily_pnl_sum) / initial_total * 100) if (daily_pnl_sum < 0 and initial_total > 0) else 0.0
+
+    # 合并 note：优先显示 pending_note（用户操作意图），其次显示 last_pause_reason
+    notes = []
+    if pending_note:
+        notes.append(pending_note)
+    if last_pause_reason and worst_state != "ACTIVE":
+        notes.append(f"最近一次熔断原因：{last_pause_reason}")
+    note = "；".join(notes) if notes else None
+
+    return {
+        "state": worst_state,
+        "can_trade": worst_state == "ACTIVE",
+        "daily_pnl": round(daily_pnl_sum, 2),
+        "daily_loss_limit_pct": max_daily_loss * 100,
+        "daily_loss_used_pct": round(daily_used_pct, 2),
+        "consecutive_losses": consecutive_losses_max,
+        "max_consecutive_losses": max_consecutive_losses,
+        "cumulative_pnl": round(cumulative_pnl_sum, 2),
+        "total_drawdown_pct": round(total_dd, 2),
+        "max_total_drawdown_pct": max_total_drawdown * 100,
+        "events": events_all,  # daemon state 文件不持久化 events 队列
+        "limits": {
+            "max_daily_loss": max_daily_loss,
+            "max_consecutive_losses": max_consecutive_losses,
+            "max_total_position": max_total_position,
+            "max_total_drawdown": max_total_drawdown,
+        },
+        **({"note": note} if note else {}),
+    }
