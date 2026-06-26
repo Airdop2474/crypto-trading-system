@@ -24,10 +24,13 @@ SKIP_PARAMS = frozenset({
 _PRICE_PARAMS = frozenset({"lower_price", "upper_price"})
 
 # 每个参数的采样点数
-_RESOLUTION = 5
+_RESOLUTION = 3
 
 # 组合上限：超出后随机采样
-MAX_COMBINATIONS = 2000
+MAX_COMBINATIONS = 500
+
+# 参与进化的参数数量上限（超过则只取前 N 个最重要的参数）
+MAX_PARAMS = 4
 
 
 class ParamGridBuilder:
@@ -96,6 +99,13 @@ class ParamGridBuilder:
             if values:
                 grid[name] = values
 
+        # 参数数量限制：超过 MAX_PARAMS 的只保留前 MAX_PARAMS 个
+        if len(grid) > MAX_PARAMS:
+            # 保留前 MAX_PARAMS 个（PARAM_SCHEMA 中定义顺序靠前的通常更重要）
+            keys = list(grid.keys())[:MAX_PARAMS]
+            grid = {k: grid[k] for k in keys}
+            logger.info(f"参数数量超过 {MAX_PARAMS}，缩减至: {list(grid.keys())}")
+
         # 组合数检查
         self._cap_combinations(grid)
 
@@ -155,7 +165,10 @@ class ParamGridBuilder:
         return values
 
     def _cap_combinations(self, grid: Dict[str, List]) -> None:
-        """若组合数超限，对最大的维度做随机采样缩减。"""
+        """若组合数超限，对维度做缩减至目标值。
+
+        直接计算每个维度应保留的值数（按比例缩减），避免逐个循环。
+        """
         if not grid:
             return
 
@@ -170,13 +183,26 @@ class ParamGridBuilder:
             f"ParamGrid 组合数 {total} 超过上限 {self.max_combinations}，执行缩减"
         )
 
-        # 逐轮缩减最大维度，直到组合数合法
-        while total > self.max_combinations:
-            largest_key = max(grid, key=lambda k: len(grid[k]))
-            current_len = len(grid[largest_key])
-            new_len = max(2, current_len - 1)
-            grid[largest_key] = grid[largest_key][:new_len]
+        # 按比例缩减：每个维度保留 floor(max_combinations^(1/n)) 个值
+        # 若仍超限，继续缩减最大维度
+        import math
+        n_dims = len(grid)
+        target_per_dim = max(2, int(self.max_combinations ** (1.0 / n_dims)))
 
+        for key in grid:
+            if len(grid[key]) > target_per_dim:
+                grid[key] = grid[key][:target_per_dim]
+
+        # 重新计算，若仍超限则继续缩减最大维度
+        total = 1
+        for vals in grid.values():
+            total *= len(vals)
+
+        while total > self.max_combinations and n_dims > 1:
+            largest_key = max(grid, key=lambda k: len(grid[k]))
+            if len(grid[largest_key]) <= 2:
+                break
+            grid[largest_key] = grid[largest_key][:-1]
             total = 1
             for vals in grid.values():
                 total *= len(vals)

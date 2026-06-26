@@ -298,8 +298,9 @@ class EvolutionEngine:
         """
         skip = skip or {"buyhold"}
         results: List[EvolutionResult] = []
+        import time as _time
 
-        for slot in slots:
+        for idx, slot in enumerate(slots, 1):
             strategy_id = slot.config.strategy_id
             strategy_key = self._extract_strategy_key(strategy_id)
 
@@ -310,6 +311,8 @@ class EvolutionEngine:
             strategy = slot.config.strategy
             current_params = dict(strategy.parameters) if hasattr(strategy, "parameters") else {}
 
+            t0 = _time.time()
+            logger.info(f"[进化] 进度 {idx}/{len(slots)}: 开始 {strategy_id}")
             try:
                 result = self.evolve_strategy(
                     strategy_id=strategy_id,
@@ -328,6 +331,8 @@ class EvolutionEngine:
                     f"进化异常: {type(e).__name__}: {e}",
                     datetime.now(timezone.utc).isoformat(),
                 ))
+            elapsed = _time.time() - t0
+            logger.info(f"[进化] 进度 {idx}/{len(slots)}: {strategy_id} 完成，耗时 {elapsed:.1f}s")
 
         return results
 
