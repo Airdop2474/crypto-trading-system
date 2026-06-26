@@ -143,9 +143,21 @@ start.err
 logs/
 data/paper_daemon_state.json
 data/paper_daemon_state.json.*
+data/paper_daemon_state_*.json
+data/paper_daemon_state_*.json.*
 data/.emergency_stop
+data/.risk_pause
+data/.risk_resume
+data/.risk_reset
 data/reports/paper/daily/
 data/_archive_*/
+
+# Analyzer / Hermes 运行时产物
+data/memory/
+data/hermes_events/
+
+# Binance 历史数据本地缓存（CSV 已被 *.csv 覆盖，整目录忽略含探索脚本）
+data/Binance/
 
 # 测试运行产物
 data/reports/test/
@@ -164,3 +176,15 @@ frontend/tsconfig.tsbuildinfo
 
 # Qoder IDE 本地配置
 .qoder/
+
+# Trae IDE 本地配置
+.trae/
+
+# 项目内 analyzer 记忆（运行时累积，不入库）
+data/memory/
+
+# Hermes 事件日志（运行时产物）
+data/hermes_events/
+
+# Binance 历史数据档案（大体积本地数据，不入库）
+data/Binance/
