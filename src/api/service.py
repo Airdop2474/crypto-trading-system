@@ -1450,6 +1450,10 @@ _STRATEGY_DESCRIPTIONS = {
     "structure": "检测市场结构波动突破信号",
     "supertrend": "基于 ATR 的自适应趋势跟踪，动态止损",
     "reversal": "在支撑/阻力位出现 Pin Bar 反转信号时交易",
+    "priceaction": "基于价格行为学（供需区、流动性、Pin Bar）综合判断",
+    "bollinger": "布林带均值回归，价格触及下轨买入、上轨卖出",
+    "macd": "MACD 金叉买入、死叉卖出，配合趋势过滤",
+    "composite": "复合 ADX+EMA+MACD+RSI 多因子趋势策略",
 }
 
 # 风控参数 — 创建对话框中不展示（由 RiskAwareStrategy 基类统一管理）
