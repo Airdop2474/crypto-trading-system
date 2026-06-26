@@ -196,8 +196,8 @@ class StrategyEvaluator:
         trades = bt_result.get("trades", [])
         equity_curve = bt_result.get("equity_curve", [])
 
-        # 2. Monte Carlo 模拟
-        mc = MonteCarloSimulator(n_simulations=self.n_mc_simulations, random_seed=42)
+        # 2. Monte Carlo 模拟（不固定种子，保证每次/每策略独立随机）
+        mc = MonteCarloSimulator(n_simulations=self.n_mc_simulations)
         mc_result = mc.run(
             trades=trades,
             equity_curve=equity_curve,

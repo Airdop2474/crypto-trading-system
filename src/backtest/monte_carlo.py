@@ -271,8 +271,11 @@ class MonteCarloSimulator:
         2. 有放回重采样 N 次，每次生成一条替代权益路径
         3. 计算每条路径的收益率、最大回撤、Sharpe
         """
-        if not equity_curve or len(equity_curve) < 10:
-            logger.warning("Monte Carlo: equity_curve too short for return_resample")
+        if not equity_curve or len(equity_curve) < 5:
+            logger.warning(
+                f"Monte Carlo: equity_curve too short ({len(equity_curve) if equity_curve else 0} bars) "
+                f"for return_resample, need >= 5"
+            )
             return self._empty_result("return_resample")
 
         # 提取权益序列

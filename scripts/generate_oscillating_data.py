@@ -12,6 +12,7 @@
 import sys
 from pathlib import Path
 from datetime import timedelta
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -30,7 +31,7 @@ def generate_oscillating_ohlcv(
     amplitude_pct: float = 0.10,
     num_cycles: float = 8.0,
     noise_pct: float = 0.01,
-    seed: int = 42,
+    seed: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     生成区间震荡的 OHLCV 数据
