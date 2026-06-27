@@ -59,6 +59,14 @@ COPY requirements.txt .
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash trader && \
     chown -R trader:trader /app
+
+# 预创建 logs 目录并设置权限（uid 1000 对应 trader）
+# 宿主机挂载 ./logs:/app/logs 时，若宿主目录不存在 Docker 会以 root 创建，
+# 预创建并 chmod 1777 确保容器内 uid 1000 有写权限
+RUN mkdir -p /app/logs && chmod 1777 /app/logs
+# data 目录同理（挂载 ./data:/app/data）
+RUN mkdir -p /app/data && chmod 1777 /app/data
+
 USER trader
 
 # Health check

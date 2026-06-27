@@ -75,6 +75,11 @@ fi
 
 # 4. 构建并启动服务
 echo "[4/6] 构建 Docker 镜像并启动服务..."
+
+# 预创建 logs/data 目录并设权限（容器以 uid 1000 运行，bind mount 需宿主机目录可写）
+mkdir -p logs data
+chmod 777 logs data
+
 docker compose build
 docker compose up -d
 

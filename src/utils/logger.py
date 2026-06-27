@@ -52,9 +52,19 @@ def setup_logger(
         env = environment
         enable_json = json_logs
 
-    # 创建日志目录
+    # 创建日志目录（Docker bind mount 可能以 root 创建导致 uid 1000 无写权限，
+    # 降级到 /tmp/logs 保证应用可启动；控制台日志仍可见）
     log_path = Path(log_dir)
-    log_path.mkdir(parents=True, exist_ok=True)
+    try:
+        log_path.mkdir(parents=True, exist_ok=True)
+        # 测试是否真的可写（mkdir 成功不代表能写文件，bind mount 可能只读）
+        (log_path / ".write_test").touch()
+        (log_path / ".write_test").unlink()
+    except (PermissionError, OSError) as e:
+        fallback = Path("/tmp/logs")
+        fallback.mkdir(parents=True, exist_ok=True)
+        log_path = fallback
+        print(f"[WARN] 日志目录 {log_dir} 不可写({e})，降级到 {fallback}", file=sys.stderr)
 
     # 移除默认的 handler
     logger.remove()
