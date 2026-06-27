@@ -66,6 +66,10 @@ if [ ! -f .env ]; then
     echo "    BINANCE_SECRET     - Binance testnet secret"
     echo "    API_TOKEN          - 已自动生成: $API_TOKEN"
     echo ""
+    echo "  美国 VPS 必填（绕过 451 地域限制）："
+    echo "    BINANCE_PROXY_URL  - Cloudflare Worker 反代 URL"
+    echo "    部署方法见 docs/BINANCE_PROXY_SETUP.md"
+    echo ""
     echo "  填好后重新运行: bash deploy.sh"
     echo "  ==========================================="
     exit 0
@@ -114,6 +118,20 @@ echo "  部署完成！"
 echo "=========================================="
 echo "  后端 API:  http://$(hostname -I | awk '{print $1}'):8000"
 echo "  Grafana:   http://$(hostname -I | awk '{print $1}'):3000"
+echo ""
+
+# 检查是否配置了反代
+if grep -q "^BINANCE_PROXY_URL=.\+" .env 2>/dev/null; then
+    PROXY_URL=$(grep "^BINANCE_PROXY_URL=" .env | cut -d= -f2-)
+    echo "  Binance 反代: $PROXY_URL"
+    echo "  验证反代: curl ${PROXY_URL}/health"
+    echo "  验证日志: docker compose logs --tail 20 trading_system | grep '反代'"
+else
+    echo "  Binance: 直连（未配置 BINANCE_PROXY_URL）"
+    echo "  如 VPS 在美国，需配置反代绕过 451 限制"
+    echo "  参考: docs/BINANCE_PROXY_SETUP.md"
+fi
+
 echo ""
 echo "  常用命令:"
 echo "    查看状态: docker compose ps"

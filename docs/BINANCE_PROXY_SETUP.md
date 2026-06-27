@@ -62,31 +62,118 @@ Worker 用路径前缀区分上游：
 4. **全选删除**编辑器里的默认代码：
    - Windows：`Ctrl+A` 然后 `Delete`
    - Mac：`Cmd+A` 然后 `Delete`
-5. **粘贴下面的反代代码**（完整复制，从 `/**` 到 `};` 结束）：
+5. **粘贴反代代码**：从仓库文件 [`scripts/cloudflare/binance-proxy-worker.js`](../scripts/cloudflare/binance-proxy-worker.js) 复制完整内容（该文件是唯一权威来源，本指南中的代码仅为快照）。如果无法访问仓库，也可粘贴下方代码：
+
+<details>
+<summary>点击展开完整代码（建议优先从仓库复制）</summary>
 
 ```javascript
 /**
  * Binance API 反代 Cloudflare Worker
+ *
+ * 用途：美国 IP 访问 Binance 被地域限制（HTTP 451），用 Cloudflare Worker 中转。
+ * Cloudflare 出口 IP 不在美国，且全球边缘节点就近访问。
+ *
+ * 支持两类流量：
+ * 1. REST API（ccxt 覆盖 urls["api"]）
+ *    - /testnet/* → testnet.binance.vision/*  (testnet 私有接口，带 API Key)
+ *    - /main/*    → api.binance.com/*          (主网公开行情/私有接口)
+ * 2. WebSocket 实时行情
+ *    - /main/ws/* → wss://stream.binance.com:9443/ws/*  (WebSocketPair API 桥接)
  */
 
 const UPSTREAM_MAP = {
   "testnet.binance.vision": "testnet.binance.vision",
   "api.binance.com": "api.binance.com",
   "testnet.binancefuture.com": "testnet.binancefuture.com",
+  "stream.binance.com": "stream.binance.com",
 };
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, X-MBX-APIKEY",
+  "Access-Control-Max-Age": "86400",
+};
+
+function cleanHeaders(originalHeaders, upstreamHost) {
+  const h = new Headers();
+  const BLOCKLIST = [
+    "cf-connecting-ip", "cf-ipcountry", "cf-ray", "cf-visitor",
+    "cf-request-id", "cf-ew-via", "cdn-loop",
+    "host", "connection", "upgrade",
+    "sec-websocket-key", "sec-websocket-version",
+    "sec-websocket-extensions", "sec-websocket-accept",
+  ];
+  for (const [key, value] of originalHeaders) {
+    if (!BLOCKLIST.includes(key.toLowerCase())) {
+      h.set(key, value);
+    }
+  }
+  h.set("Host", upstreamHost);
+  return h;
+}
+
+async function handleWebSocket(request, wsSubPath) {
+  const upstreamUrl = `wss://stream.binance.com:9443/ws/${wsSubPath}`;
+  const cleanH = cleanHeaders(request.headers, "stream.binance.com:9443");
+  cleanH.set("Connection", "Upgrade");
+  cleanH.set("Upgrade", "websocket");
+  cleanH.set("Sec-WebSocket-Version", "13");
+
+  const upstreamResp = await fetch(upstreamUrl, { headers: cleanH });
+  const upstreamWs = upstreamResp.webSocket;
+  if (!upstreamWs) {
+    return new Response("WebSocket proxy: upstream did not upgrade", { status: 502 });
+  }
+
+  const pair = new WebSocketPair();
+  const [client, server] = [pair[0], pair[1]];
+  server.accept();
+
+  server.addEventListener("message", (event) => {
+    try { upstreamWs.send(event.data); } catch (_) {}
+  });
+  server.addEventListener("close", () => {
+    try { upstreamWs.close(); } catch (_) {}
+  });
+  server.addEventListener("error", () => {
+    try { upstreamWs.close(); } catch (_) {}
+  });
+
+  upstreamWs.addEventListener("message", (event) => {
+    try { server.send(event.data); } catch (_) {}
+  });
+  upstreamWs.addEventListener("close", () => {
+    try { server.close(); } catch (_) {}
+  });
+  upstreamWs.addEventListener("error", () => {
+    try { server.close(); } catch (_) {}
+  });
+
+  return new Response(null, { status: 101, webSocket: client });
+}
 
 export default {
   async fetch(request) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
     const url = new URL(request.url);
 
     if (url.pathname === "/" || url.pathname === "/health") {
       return new Response(JSON.stringify({ status: "ok", service: "binance-proxy" }), {
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...CORS_HEADERS },
       });
     }
 
-    let upstreamHost = request.headers.get("x-upstream-host") || "api.binance.com";
+    const wsMatch = url.pathname.match(/^\/(testnet|main)\/ws\/(.*)$/);
+    if (wsMatch && request.headers.get("upgrade") === "websocket") {
+      return handleWebSocket(request, wsMatch[2]);
+    }
 
+    let upstreamHost = request.headers.get("x-upstream-host") || "api.binance.com";
     const pathParts = url.pathname.match(/^\/(testnet|main)(\/.*)?$/);
     if (pathParts) {
       upstreamHost = pathParts[1] === "testnet" ? "testnet.binance.vision" : "api.binance.com";
@@ -95,15 +182,12 @@ export default {
 
     if (!UPSTREAM_MAP[upstreamHost]) {
       return new Response(JSON.stringify({
-        error: "unknown upstream",
-        host: upstreamHost,
-      }), { status: 400, headers: { "Content-Type": "application/json" } });
+        error: "unknown upstream", host: upstreamHost,
+      }), { status: 400, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
     }
 
     const upstreamUrl = `https://${upstreamHost}${url.pathname}${url.search}`;
-    const headers = new Headers(request.headers);
-    headers.delete("x-upstream-host");
-    headers.set("Host", upstreamHost);
+    const headers = cleanHeaders(request.headers, upstreamHost);
 
     const upstreamReq = new Request(upstreamUrl, {
       method: request.method,
@@ -115,21 +199,20 @@ export default {
     try {
       const resp = await fetch(upstreamReq);
       const respHeaders = new Headers(resp.headers);
-      respHeaders.set("Access-Control-Allow-Origin", "*");
+      for (const [k, v] of Object.entries(CORS_HEADERS)) { respHeaders.set(k, v); }
       return new Response(resp.body, {
-        status: resp.status,
-        statusText: resp.statusText,
-        headers: respHeaders,
+        status: resp.status, statusText: resp.statusText, headers: respHeaders,
       });
     } catch (e) {
       return new Response(JSON.stringify({
-        error: "upstream_fetch_failed",
-        detail: String(e),
-      }), { status: 502, headers: { "Content-Type": "application/json" } });
+        error: "upstream_fetch_failed", detail: String(e),
+      }), { status: 502, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
     }
   },
 };
 ```
+
+</details>
 
 6. 粘贴后**检查编辑器第一行**，应该是 `/**`，**不应该是** `scripts/cloudflare/...`
 7. 点击右上角 **Deploy** / **Save and deploy** 按钮
@@ -161,6 +244,17 @@ https://binance-proxy.<你的子域名>.workers.dev/main/api/v3/ping
 期望返回：`{}`（Binance 主网 ping 响应）
 
 如果 5.2 和 5.3 都返回 `{}`，说明反代工作正常。如果返回 451 或 502，检查 Worker 代码是否完整粘贴。
+
+**5.4 测试 WebSocket 透传**（可选，用 curl 验证 WS 握手）
+```bash
+curl -i -N \
+  -H "Connection: Upgrade" \
+  -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  "https://binance-proxy.<你的子域名>.workers.dev/main/ws/!ticker@arr"
+```
+期望返回 HTTP `101 Switching Protocols`。如果返回 451 或 502，说明 Worker 代码未包含 WebSocketPair 代理（确认使用最新版代码）。
 
 ### 步骤 6：配置 VPS .env
 
@@ -209,9 +303,9 @@ curl http://localhost:8000/health/detailed -H "X-API-Token: <API_TOKEN>"
 
 ---
 
-## 完整 Worker 代码（备份）
+## 完整 Worker 代码
 
-如需本地查看完整代码，见仓库文件：[scripts/cloudflare/binance-proxy-worker.js](file:///c:/Github/crypto-trading-system/scripts/cloudflare/binance-proxy-worker.js)
+仓库文件 [`scripts/cloudflare/binance-proxy-worker.js`](../scripts/cloudflare/binance-proxy-worker.js) 是唯一权威来源。步骤 4 中的代码为该文件的快照副本。如代码更新，请优先从仓库获取。
 
 ---
 
@@ -267,6 +361,9 @@ https://<worker>/testnet/sapi/v1
 | 仍然 451 | Worker 未生效 | 检查 .env 的 BINANCE_PROXY_URL 是否正确，重启服务 |
 | API 认证失败 | X-MBX-APIKEY 头未转发 | Worker 代码已处理，确认用最新版 |
 | `scripts is not defined` | 把文件路径当代码粘贴 | 复制代码内容本身，不是文件路径 |
+| WebSocket 连接失败 / WsFeed 报错 451 | Worker 代码缺少 WebSocketPair 代理 | 更新 Worker 代码为最新版（含 handleWebSocket 函数），旧版仅用 fetch 透传 WS 不正确 |
+| WebSocket 连接被上游拒绝 | CF 注入头未清理 | 最新版 cleanHeaders() 已移除 CF-Connecting-IP 等头，确认使用最新代码 |
+| 浏览器 CORS 报错 | OPTIONS 预检未处理 | 最新版已添加 OPTIONS → 204 响应，确认使用最新代码 |
 
 ---
 

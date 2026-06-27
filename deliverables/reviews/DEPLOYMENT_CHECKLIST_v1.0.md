@@ -119,75 +119,9 @@ nano .env
 
 1. 在 Worker 概览页点击 **Edit code**
 2. 全选删除默认代码（`Ctrl+A` → `Delete`）
-3. 粘贴以下代码（第一行应为 `/**`，不是文件路径）：
-
-```javascript
-/**
- * Binance API 反代 Cloudflare Worker
- */
-
-const UPSTREAM_MAP = {
-  "testnet.binance.vision": "testnet.binance.vision",
-  "api.binance.com": "api.binance.com",
-  "testnet.binancefuture.com": "testnet.binancefuture.com",
-};
-
-export default {
-  async fetch(request) {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/" || url.pathname === "/health") {
-      return new Response(JSON.stringify({ status: "ok", service: "binance-proxy" }), {
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    let upstreamHost = request.headers.get("x-upstream-host") || "api.binance.com";
-
-    const pathParts = url.pathname.match(/^\/(testnet|main)(\/.*)?$/);
-    if (pathParts) {
-      upstreamHost = pathParts[1] === "testnet" ? "testnet.binance.vision" : "api.binance.com";
-      url.pathname = pathParts[2] || "/";
-    }
-
-    if (!UPSTREAM_MAP[upstreamHost]) {
-      return new Response(JSON.stringify({
-        error: "unknown upstream",
-        host: upstreamHost,
-      }), { status: 400, headers: { "Content-Type": "application/json" } });
-    }
-
-    const upstreamUrl = `https://${upstreamHost}${url.pathname}${url.search}`;
-    const headers = new Headers(request.headers);
-    headers.delete("x-upstream-host");
-    headers.set("Host", upstreamHost);
-
-    const upstreamReq = new Request(upstreamUrl, {
-      method: request.method,
-      headers: headers,
-      body: request.method !== "GET" && request.method !== "HEAD" ? request.body : undefined,
-      redirect: "manual",
-    });
-
-    try {
-      const resp = await fetch(upstreamReq);
-      const respHeaders = new Headers(resp.headers);
-      respHeaders.set("Access-Control-Allow-Origin", "*");
-      return new Response(resp.body, {
-        status: resp.status,
-        statusText: resp.statusText,
-        headers: respHeaders,
-      });
-    } catch (e) {
-      return new Response(JSON.stringify({
-        error: "upstream_fetch_failed",
-        detail: String(e),
-      }), { status: 502, headers: { "Content-Type": "application/json" } });
-    }
-  },
-};
-```
-
+3. 从仓库文件 [`scripts/cloudflare/binance-proxy-worker.js`](../../scripts/cloudflare/binance-proxy-worker.js) 复制完整代码并粘贴（该文件是唯一权威来源）
+   - 关键特征：代码应包含 `handleWebSocket`（WebSocketPair API 桥接）、`cleanHeaders`（清理 CF 注入头）、`CORS_HEADERS`（OPTIONS 预检处理）
+   - 第一行应为 `/**`，不是文件路径
 4. 点击右上角 **Deploy**
 
 #### 3.3 验证 Worker
@@ -199,6 +133,17 @@ export default {
 | `https://<worker>.workers.dev/health` | `{"status":"ok","service":"binance-proxy"}` |
 | `https://<worker>.workers.dev/testnet/api/v3/ping` | `{}` |
 | `https://<worker>.workers.dev/main/api/v3/ping` | `{}` |
+
+WebSocket 验证（可选，确认 WS 代理正常）：
+```bash
+curl -i -N \
+  -H "Connection: Upgrade" \
+  -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  "https://<worker>.workers.dev/main/ws/!ticker@arr"
+```
+期望返回 HTTP `101 Switching Protocols`。
 
 #### 3.4 配置 .env 并重启
 
@@ -421,6 +366,9 @@ docker compose exec timescaledb psql -U postgres -d crypto_trading \
 | Grafana 无数据 | 数据源未配置 | 检查 config/grafana/provisioning/datasources/ |
 | 持仓漂移熔断 | 网络延迟导致订单未确认 | 检查 _unconfirmed 队列，等待对账 |
 | 日志填满磁盘 | 日志轮转未生效 | 确认 loguru rotation=50MB，docker json-file 10m×3 |
+| WebSocket 连接失败 / WsFeed 报 451 | Worker 代码旧版缺少 WebSocketPair 代理 | 更新 Worker 代码为最新版（含 handleWebSocket 函数） |
+| WebSocket 被上游拒绝 | CF 注入头未清理 | 最新版 cleanHeaders() 已移除 CF-Connecting-IP 等头 |
+| 浏览器 CORS 预检失败 | Worker 未处理 OPTIONS 请求 | 最新版已添加 OPTIONS → 204 响应 |
 
 ---
 
