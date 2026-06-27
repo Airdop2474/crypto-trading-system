@@ -1,18 +1,32 @@
-feat(network): Binance API 反代方案（绕过美国 IP 地域限制 451）
+fix(proxy+auth): 修复 paper_daemon 451 和 API_TOKEN 认证失败
 
-问题：美国 VPS 访问 Binance（含 testnet）返回 HTTP 451 地域限制。
-方案：Cloudflare Worker 反代中转，CF 出口 IP 非美国，免费额度足够。
+问题 1（P0）：paper_daemon 报 HTTP 451
+- 根因：src/data/exchange.py 的 ExchangeClient 没有反代逻辑
+  （反代只在 ExchangeBroker 和 src/api/market.py 里有）
+- daemon 拉历史 K 线走的是 ExchangeClient，不是 ExchangeBroker
+- 修复：给 ExchangeClient.__init__ 加反代调用
 
-改动：
-- config.py 新增 BINANCE_PROXY_URL 配置项
-- exchange_broker.py 构造时应用反代（testnet → /testnet/ 前缀）
-- market.py 公共行情应用反代（主网 → /main/ 前缀）
-- .env.example 加配置项说明
-- 新增 scripts/cloudflare/binance-proxy-worker.js Worker 代码
-- 新增 docs/BINANCE_PROXY_SETUP.md 部署指南
+问题 2（P0）：API_TOKEN 认证失败（403 Invalid or missing API token）
+- 根因：config.API_TOKEN 没有 .strip()
+- Docker env_file 不剥离引号，API_TOKEN="abc" 会注入字面量 "abc"（含引号）
+- 与前端干净的 abc 不匹配 → secrets.compare_digest 失败
+- 修复：config.API_TOKEN 加 .strip()，与 BINANCE_PROXY_URL 一致
 
-原理：ccxt urls["api"] 覆盖为 https://worker/testnet/api/v3，
-Worker 按路径前缀转发到 testnet.binance.vision 或 api.binance.com。
+问题 3（P2）：WsFeed 报 451（WebSocket 没走反代）
+- 根因：BINANCE_WS_URL 硬编码 wss://stream.binance.com:9443
+- 修复：get_ws_proxy_url() 自动改写为 wss://<worker>/main/ws/<path>
+- Worker 新增 WebSocket 代理路由 /main/ws/* → stream.binance.com:9443/ws/*
 
-测试：80 passed，零回归。反代逻辑仅在 BINANCE_PROXY_URL 非空时生效，
-空值保持原直连行为，向后兼容。
+重构：提取公共反代函数 src/utils/binance_proxy.py
+- apply_proxy_to_ccxt() 统一三处 ccxt URL 改写
+  （ExchangeBroker / market.py / ExchangeClient）
+- get_ws_proxy_url() 处理 WebSocket URL 改写
+- 避免今后再遗漏反代逻辑
+
+文档修复：
+- Authorization: Bearer → X-API-Token（后端实际期望的请求头）
+- 影响文件：DEPLOYMENT_CHECKLIST_v1.0.md、BINANCE_PROXY_SETUP.md
+
+测试：847 passed，零回归（1 个 test_health 失败是本地无 PostgreSQL，
+与代码改动无关）。反代逻辑仅在 BINANCE_PROXY_URL 非空时生效，
+空值保持直连行为，向后兼容。

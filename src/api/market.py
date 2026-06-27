@@ -12,6 +12,8 @@ from typing import List, Optional
 
 import ccxt
 
+from src.utils.binance_proxy import apply_proxy_to_ccxt
+
 # 前端 market-watch 展示的交易对（对齐 frontend/lib/mock-data.ts）
 WATCH_SYMBOLS = [
     "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT",
@@ -37,20 +39,7 @@ def _client():
                 })
                 # 反代中转：美国 IP 被地域限制（HTTP 451），通过 Cloudflare Worker 绕过
                 # 公共行情走主网，用 /main 前缀
-                try:
-                    from src.utils.config import config
-                    proxy = config.BINANCE_PROXY_URL
-                except Exception:
-                    proxy = ""
-                if proxy:
-                    proxy_prefix = proxy.rstrip("/") + "/main"
-                    api_urls = _exchange.urls.get("api")
-                    if isinstance(api_urls, dict):
-                        _exchange.urls["api"] = {
-                            f: proxy_prefix + p for f, p in api_urls.items()
-                        }
-                    else:
-                        _exchange.urls["api"] = proxy_prefix
+                apply_proxy_to_ccxt(_exchange, testnet=False, public=True)
     return _exchange
 
 

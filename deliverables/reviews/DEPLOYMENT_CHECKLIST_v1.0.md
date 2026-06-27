@@ -215,7 +215,7 @@ done
 **验证**：
 - [ ] `docker compose ps` 显示 5 个服务全部 Up（trading_system + paper_daemon + timescaledb + redis + grafana）
 - [ ] `curl http://localhost:8000/health` 返回 `{"status":"ok",...}`
-- [ ] `curl http://localhost:8000/health/detailed -H "Authorization: Bearer <API_TOKEN>"` 返回详细状态
+- [ ] `curl http://localhost:8000/health/detailed -H "X-API-Token: <API_TOKEN>"` 返回详细状态
 - [ ] 访问 `http://<VPS_IP>:3000` 看到 Grafana 登录页（用户名 admin，密码为 GRAFANA_ADMIN_PASSWORD）
 
 ### 步骤 5：启动 Paper Trading Daemon
@@ -223,7 +223,7 @@ done
 ```bash
 # 通过 API 启动 paper trading 模式（推荐）
 curl -X POST http://localhost:8000/modes/start \
-  -H "Authorization: Bearer <API_TOKEN>" \
+  -H "X-API-Token: <API_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"mode": "live_paper", "symbol": "BTC/USDT", "interval": "4h"}'
 ```
@@ -232,7 +232,7 @@ curl -X POST http://localhost:8000/modes/start \
 
 **验证**：
 - [ ] `docker compose logs paper_daemon -f --tail 20` 显示 daemon 正在运行
-- [ ] `curl http://localhost:8000/modes/status -H "Authorization: Bearer <API_TOKEN>"` 显示 `live_paper` running
+- [ ] `curl http://localhost:8000/modes/status -H "X-API-Token: <API_TOKEN>"` 显示 `live_paper` running
 - [ ] 等待第一根 4h K 线收盘后，检查策略是否产生信号
 
 ---
@@ -289,7 +289,7 @@ npm run dev
 - [ ] Telegram 告警可达（若配置了 bot）
 
 ### 风控验证
-- [ ] `curl http://<VPS_IP>:8000/risk/status -H "Authorization: Bearer <TOKEN>"` 返回风控状态
+- [ ] `curl http://<VPS_IP>:8000/risk/status -H "X-API-Token: <TOKEN>"` 返回风控状态
 - [ ] 测试急停：`POST /risk/control -d '{"action":"emergency_stop"}'`，确认 daemon 停止
 - [ ] 测试恢复：`POST /risk/control -d '{"action":"resume"}'`，确认 daemon 恢复
 
@@ -321,11 +321,11 @@ bash scripts/backup_db.sh                  # 手动备份
 # 或加到 crontab：0 3 * * * /root/crypto-trading-system/scripts/backup_db.sh
 
 # 查看风控状态
-curl http://localhost:8000/risk/status -H "Authorization: Bearer <TOKEN>"
+curl http://localhost:8000/risk/status -H "X-API-Token: <TOKEN>"
 
 # 紧急停止
 curl -X POST http://localhost:8000/risk/control \
-  -H "Authorization: Bearer <TOKEN>" \
+  -H "X-API-Token: <TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"action":"emergency_stop"}'
 ```

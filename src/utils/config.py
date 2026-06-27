@@ -63,8 +63,8 @@ class Config:
         # 留空=直连；填写如 https://binance-proxy.your-name.workers.dev
         self.BINANCE_PROXY_URL = os.getenv("BINANCE_PROXY_URL", "").strip()
 
-        # API Token for frontend auth
-        self.API_TOKEN = os.getenv("API_TOKEN", "")
+        # API Token for frontend auth（strip 防止 Docker env_file 不剥引号/Windows CRLF 导致认证失败）
+        self.API_TOKEN = os.getenv("API_TOKEN", "").strip()
 
         # ============================================
         # 实盘控制（重要！）

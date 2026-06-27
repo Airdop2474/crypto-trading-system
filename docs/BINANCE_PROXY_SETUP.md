@@ -202,7 +202,7 @@ Binance API 通过反代访问: https://binance-proxy.xxx.workers.dev/testnet
 
 ```bash
 # API 健康检查（替换 <API_TOKEN> 为 .env 中的值）
-curl http://localhost:8000/health/detailed -H "Authorization: Bearer <API_TOKEN>"
+curl http://localhost:8000/health/detailed -H "X-API-Token: <API_TOKEN>"
 ```
 
 期望看到 connectivity 字段为 PASS。

@@ -28,9 +28,10 @@ import websockets.exceptions
 
 from src.utils.logger import logger
 from src.utils.cache import cache, CacheKeys
+from src.utils.binance_proxy import get_ws_proxy_url
 
-# Binance 公开 WebSocket 端点
-BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/!ticker@arr"
+# Binance 公开 WebSocket 端点（直连；配置反代后自动改写）
+BINANCE_WS_URL = get_ws_proxy_url("wss://stream.binance.com:9443/ws/!ticker@arr")
 
 # 需要订阅的交易对（与 src/api/market.py 的 WATCH_SYMBOLS 对齐）
 WATCH_SYMBOLS = [

@@ -9,6 +9,7 @@ import ccxt
 import pandas as pd
 
 from src.utils.config import config
+from src.utils.binance_proxy import apply_proxy_to_ccxt
 from src.utils.logger import logger
 
 
@@ -58,6 +59,11 @@ class ExchangeClient:
         # 有凭据的 testnet 必须切换 sandbox 端点，防止测试网 Key 发往主网
         if testnet and api_key is not None and api_key != "" and secret is not None and secret != "":
             self.exchange.set_sandbox_mode(True)
+
+        # 反代中转：美国 IP 被地域限制（HTTP 451），通过 Cloudflare Worker 反代绕过
+        # 公开数据（无凭据）走主网 /main；有凭据的 testnet 走 /testnet
+        is_public = (api_key is None or api_key == "")
+        apply_proxy_to_ccxt(self.exchange, testnet=testnet, public=is_public)
 
         logger.info(
             f"Exchange client initialized: {exchange_id} "

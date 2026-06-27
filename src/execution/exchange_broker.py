@@ -15,16 +15,8 @@ from typing import Optional
 import ccxt
 
 from src.execution.broker import BrokerInterface, Order, OrderResult
+from src.utils.binance_proxy import apply_proxy_to_ccxt
 from src.utils.logger import logger
-
-
-def _get_proxy_url() -> str:
-    """读取 Binance 反代 URL（延迟导入 config 避免循环依赖）。"""
-    try:
-        from src.utils.config import config
-        return config.BINANCE_PROXY_URL
-    except Exception:
-        return ""
 
 
 class ExchangeBroker(BrokerInterface):
@@ -70,17 +62,7 @@ class ExchangeBroker(BrokerInterface):
 
             # 反代中转：美国 IP 被地域限制（HTTP 451），通过 Cloudflare Worker 反代绕过。
             # Worker 用路径前缀区分上游：/testnet/* → testnet.binance.vision，/main/* → api.binance.com
-            proxy_url = _get_proxy_url()
-            if proxy_url:
-                proxy_prefix = proxy_url.rstrip("/") + ("/testnet" if testnet else "/main")
-                api_urls = self.exchange.urls.get("api")
-                if isinstance(api_urls, dict):
-                    self.exchange.urls["api"] = {
-                        f: proxy_prefix + p for f, p in api_urls.items()
-                    }
-                else:
-                    self.exchange.urls["api"] = proxy_prefix
-                logger.info(f"Binance API 通过反代访问: {proxy_prefix}")
+            apply_proxy_to_ccxt(self.exchange, testnet=testnet, public=False)
 
         logger.info(
             f"ExchangeBroker initialized: {exchange_id} (testnet={testnet})"
