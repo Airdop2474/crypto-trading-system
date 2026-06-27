@@ -48,11 +48,9 @@ class ExchangeClient:
             params["apiKey"] = api_key
             params["secret"] = secret
 
-        # 测试网配置（Binance）
-        if testnet and exchange_id == "binance":
-            # 如果只是获取历史/公开数据，使用主网（不需要 API Key）
-            # 但若提供了 API Key，必须切换到测试网端点，否则凭据会发往主网
-            params["options"] = {"defaultType": "spot"}  # 现货，不是期货
+        # 强制现货模式（必须在构造前设置，否则 ccxt 新版默认走期货 fapi 端点）
+        if exchange_id == "binance":
+            params["options"] = {"defaultType": "spot"}
 
         self.exchange = exchange_class(params)
 
