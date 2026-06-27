@@ -6,7 +6,43 @@
 
 ---
 
-## 一、VPS 后端部署
+## 零、更新已部署系统（已部署过的人用）
+
+如果之前已部署过，只需更新代码和重建镜像，不用从头来：
+
+```bash
+cd /root/crypto-trading-system
+
+# 1. 拉新代码
+git pull origin master
+
+# 2. 重建镜像（代码改动必须 rebuild，不能只 restart）
+docker compose down
+docker compose build trading_system paper_daemon
+docker compose up -d
+
+# 3. 验证
+sleep 15
+docker compose ps
+API_TOKEN=$(grep "^API_TOKEN=" .env | cut -d= -f2- | tr -d '[:space:]')
+curl -s http://localhost:8000/health
+curl -s http://localhost:8000/health/detailed -H "X-API-Token: $API_TOKEN"
+docker compose logs trading_system --tail 30 | grep "反代"
+```
+
+**同时更新 Cloudflare Worker**（如果 Worker 代码有变化）：
+1. 登录 Cloudflare Dashboard → 你的 Worker → Edit code
+2. 粘贴 `scripts/cloudflare/binance-proxy-worker.js` 最新内容
+3. Deploy
+
+**关键变化提醒**：
+- API 请求头从 `Authorization: Bearer` 改为 `X-API-Token`（前端已自动用对的头，curl 测试要注意）
+- Worker 新增 WebSocket 代理路由（实时行情不再 451）
+- paper_daemon 现在也走反代（修复 K 线拉取 451）
+
+---
+
+## 一、VPS 后端部署（首次部署）
 
 ### 前置条件
 - [ ] VPS 已安装 Docker + Docker Compose
@@ -221,14 +257,30 @@ done
 ### 步骤 5：启动 Paper Trading Daemon
 
 ```bash
-# 通过 API 启动 paper trading 模式（推荐）
-curl -X POST http://localhost:8000/modes/start \
+# 通过 API 启动 paper trading 模式（推荐，可指定单个策略）
+curl -X POST http://localhost:8000/modes/live_paper/start \
   -H "X-API-Token: <API_TOKEN>" \
   -H "Content-Type: application/json" \
-  -d '{"mode": "live_paper", "symbol": "BTC/USDT", "interval": "4h"}'
+  -d '{
+    "strategies": ["grid"],
+    "symbol": "BTC/USDT",
+    "timeframe": "4h",
+    "days": 60
+  }'
 ```
 
-或通过 docker compose 直接启动 paper_daemon（已在 docker-compose.yml 中配置）。
+**参数说明**：
+- `strategies`：策略名数组，只启动你想要的（如 `["grid"]` 或 `["grid", "rsi"]`），不填默认 `["grid"]`
+- `symbol`：交易对（如 `BTC/USDT`、`ETH/USDT`）
+- `timeframe`：K 线周期（如 `4h`、`1h`）
+- `days`：运行天数（1-365）
+
+**查看可用策略**：
+```bash
+curl http://localhost:8000/strategies/registry -H "X-API-Token: <API_TOKEN>"
+```
+
+或通过 docker compose 直接启动 paper_daemon（已在 docker-compose.yml 中配置，默认跑 grid 60 天）。
 
 **验证**：
 - [ ] `docker compose logs paper_daemon -f --tail 20` 显示 daemon 正在运行
