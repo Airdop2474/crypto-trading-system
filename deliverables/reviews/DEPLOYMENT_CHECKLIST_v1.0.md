@@ -16,8 +16,8 @@
 ### 步骤 1：VPS 安全加固（首次部署）
 
 ```bash
-# SSH 登录 VPS（端口 2222）
-ssh -p 2222 root@<VPS_IP>
+# SSH 登录 VPS（端口 14159）
+ssh -p 14159 root@<VPS_IP>
 
 # 克隆代码
 git clone https://github.com/Airdop2474/crypto-trading-system.git /root/crypto-trading-system
@@ -28,9 +28,9 @@ bash scripts/vps_hardening.sh
 ```
 
 **验证**：
-- [ ] `iptables -L INPUT -n --line-numbers` 显示仅放行 2222/8000/3000
+- [ ] `iptables -L INPUT -n --line-numbers` 显示仅放行 14159/8000/3000
 - [ ] `fail2ban-client status sshd` 显示 sshd jail 已启用
-- [ ] `ssh -p 2222 root@localhost` 可连接
+- [ ] `ssh -p 14159 root@localhost` 可连接
 
 ### 步骤 2：配置 .env
 

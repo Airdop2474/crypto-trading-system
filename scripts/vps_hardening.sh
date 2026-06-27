@@ -2,18 +2,23 @@
 # ============================================================
 # VPS 安全加固脚本（crypto-trading-system v1.0）
 # 用法：在 VPS 上以 root 执行
-#   bash scripts/vps_hardening.sh
+#   bash scripts/vps_hardening.sh [SSH_PORT]
+#   默认 SSH_PORT=14159（与服务器实际端口一致）
 # 功能：
-#   1. iptables 防火墙（开 2222/8000/3000，其余 INPUT DROP）
-#   2. fail2ban 防暴力破解（sshd jail）
-#   3. SSH 加固（Port 2222 + MaxStartups）
+#   1. iptables 防火墙（开 SSH_PORT/8000/3000，其余 INPUT DROP）
+#   2. fail2ban 防暴力破解（sshd jail，监听 SSH_PORT）
+#   3. SSH 加固（MaxStartups，不修改 Port 避免断连）
 #   4. Docker 加速器（可选，国内网络）
 # 幂等：可重复执行，已配置的规则不重复添加
 # ============================================================
 set -e
 
+# SSH 端口（从参数读取，默认 14159）
+SSH_PORT="${1:-14159}"
+
 echo "=========================================="
 echo "  Crypto Trading System - VPS 安全加固"
+echo "  SSH 端口: ${SSH_PORT}"
 echo "=========================================="
 
 # ---------- 1. iptables 防火墙 ----------
@@ -37,8 +42,8 @@ if ! iptables -C INPUT -m comment --comment "crypto-trading-system-v1" 2>/dev/nu
     iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT \
         -m comment --comment "crypto-trading-system-v1"
 
-    # 允许 SSH（端口 2222，防止把自己锁在外面）
-    iptables -A INPUT -p tcp --dport 2222 -j ACCEPT \
+    # 允许 SSH（端口 ${SSH_PORT}，防止把自己锁在外面）
+    iptables -A INPUT -p tcp --dport ${SSH_PORT} -j ACCEPT \
         -m comment --comment "crypto-trading-system-v1"
 
     # 允许后端 API（8000）
@@ -68,12 +73,12 @@ if ! command -v fail2ban-client &> /dev/null; then
     apt-get install -y -qq fail2ban
 fi
 
-# 配置 sshd jail（幂等：覆盖写入）
-cat > /etc/fail2ban/jail.d/sshd.local <<'EOF'
+# 配置 sshd jail（幂等：覆盖写入，监听实际 SSH 端口）
+cat > /etc/fail2ban/jail.d/sshd.local <<EOF
 # crypto-trading-system v1.0 - SSH 暴力破解防护
 [sshd]
 enabled = true
-port = 2222
+port = ${SSH_PORT}
 filter = sshd
 logpath = /var/log/auth.log
 maxretry = 3
@@ -83,7 +88,7 @@ EOF
 
 systemctl enable fail2ban
 systemctl restart fail2ban
-echo "  fail2ban 已配置（sshd jail: maxretry=3, bantime=3600s）"
+echo "  fail2ban 已配置（sshd jail: port=${SSH_PORT}, maxretry=3, bantime=3600s）"
 
 # ---------- 3. SSH 加固 ----------
 echo "[3/4] 配置 SSH 加固..."
@@ -98,6 +103,7 @@ if [ ! -f "$SSHD_BACKUP" ]; then
 fi
 
 # 幂等修改 SSH 配置
+# 注意：不修改 Port（保持服务器现有端口 ${SSH_PORT}，避免断连）
 update_sshd() {
     local key=$1
     local value=$2
@@ -108,15 +114,14 @@ update_sshd() {
     fi
 }
 
-update_sshd "Port" "2222"
 update_sshd "PermitRootLogin" "yes"
 update_sshd "MaxStartups" "100:30:200"
 update_sshd "PasswordAuthentication" "yes"
 update_sshd "PubkeyAuthentication" "yes"
 
-# 重启 SSH（如果当前不是 2222 端口连接，这次重启不影响已建立的连接）
+# 重启 SSH（不改变端口，已建立的连接不受影响）
 systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true
-echo "  SSH 已加固（Port=2222, MaxStartups=100:30:200）"
+echo "  SSH 已加固（Port=${SSH_PORT} 保持不变, MaxStartups=100:30:200）"
 
 # ---------- 4. Docker 加速器（国内网络，可选）----------
 echo "[4/4] 检查 Docker 加速器..."
@@ -149,13 +154,13 @@ echo ""
 echo "=========================================="
 echo "  VPS 加固完成"
 echo "=========================================="
-echo "  iptables:  仅放行 2222/8000/3000"
-echo "  fail2ban:  sshd jail 已启用"
-echo "  SSH:       Port=2222, MaxStartups=100:30:200"
+echo "  iptables:  仅放行 ${SSH_PORT}/8000/3000"
+echo "  fail2ban:  sshd jail 已启用（port=${SSH_PORT}）"
+echo "  SSH:       Port=${SSH_PORT}（保持不变）, MaxStartups=100:30:200"
 echo "  Docker:    加速器 + 日志轮转已配置"
 echo ""
 echo "  验证命令:"
 echo "    iptables -L INPUT -n --line-numbers"
 echo "    fail2ban-client status sshd"
-echo "    ssh -p 2222 root@<VPS_IP>"
+echo "    ssh -p ${SSH_PORT} root@<VPS_IP>"
 echo "=========================================="
