@@ -56,13 +56,27 @@ def apply_proxy_to_ccxt(exchange, testnet: bool = False, public: bool = False) -
         prefix_path = "/testnet"
 
     proxy_prefix = proxy_url.rstrip("/") + prefix_path
+
+    def _rewrite(value):
+        """改写 URL：如果是完整 URL（含 https://），提取 path 部分；如果是纯路径，直接拼接。"""
+        if isinstance(value, str):
+            # 完整 URL：https://api.binance.com/api/v3 → /api/v3
+            if value.startswith("http://") or value.startswith("https://"):
+                from urllib.parse import urlparse
+                parsed = urlparse(value)
+                path = parsed.path
+                return proxy_prefix + path
+            # 纯路径：/api/v3 → proxy_prefix + /api/v3
+            return proxy_prefix + value
+        return value
+
     api_urls = exchange.urls.get("api")
     if isinstance(api_urls, dict):
         exchange.urls["api"] = {
-            f: proxy_prefix + p for f, p in api_urls.items()
+            f: _rewrite(p) for f, p in api_urls.items()
         }
     else:
-        exchange.urls["api"] = proxy_prefix
+        exchange.urls["api"] = _rewrite(api_urls)
 
     logger.info(f"Binance API 通过反代访问: {proxy_prefix}")
     return True
