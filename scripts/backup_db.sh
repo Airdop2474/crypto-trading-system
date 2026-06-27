@@ -2,7 +2,7 @@
 # ============================================================
 # 数据库自动备份脚本
 # 用法：加到 crontab 每日执行
-#   0 3 * * * /opt/crypto-trading-system/scripts/backup_db.sh
+#   0 3 * * * /root/crypto-trading-system/scripts/backup_db.sh
 # ============================================================
 set -e
 

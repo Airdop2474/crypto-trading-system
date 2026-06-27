@@ -27,7 +27,7 @@ fi
 
 # 2. 克隆代码
 REPO_URL="https://github.com/Airdop2474/crypto-trading-system.git"
-INSTALL_DIR="/opt/crypto-trading-system"
+INSTALL_DIR="/root/crypto-trading-system"
 
 if [ -d "$INSTALL_DIR" ]; then
     echo "[2/6] 更新已有代码..."

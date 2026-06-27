@@ -14,8 +14,8 @@ from loguru import logger
 def setup_logger(
     log_dir: str = "logs",
     log_level: str = "INFO",
-    rotation: str = "10 MB",
-    retention: str = "7 days",
+    rotation: str = "50 MB",
+    retention: str = "10 days",
     json_logs: Optional[bool] = None,
     environment: Optional[str] = None,
 ) -> None:
@@ -25,8 +25,8 @@ def setup_logger(
     参数：
         log_dir: 日志目录
         log_level: 日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）
-        rotation: 日志轮转大小
-        retention: 日志保留时间
+        rotation: 日志轮转大小（默认 50 MB，长期运行避免日志无限增长）
+        retention: 日志保留时间（默认 10 天，与 Docker json-file 10m×3 互补）
         json_logs: 是否额外输出 JSON 结构化日志（供 ELK/Loki 采集）。
             None（默认）时读 config.ENVIRONMENT：production 自动开启，其余关闭。
         environment: 注入每条 JSON 日志的 environment 字段。None 时取 config.ENVIRONMENT。

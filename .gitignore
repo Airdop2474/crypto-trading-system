@@ -189,3 +189,12 @@ data/hermes_events/
 
 # Binance 历史数据档案（大体积本地数据，不入库）
 data/Binance/
+
+# v1.0 部署包（构建产物，不入库）
+crypto-trading-system-v1.0.tar.gz
+*.tar.gz
+
+# 策略淘汰机制运行时状态（每策略独立文件，运行时累积）
+data/strategy_status.json
+data/portfolio_heat_grid.json
+data/reports/elimination/
