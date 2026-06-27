@@ -151,7 +151,7 @@ services:
       - ./data:/app/data
       - ./config:/app/config
     restart: unless-stopped
-    command: python scripts/run_paper_trading_daemon.py --days 60
+    command: python scripts/run_paper_trading_daemon.py --days 20 --timeframe 1h
     # 不设 ports —— 守护进程不需要对外暴露端口
     # 通过 checkpoint 文件（data/paper_daemon_state.json）实现崩溃恢复
 

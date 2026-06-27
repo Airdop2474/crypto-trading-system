@@ -2,17 +2,17 @@
 """
 Paper Trading 连续运行守护进程（LIVE_TRADING_CHECKLIST §1）
 
-把单次批量回测升级为可连续运行 N 天（默认 60）的模拟盘：每根 bar 收盘 →
+把单次批量回测升级为可连续运行 N 天（默认 20）的模拟盘：每根 bar 收盘 →
 取数 → 跑网格策略 → PaperBroker 成交 → 风控 → 落库 → 跨日出日报；崩溃/重启
 可凭状态检查点续跑（不丢进度、不重复成交）。
 
 双模：
-  实时（默认）：每根 4h bar 收盘从 Binance 拉真实 OHLCV，真连续运行。
+  实时（默认）：每根 1h bar 收盘从 Binance 拉真实 OHLCV，真连续运行。
   回放（--replay）：历史/生成数据加速跑完，用于验证/演练。
 
 用法：
   python scripts/run_paper_trading_daemon.py --replay generate --days 5
-  python scripts/run_paper_trading_daemon.py --days 60          # 实时（paper 模拟）
+  python scripts/run_paper_trading_daemon.py --days 20          # 实时（paper 模拟）
   python scripts/run_paper_trading_daemon.py --broker exchange --timeframe 1m --days 1
                                                                # testnet 真实下单
   人工恢复（风控暂停后）：创建文件 <state-file>.resume
@@ -249,7 +249,7 @@ class PaperTradingDaemon:
             df = generate_mock_ohlcv(
                 start_date=start.strftime("%Y-%m-%d"),
                 end_date=end.strftime("%Y-%m-%d"),
-                timeframe=self.args.timeframe or "4h",
+                timeframe=self.args.timeframe or "1h",
                 initial_price=50000.0,
                 market_type=market_type,
             )
@@ -964,9 +964,9 @@ class PaperTradingDaemon:
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Paper Trading 连续运行守护进程")
-    p.add_argument("--days", type=int, default=60)
+    p.add_argument("--days", type=int, default=20)
     p.add_argument("--symbol", default="BTC/USDT")
-    p.add_argument("--timeframe", default="4h")
+    p.add_argument("--timeframe", default="1h")
     p.add_argument("--initial", type=float, default=10000.0)
     from src.strategy.registry import STRATEGY_REGISTRY
     p.add_argument("--strategy", choices=list(STRATEGY_REGISTRY.keys()), action="append", default=[],

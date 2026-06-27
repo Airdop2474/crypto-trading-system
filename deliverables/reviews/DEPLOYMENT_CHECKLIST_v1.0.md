@@ -209,8 +209,8 @@ curl -X POST http://localhost:8000/modes/live_paper/start \
   -d '{
     "strategies": ["grid"],
     "symbol": "BTC/USDT",
-    "timeframe": "4h",
-    "days": 60
+    "timeframe": "1h",
+    "days": 20
   }'
 ```
 
@@ -225,12 +225,12 @@ curl -X POST http://localhost:8000/modes/live_paper/start \
 curl http://localhost:8000/strategies/registry -H "X-API-Token: <API_TOKEN>"
 ```
 
-或通过 docker compose 直接启动 paper_daemon（已在 docker-compose.yml 中配置，默认跑 grid 60 天）。
+或通过 docker compose 直接启动 paper_daemon（已在 docker-compose.yml 中配置，默认跑 grid 20 天）。
 
 **验证**：
 - [ ] `docker compose logs paper_daemon -f --tail 20` 显示 daemon 正在运行
 - [ ] `curl http://localhost:8000/modes/status -H "X-API-Token: <API_TOKEN>"` 显示 `live_paper` running
-- [ ] 等待第一根 4h K 线收盘后，检查策略是否产生信号
+- [ ] 等待第一根 1h K 线收盘后，检查策略是否产生信号
 
 ---
 

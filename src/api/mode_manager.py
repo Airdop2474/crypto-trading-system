@@ -84,8 +84,8 @@ class ModeStatus(str, Enum):
 # ---------------------------------------------------------------------------
 class ModeParams(BaseModel):
     symbol: str = "BTC/USDT"
-    timeframe: str = "4h"
-    days: int = Field(default=60, ge=1, le=365)
+    timeframe: str = "1h"
+    days: int = Field(default=20, ge=1, le=365)
     initial_capital: float = Field(default=10000.0, ge=100, le=1_000_000)
     poll_seconds: int = Field(default=60, ge=10, le=600)
     replay_csv: str | None = None

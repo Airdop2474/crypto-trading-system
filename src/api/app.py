@@ -800,7 +800,7 @@ def auto_optimize_stop_config(
             diffs = [(times_sorted[i+1] - times_sorted[i]).total_seconds() / 3600
                      for i in range(len(times_sorted)-1)]
             avg_bar_hours = float(np.median(diffs)) if diffs else 4.0
-            avg_duration_bars = max(5, int(avg_bar_hours / 4))  # 4h K线
+            avg_duration_bars = max(5, int(avg_bar_hours / 1))  # 1h K线
         else:
             avg_duration_bars = 50
     except Exception:
@@ -1305,7 +1305,7 @@ class CreateStrategyRequest(BaseModel):
     type: str
     symbol: str = "BTC/USDT"
     investment: float = Field(default=10000.0, ge=100, le=1_000_000)
-    timeframe: str = "4h"
+    timeframe: str = "1h"
     params: dict = {}
 
 
@@ -1998,8 +1998,8 @@ def admin_generate_data(request: Request, body: GenerateDataRequest, _=Security(
 # --------------------------------------------------------------------------
 class StartModeRequest(BaseModel):
     symbol: str = "BTC/USDT"
-    timeframe: str = "4h"
-    days: int = Field(default=60, ge=1, le=365)
+    timeframe: str = "1h"
+    days: int = Field(default=20, ge=1, le=365)
     initialCapital: float = Field(default=10000.0, ge=100, le=1_000_000)
     pollSeconds: int = Field(default=60, ge=10, le=600)
     replayCsv: str | None = None

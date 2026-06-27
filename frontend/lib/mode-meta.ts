@@ -76,8 +76,8 @@ export const MODE_DEFAULTS: Record<RunningMode, {
 }> = {
   replay_paper: {
     symbol: "BTC/USDT",
-    timeframe: "4h",
-    days: 60,
+    timeframe: "1h",
+    days: 20,
     initialCapital: 10000,
     pollSeconds: 60,
     showPollSeconds: false,
@@ -86,8 +86,8 @@ export const MODE_DEFAULTS: Record<RunningMode, {
   },
   live_paper: {
     symbol: "BTC/USDT",
-    timeframe: "4h",
-    days: 60,
+    timeframe: "1h",
+    days: 20,
     initialCapital: 10000,
     pollSeconds: 60,
     showPollSeconds: true,
@@ -96,8 +96,8 @@ export const MODE_DEFAULTS: Record<RunningMode, {
   },
   testnet_live: {
     symbol: "BTC/USDT",
-    timeframe: "4h",
-    days: 60,
+    timeframe: "1h",
+    days: 20,
     initialCapital: 10000,
     pollSeconds: 60,
     showPollSeconds: true,

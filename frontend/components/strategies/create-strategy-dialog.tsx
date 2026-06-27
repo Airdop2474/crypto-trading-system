@@ -53,7 +53,7 @@ export function CreateStrategyDialog({ children }: Props) {
 
   const [selectedType, setSelectedType] = useState<StrategyType | "">("")
   const [symbol, setSymbol] = useState<string>("")
-  const [timeframe, setTimeframe] = useState("4h")
+  const [timeframe, setTimeframe] = useState("1h")
   const [investment, setInvestment] = useState("10000")
   const [params, setParams] = useState<Record<string, string>>({})
 
@@ -149,7 +149,7 @@ export function CreateStrategyDialog({ children }: Props) {
       setOpen(false)
       setSelectedType("")
       setSymbol("")
-      setTimeframe("4h")
+      setTimeframe("1h")
       setInvestment("10000")
       setParams({})
     } catch (err) {
