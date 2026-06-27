@@ -1,0 +1,18 @@
+feat(network): Binance API 反代方案（绕过美国 IP 地域限制 451）
+
+问题：美国 VPS 访问 Binance（含 testnet）返回 HTTP 451 地域限制。
+方案：Cloudflare Worker 反代中转，CF 出口 IP 非美国，免费额度足够。
+
+改动：
+- config.py 新增 BINANCE_PROXY_URL 配置项
+- exchange_broker.py 构造时应用反代（testnet → /testnet/ 前缀）
+- market.py 公共行情应用反代（主网 → /main/ 前缀）
+- .env.example 加配置项说明
+- 新增 scripts/cloudflare/binance-proxy-worker.js Worker 代码
+- 新增 docs/BINANCE_PROXY_SETUP.md 部署指南
+
+原理：ccxt urls["api"] 覆盖为 https://worker/testnet/api/v3，
+Worker 按路径前缀转发到 testnet.binance.vision 或 api.binance.com。
+
+测试：80 passed，零回归。反代逻辑仅在 BINANCE_PROXY_URL 非空时生效，
+空值保持原直连行为，向后兼容。

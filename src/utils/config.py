@@ -59,6 +59,9 @@ class Config:
         self.BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
         self.BINANCE_SECRET = os.getenv("BINANCE_SECRET", "")
         self.BINANCE_TESTNET = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
+        # Binance 反代 URL（美国 IP 被地域限制 451，用 Cloudflare Worker 中转）
+        # 留空=直连；填写如 https://binance-proxy.your-name.workers.dev
+        self.BINANCE_PROXY_URL = os.getenv("BINANCE_PROXY_URL", "").strip()
 
         # API Token for frontend auth
         self.API_TOKEN = os.getenv("API_TOKEN", "")

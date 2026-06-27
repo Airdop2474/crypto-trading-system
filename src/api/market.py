@@ -35,6 +35,22 @@ def _client():
                     "timeout": 20000,  # 冷启动 load_markets 较慢，放宽避免首次回退
                     "options": {"defaultType": "spot"},
                 })
+                # 反代中转：美国 IP 被地域限制（HTTP 451），通过 Cloudflare Worker 绕过
+                # 公共行情走主网，用 /main 前缀
+                try:
+                    from src.utils.config import config
+                    proxy = config.BINANCE_PROXY_URL
+                except Exception:
+                    proxy = ""
+                if proxy:
+                    proxy_prefix = proxy.rstrip("/") + "/main"
+                    api_urls = _exchange.urls.get("api")
+                    if isinstance(api_urls, dict):
+                        _exchange.urls["api"] = {
+                            f: proxy_prefix + p for f, p in api_urls.items()
+                        }
+                    else:
+                        _exchange.urls["api"] = proxy_prefix
     return _exchange
 
 
