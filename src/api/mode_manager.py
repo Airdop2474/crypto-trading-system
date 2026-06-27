@@ -38,6 +38,31 @@ _STOP_TIMEOUT = 15  # 秒：等待子进程优雅退出
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 
+def pid_alive(pid: int) -> bool:
+    """检查 PID 是否存活（跨平台公共函数）。
+
+    - Windows: 用 OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) 查询，不发送信号
+    - POSIX:   用 os.kill(pid, 0) 仅做存在性检查
+    """
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            # 0x1000 = PROCESS_QUERY_LIMITED_INFORMATION
+            handle = kernel32.OpenProcess(0x1000, False, int(pid))
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            return False
+        else:
+            os.kill(pid, 0)
+            return True
+    except (OSError, ProcessLookupError):
+        return False
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # 枚举
 # ---------------------------------------------------------------------------
@@ -408,28 +433,44 @@ class ModeManager:
                 self._clear_mode_state(key)
 
     async def stop_all(self):
-        """优雅停止所有运行中的模式（lifespan shutdown 调用）。"""
+        """优雅停止所有运行中的模式（lifespan shutdown 调用）。
+
+        多策略模式下 st.processes 含 N 个子进程，必须全部终止，
+        否则 API 关闭后剩余子进程会成为孤儿继续运行（占用端口、写 state 文件）。
+        """
+        # 第一阶段：terminate 所有子进程
         for mode in RunningMode:
             st = self._modes[mode.value]
-            if st.status == ModeStatus.RUNNING and st.process is not None:
+            if st.status != ModeStatus.RUNNING:
+                continue
+            # 遍历 st.processes（多策略），兼容旧的单进程 st.process
+            procs = st.processes if st.processes else ([st.process] if st.process else [])
+            for proc in procs:
+                if proc is None:
+                    continue
                 try:
-                    st.process.terminate()
+                    proc.terminate()
                 except ProcessLookupError:
                     pass
-        # 等待所有进程退出
+        # 第二阶段：等待所有子进程退出
         for mode in RunningMode:
             st = self._modes[mode.value]
-            if st.process is not None:
+            procs = st.processes if st.processes else ([st.process] if st.process else [])
+            for proc in procs:
+                if proc is None:
+                    continue
                 try:
-                    await asyncio.wait_for(st.process.wait(), timeout=_STOP_TIMEOUT)
+                    await asyncio.wait_for(proc.wait(), timeout=_STOP_TIMEOUT)
                 except asyncio.TimeoutError:
                     try:
-                        st.process.kill()
+                        proc.kill()
                     except ProcessLookupError:
                         pass
-                st.status = ModeStatus.IDLE
-                st.process = None
-                self._clear_mode_state(mode.value)
+            st.status = ModeStatus.IDLE
+            st.process = None
+            st.processes = []
+            st.pids = []
+            self._clear_mode_state(mode.value)
         logger.info("所有运行模式已停止")
 
     # ------------------------------------------------------------------
@@ -444,7 +485,11 @@ class ModeManager:
         return None
 
     def _build_commands(self, mode: RunningMode, params: ModeParams) -> list[list[str]]:
-        """为每个策略构建一条独立命令（多策略并行，避免串行阻塞）。"""
+        """为每个策略构建一条独立命令（多策略并行，避免串行阻塞）。
+        自动过滤掉 archived/disabled 状态的策略，避免启动已淘汰的策略。
+        """
+        from src.api.strategy_status_store import get_active_strategies
+
         py = sys.executable
         scripts = PROJECT_ROOT / "scripts"
         base = [py, str(scripts / "run_paper_trading_daemon.py")]
@@ -470,11 +515,25 @@ class ModeManager:
         if params.fresh and mode != RunningMode.REPLAY_PAPER:
             mode_args.append("--fresh")
 
+        # 一次性过滤归档/禁用策略（避免循环内重复读 strategy_status.json）
+        active_keys = set(get_active_strategies(params.strategies))
         commands: list[list[str]] = []
+        skipped_archived: list[str] = []
         for strat in params.strategies:
+            if strat not in active_keys:
+                # 获取具体状态用于日志
+                from src.api.strategy_status_store import get_strategy_status
+                skipped_archived.append(f"{strat}({get_strategy_status(strat)})")
+                continue
             state_file = str(PROJECT_ROOT / "data" / f"paper_daemon_state_{mode.value}_{strat}.json")
             args = common_args + ["--state-file", state_file] + mode_args + ["--strategy", strat]
             commands.append(base + args)
+
+        if skipped_archived:
+            logger.warning(
+                f"mode_manager: 跳过 {len(skipped_archived)} 个已归档/禁用的策略: "
+                f"{', '.join(skipped_archived)}"
+            )
         return commands
 
     async def _read_output(self, proc: asyncio.subprocess.Process, mode: RunningMode):
@@ -552,7 +611,9 @@ class ModeManager:
             "started_at": st.started_at.isoformat() if st.started_at else None,
             "params": st.params,
         }
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 原子写：避免崩溃时留下半截 JSON 导致 recover_on_startup 解析失败
+        from src.utils.file_io import atomic_write_json
+        atomic_write_json(path, data)
 
     def _load_mode_state(self, key: str) -> dict | None:
         path = STATE_DIR / f"{key}.json"
@@ -572,20 +633,7 @@ class ModeManager:
     @staticmethod
     def _pid_alive(pid: int) -> bool:
         """检查 PID 是否存活（跨平台）。"""
-        try:
-            if sys.platform == "win32":
-                import ctypes
-                kernel32 = ctypes.windll.kernel32
-                handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-                if handle:
-                    kernel32.CloseHandle(handle)
-                    return True
-                return False
-            else:
-                os.kill(pid, 0)
-                return True
-        except (OSError, ProcessLookupError):
-            return False
+        return pid_alive(pid)
 
 
 # 模块级单例

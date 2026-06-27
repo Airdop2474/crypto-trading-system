@@ -1,16 +1,16 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Activity, AlertTriangle, CheckCircle, Loader2, Play, TrendingDown, TrendingUp, MessageSquare } from "lucide-react"
 import { api } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ApiError } from "@/components/api-error"
 import { cn } from "@/lib/utils"
-import { STRATEGY_TYPE_LABEL } from "@/lib/strategy-meta"
-import type { MonteCarloResult } from "@/lib/types"
+import { STRATEGY_TYPE_LABEL, STRATEGY_TYPE_CATEGORY, STRATEGY_CATEGORY_LABEL, STRATEGY_CATEGORIES } from "@/lib/strategy-meta"
+import type { MonteCarloResult, StrategyType } from "@/lib/types"
 
 /**
  * 基于 MC 结果生成自然语言解读：优点 / 缺点 / 建议
@@ -95,6 +95,21 @@ export function MonteCarloPanel() {
   // 方法 → 中文显示文本
   const methodLabel = method === "trade_bootstrap" ? "交易重采样" : "收益重采样"
 
+  // 按分类分组生成策略选项（覆盖全部 49 个策略，避免硬编码）
+  const strategyOptions = useMemo(() => {
+    const allKeys = Object.keys(STRATEGY_TYPE_LABEL) as StrategyType[]
+    return STRATEGY_CATEGORIES.map((cat) => ({
+      category: cat,
+      label: STRATEGY_CATEGORY_LABEL[cat],
+      items: allKeys
+        .filter((k) => STRATEGY_TYPE_CATEGORY[k] === cat)
+        .map((k) => ({
+          value: `${k}-btc-usdt`,
+          label: STRATEGY_TYPE_LABEL[k],
+        })),
+    })).filter((g) => g.items.length > 0)
+  }, [])
+
   const handleRun = async () => {
     if (cooldown > 0) return
     setLoading(true)
@@ -136,18 +151,16 @@ export function MonteCarloPanel() {
                 <SelectValue>{strategyLabel}</SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="grid-btc-usdt">{STRATEGY_TYPE_LABEL.grid}</SelectItem>
-                <SelectItem value="rsi-btc-usdt">{STRATEGY_TYPE_LABEL.rsi}</SelectItem>
-                <SelectItem value="ma-btc-usdt">{STRATEGY_TYPE_LABEL.ma}</SelectItem>
-                <SelectItem value="donchian-btc-usdt">{STRATEGY_TYPE_LABEL.donchian}</SelectItem>
-                <SelectItem value="structure-btc-usdt">{STRATEGY_TYPE_LABEL.structure}</SelectItem>
-                <SelectItem value="supertrend-btc-usdt">{STRATEGY_TYPE_LABEL.supertrend}</SelectItem>
-                <SelectItem value="reversal-btc-usdt">{STRATEGY_TYPE_LABEL.reversal}</SelectItem>
-                <SelectItem value="buyhold-btc-usdt">{STRATEGY_TYPE_LABEL.buyhold}</SelectItem>
-                <SelectItem value="priceaction-btc-usdt">{STRATEGY_TYPE_LABEL.priceaction}</SelectItem>
-                <SelectItem value="bollinger-btc-usdt">{STRATEGY_TYPE_LABEL.bollinger}</SelectItem>
-                <SelectItem value="macd-btc-usdt">{STRATEGY_TYPE_LABEL.macd}</SelectItem>
-                <SelectItem value="composite-btc-usdt">{STRATEGY_TYPE_LABEL.composite}</SelectItem>
+                {strategyOptions.map((group) => (
+                  <SelectGroup key={group.category}>
+                    <SelectLabel>{group.label}</SelectLabel>
+                    {group.items.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
               </SelectContent>
             </Select>
           </div>

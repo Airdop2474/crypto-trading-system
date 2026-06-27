@@ -1454,13 +1454,51 @@ _STRATEGY_DESCRIPTIONS = {
     "bollinger": "布林带均值回归，价格触及下轨买入、上轨卖出",
     "macd": "MACD 金叉买入、死叉卖出，配合趋势过滤",
     "composite": "复合 ADX+EMA+MACD+RSI 多因子趋势策略",
+    # 新增 37 个策略描述
+    "multilevel": "短期+长期高低点同时突破，过滤单级假突破",
+    "squeeze": "持续收缩后大实体突破收缩区间",
+    "strongmom": "连续同向且每根收盘在强势区，捕捉加速度",
+    "purekeylvl": "极值关键位附近出现吞没或pin反转K入场",
+    "confluence": "7个形态角度等权投票，累计达阈值入场",
+    "closebreak": "收盘突破前n根高低点，纯结构离场",
+    "threesoldiers": "连续同向大实体且收盘逐根创新高/低",
+    "bigbar": "当前实体远超近期平均实体时入场",
+    "pinsmall": "小实体pin bar出现在区间极值附近",
+    "morningstar": "大实体+十字星+反向大实体收复中点的三根形态",
+    "pullback": "突破后回踩到突破点附近入场",
+    "ampbreak": "突破根振幅远超近期平均振幅",
+    "wicksweep": "影线破极值但收盘收回中点，反向入场",
+    "confakeout": "多次假突破后反向入场",
+    "consmomentum": "连续同向大实体K线动量延续",
+    "accmomentum": "连续同向且实体逐根递增的加速动量",
+    "bullengulfseq": "连续多次吞没形态序列确认入场",
+    "shortlongsqz": "短期振幅收缩于长期后大实体突破",
+    "insidechain": "连续内含线嵌套后突破母线",
+    "qualitysqz": "收缩后高质量大实体突破",
+    "decaykey": "关键位多次测试后降权失效的反转",
+    "multiwinkey": "多窗口关键位共振处的反转",
+    "weightedvote": "不同角度加权投票达阈值入场",
+    "requiredcat": "需同时满足位置极值和反转形态两证据",
+    "masterslave": "关键位反转主信号+突破辅助确认",
+    "sessionfilter": "仅指定交易时段（亚/欧/美盘）内突破",
+    "dayofweek": "仅指定星期几允许交易突破",
+    "monthpos": "仅月初月末调仓期允许交易突破",
+    "closemonotonic": "近n根收盘价严格单调递增入场",
+    "hlexpansion": "高低点序列同向单调的严格趋势",
+    "closedist": "收盘位于近期区间上沿视为强势",
+    "mtfconfluence": "大周期趋势+小周期突破共振入场",
+    "dualbreakout": "短长期窗口高点同根被突破",
+    "tfdivergence": "大小周期趋势背离时的抄底信号",
+    "volbreakout": "放量配合的突破信号",
+    "volpricediv": "价格新低且放量的底背离抄底",
+    "takerbuyratio": "主动买盘占比超阈值且突破入场",
 }
 
 # 风控参数 — 创建对话框中不展示（由 RiskAwareStrategy 基类统一管理）
 _RISK_PARAM_KEYS = {"max_consecutive_losses", "max_daily_loss", "max_drawdown"}
 
 # Python 类型对象 → JSON 可序列化的字符串名称
-_TYPE_NAMES = {int: "int", float: "float", bool: "bool"}
+_TYPE_NAMES = {int: "int", float: "float", bool: "bool", str: "str", list: "list"}
 
 
 def _serialize_schema(schema: dict) -> dict:
@@ -1475,9 +1513,32 @@ def _serialize_schema(schema: dict) -> dict:
 
 
 def get_registry(state: dict) -> list[dict]:
-    """返回 8 个策略的注册信息（名称、PARAM_SCHEMA、默认参数、运行状态）。"""
+    """返回策略的注册信息（名称、PARAM_SCHEMA、默认参数、运行状态）。
+
+    运行状态判断优先级：
+      1. live_data：daemon 实盘模式下，根据 state 文件 + 模式运行状态判断
+      2. _multi_runner：预跑/回测模式下，根据 multi_runner.slots 判断
+    """
     from src.strategy.registry import STRATEGY_REGISTRY, _STRATEGY_LABELS
 
+    # 优先用 live_data 判断 running（实盘 daemon 模式）
+    live_running_keys: set[str] = set()
+    try:
+        from src.api import live_data
+        live_states = live_data._load_all_states()
+        if live_states:
+            active_mode = live_data._find_active_mode()
+            mode_running = live_data._is_mode_running(active_mode) if active_mode else False
+            if mode_running:
+                # 过滤空 strategy_name，避免误入空串
+                live_running_keys = {
+                    s.get("strategy_name", "") for s in live_states
+                    if s.get("strategy_name")
+                }
+    except Exception as e:
+        logger.debug(f"get_registry: live_data 判断 running 失败: {e}")
+
+    # 回退：预跑/回测模式用 _multi_runner
     multi_runner = state.get("_multi_runner")
     running_ids = set()
     if multi_runner:
@@ -1514,7 +1575,10 @@ def get_registry(state: dict) -> list[dict]:
             pass
 
         # 当前有多少个此类型的实例在运行
+        # 1. 预跑/回测模式：从 multi_runner.slots 统计
         instances = sum(1 for sid in running_ids if sid.startswith(f"{key}-"))
+        # 2. 实盘 daemon 模式：检查是否有对应的 state 文件且模式在运行
+        is_live_running = key in live_running_keys
 
         result.append({
             "key": key,
@@ -1522,8 +1586,8 @@ def get_registry(state: dict) -> list[dict]:
             "description": _STRATEGY_DESCRIPTIONS.get(key, ""),
             "param_schema": user_schema,
             "defaults": defaults,
-            "running": instances > 0,
-            "instances": instances,
+            "running": instances > 0 or is_live_running,
+            "instances": max(instances, 1 if is_live_running else 0),
         })
 
     return result
@@ -1559,7 +1623,13 @@ def create_strategy(
             ptype = constraints.get("type")
             if ptype and not isinstance(val, ptype):
                 try:
-                    params[key] = ptype(val)
+                    # list 类型：前端传逗号分隔字符串（如 "1,2,3"），解析成 list
+                    if ptype is list and isinstance(val, str):
+                        params[key] = [int(x.strip()) for x in val.split(",") if x.strip()]
+                    elif ptype is list and isinstance(val, list):
+                        pass  # 已经是 list
+                    else:
+                        params[key] = ptype(val)
                 except (ValueError, TypeError):
                     raise ValueError(f"参数 {key} 类型错误，期望 {ptype.__name__}")
             if "min" in constraints and val < constraints["min"]:
@@ -1585,6 +1655,34 @@ def create_strategy(
         "createdAt": datetime.now().isoformat(),
         "params": params,
     }
+
+
+def coerce_params(strategy_type: str, params: dict) -> dict:
+    """根据 PARAM_SCHEMA 把前端传入的参数转换成正确的 Python 类型。
+
+    主要处理 list 类型：前端传逗号分隔字符串（如 "1,2,3"），后端解析成 list[int]。
+    其他类型（int/float/bool/str）保持原值，由 create_strategy / update_strategy_params
+    在校验时做进一步转换。
+
+    这样保证持久化到 strategy_configs.json 的是正确的 Python 类型，
+    daemon 重启加载时不会因字符串形式的 list 导致策略静默失效。
+    """
+    from src.strategy.registry import STRATEGY_REGISTRY
+
+    if strategy_type not in STRATEGY_REGISTRY:
+        return params  # 未知策略类型，不转换（后续校验会报错）
+    cls = STRATEGY_REGISTRY[strategy_type]
+    schema = getattr(cls, "PARAM_SCHEMA", {})
+    result = dict(params)
+    for key, val in result.items():
+        if key in schema:
+            ptype = schema[key].get("type")
+            if ptype is list and isinstance(val, str):
+                try:
+                    result[key] = [int(x.strip()) for x in val.split(",") if x.strip()]
+                except ValueError:
+                    pass  # 转换失败保留原值，后续校验会报错
+    return result
 
 
 def update_strategy_params(state: dict, strategy_id: str, params: dict) -> dict:
@@ -1613,13 +1711,21 @@ def update_strategy_params(state: dict, strategy_id: str, params: dict) -> dict:
                     ptype = constraints.get("type")
                     if ptype:
                         try:
-                            val = ptype(val)
+                            # list 类型：前端传逗号分隔字符串（如 "1,2,3"），解析成 list
+                            if ptype is list and isinstance(val, str):
+                                val = [int(x.strip()) for x in val.split(",") if x.strip()]
+                            elif ptype is list and isinstance(val, list):
+                                pass  # 已经是 list
+                            else:
+                                val = ptype(val)
                         except (ValueError, TypeError):
                             raise ValueError(f"参数 {key} 类型错误")
-                    if "min" in constraints and val < constraints["min"]:
-                        raise ValueError(f"参数 {key} 不能小于 {constraints['min']}")
-                    if "max" in constraints and val > constraints["max"]:
-                        raise ValueError(f"参数 {key} 不能大于 {constraints['max']}")
+                    # list 类型不参与 min/max 数值边界检查
+                    if ptype is not list:
+                        if "min" in constraints and val < constraints["min"]:
+                            raise ValueError(f"参数 {key} 不能小于 {constraints['min']}")
+                        if "max" in constraints and val > constraints["max"]:
+                            raise ValueError(f"参数 {key} 不能大于 {constraints['max']}")
                     setattr(strategy, key, val)
                     updated[key] = val
 

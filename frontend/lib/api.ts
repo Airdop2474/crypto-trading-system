@@ -46,6 +46,8 @@ import type {
   StrategyPerformance,
   StrategyRegistryResponse,
   StrategyRunHistoryResponse,
+  StrategyStatusEntry,
+  EliminationReportResponse,
   Ticker,
   TelegramConfig,
   TelegramConfigUpdate,
@@ -97,22 +99,39 @@ async function get<T>(path: string): Promise<T> {
       clearTimeout(timeoutId)
 
       if (!res.ok) {
-        // 4xx 不重试（客户端错误），5xx 重试
-        if (res.status < 500 && attempt < MAX_RETRIES) {
-          throw new Error(`GET ${path} failed: ${res.status}`)
+        // 提取后端 detail 信息（与 POST/PATCH 路径一致）
+        const body = await res.json().catch(() => ({}))
+        const detail = body?.detail
+        const errMsg = typeof detail === "string" && detail
+          ? detail
+          : `GET ${path} failed: ${res.status}`
+
+        // 4xx 是客户端错误，直接抛出不重试（避免无谓重试浪费请求）
+        if (res.status < 500) {
+          throw new Error(errMsg)
         }
-        if (res.status >= 500 && attempt < MAX_RETRIES) {
-          lastError = new Error(`GET ${path} failed: ${res.status}`)
+
+        // 5xx 才重试
+        lastError = new Error(errMsg)
+        if (attempt < MAX_RETRIES) {
           await sleep(RETRY_BASE_DELAY_MS * Math.pow(2, attempt))
           continue
         }
-        throw new Error(`GET ${path} failed: ${res.status}`)
+        throw lastError
       }
 
       return res.json() as Promise<T>
     } catch (e) {
       clearTimeout(timeoutId)
       lastError = e instanceof Error ? e : new Error(String(e))
+
+      // 已经是 4xx 错误（带 status 标记）则不重试，直接抛出
+      if (e instanceof Error && /failed: \d{3}/.test(e.message)) {
+        const statusMatch = e.message.match(/failed: (\d{3})/)
+        if (statusMatch && parseInt(statusMatch[1], 10) < 500) {
+          throw e
+        }
+      }
 
       // abort（超时）或网络错误才重试
       if (attempt < MAX_RETRIES) {
@@ -430,6 +449,32 @@ export const api = {
   getStrategyConfigs: (): Promise<Record<string, Record<string, number | boolean>>> =>
     get("/strategies/configs"),
 
+  // GET /strategies/status — 获取全部策略的归档状态
+  getStrategiesStatus: (): Promise<Record<string, StrategyStatusEntry>> =>
+    get("/strategies/status"),
+
+  // POST /strategies/{type}/status — 设置策略状态（归档/恢复）
+  setStrategyStatus: async (
+    strategyType: string,
+    status: "active" | "archived" | "disabled",
+    reason: string = "",
+  ): Promise<{ strategy_type: string; status: string; reason: string; archived_at: string }> => {
+    const params = new URLSearchParams({ status, reason })
+    const res = await fetch(`${API_BASE}/strategies/${strategyType}/status?${params}`, {
+      method: "POST",
+      headers: { "X-API-Token": API_TOKEN },
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || `设置策略状态失败: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  // GET /strategies/elimination/report — 获取最新淘汰报告
+  getLatestEliminationReport: (): Promise<EliminationReportResponse> =>
+    get("/strategies/elimination/report"),
+
   // POST /strategies/create
   createStrategy: async (params: CreateStrategyParams): Promise<Strategy> => {
     const res = await fetch(`${API_BASE}/strategies/create`, {
@@ -447,8 +492,8 @@ export const api = {
   // PATCH /strategies/{id}/params
   updateStrategyParams: async (
     id: string,
-    params: Record<string, number | boolean>,
-  ): Promise<{ strategy_id: string; updated: Record<string, number | boolean> }> => {
+    params: Record<string, number | boolean | string>,
+  ): Promise<{ strategy_id: string; updated: Record<string, number | boolean | string> }> => {
     const res = await fetch(`${API_BASE}/strategies/${id}/params`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", "X-API-Token": API_TOKEN },

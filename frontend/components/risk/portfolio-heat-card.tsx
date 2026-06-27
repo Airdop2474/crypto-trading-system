@@ -1,7 +1,8 @@
 "use client"
 
+import { useState, useMemo } from "react"
 import useSWR from "swr"
-import { Flame, RefreshCw } from "lucide-react"
+import { Flame, RefreshCw, ChevronDown, ChevronUp } from "lucide-react"
 import { api } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -11,12 +12,24 @@ import { ApiError } from "@/components/api-error"
 import { cn } from "@/lib/utils"
 import { getStrategyLabelColor } from "@/lib/strategy-meta"
 
+/** 默认显示前 N 个策略（按热力值降序），其余折叠 */
+const TOP_N = 5
+
 export function PortfolioHeatCard() {
   const { data, error, isLoading, mutate } = useSWR(
     "portfolio-heat",
     api.getPortfolioHeat,
     { refreshInterval: 10000 }, // 10秒自动刷新
   )
+  const [expanded, setExpanded] = useState(false)
+
+  const heat = data ?? { total_heat: 0, max_heat: 0.15, heat_pct: 0, strategies: {}, updated_at: null }
+
+  // 按热力值降序排序（必须在所有条件 return 之前调用，遵守 Hooks 规则）
+  const strategyEntries = useMemo(() => {
+    const entries = Object.entries(heat.strategies || {})
+    return entries.sort((a, b) => (b[1].heat ?? 0) - (a[1].heat ?? 0))
+  }, [heat.strategies])
 
   if (isLoading) {
     return (
@@ -50,11 +63,13 @@ export function PortfolioHeatCard() {
     )
   }
 
-  const heat = data ?? { total_heat: 0, max_heat: 0.15, heat_pct: 0, strategies: {}, updated_at: null }
   const heatPct = heat.heat_pct
   const isWarning = heatPct >= 60
   const isDanger = heatPct >= 80
-  const strategyEntries = Object.entries(heat.strategies || {})
+
+  const totalCount = strategyEntries.length
+  const visibleEntries = expanded ? strategyEntries : strategyEntries.slice(0, TOP_N)
+  const hiddenCount = Math.max(0, totalCount - TOP_N)
 
   return (
     <Card>
@@ -76,6 +91,7 @@ export function PortfolioHeatCard() {
               size="icon"
               className="h-7 w-7"
               onClick={() => mutate()}
+              aria-label="刷新组合热力"
             >
               <RefreshCw className="h-3 w-3" />
             </Button>
@@ -105,12 +121,19 @@ export function PortfolioHeatCard() {
           </div>
         </div>
 
-        {/* 各策略热力明细 */}
+        {/* 各策略热力明细（按热力降序，Top N + 折叠） */}
         {strategyEntries.length > 0 ? (
           <div className="space-y-2">
-            <div className="text-xs font-medium text-muted-foreground">各策略热力明细</div>
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-medium text-muted-foreground">
+                各策略热力明细
+              </div>
+              <div className="text-[10px] text-muted-foreground">
+                共 {totalCount} 个持仓策略
+              </div>
+            </div>
             <div className="space-y-1.5">
-              {strategyEntries.map(([name, info]) => {
+              {visibleEntries.map(([name, info]) => {
                 const pct = heat.max_heat > 0 ? (info.heat / heat.max_heat) * 100 : 0
                 const { label, color } = getStrategyLabelColor(name)
                 return (
@@ -132,6 +155,26 @@ export function PortfolioHeatCard() {
                 )
               })}
             </div>
+            {/* 展开/收起按钮 */}
+            {hiddenCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors w-full justify-center pt-1"
+              >
+                {expanded ? (
+                  <>
+                    <ChevronUp className="size-3" />
+                    收起（隐藏 {hiddenCount} 个低热力策略）
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="size-3" />
+                    展开剩余 {hiddenCount} 个低热力策略
+                  </>
+                )}
+              </button>
+            )}
           </div>
         ) : (
           <div className="text-center text-sm text-muted-foreground py-2">

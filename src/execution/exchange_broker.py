@@ -80,7 +80,18 @@ class ExchangeBroker(BrokerInterface):
         return balance.get(base_currency, {}).get("free", 0.0)
 
     def place_order(self, order: Order) -> OrderResult:
-        """通过交易所 API 下单（Phase 5-6 仅 testnet 测试）"""
+        """通过交易所 API 下单（Phase 5-6 仅 testnet 测试）
+
+        关键设计：网络错误不返回 order_id=None（会被误判为失败导致重复下单），
+        而是返回 pending_query 状态 + 携带 client_order_id，让上层走对账流程。
+        client_order_id 用于后续幂等查询：网络恢复后用同一 clientOrderId 查询，
+        交易所按此键去重，避免重复下单。
+        """
+        # 构造 ccxt params：传 clientOrderId 让交易所做幂等去重
+        params = {}
+        if order.client_order_id:
+            params["clientOrderId"] = order.client_order_id
+
         try:
             result = self.exchange.create_order(
                 symbol=order.symbol,
@@ -88,25 +99,44 @@ class ExchangeBroker(BrokerInterface):
                 side=order.side,
                 amount=order.amount,
                 price=order.price if order.order_type == "limit" else None,
+                params=params,
             )
             order_id = result.get("id")
             if order_id is not None:
                 self._order_symbols[order_id] = order.symbol
+            # 同步记 client_order_id → symbol 映射（网络错误后用 clientOrderId 查单）
+            if order.client_order_id:
+                self._order_symbols[order.client_order_id] = order.symbol
             return OrderResult(
                 order_id=order_id,
                 status=result.get("status"),
                 filled_price=result.get("average"),
                 filled_amount=result.get("filled"),
+                client_order_id=order.client_order_id,
             )
         except ccxt.InsufficientFunds:
-            return OrderResult(order_id=None, status="rejected", reason="资金不足")
-        except ccxt.NetworkError as e:
             return OrderResult(
-                order_id=None, status="error", reason=f"网络错误：{e}"
+                order_id=None, status="rejected", reason="资金不足",
+                client_order_id=order.client_order_id,
+            )
+        except ccxt.NetworkError as e:
+            # 网络错误：订单可能已被交易所接收（请求超时/响应丢失）。
+            # 不返回 order_id=None（会被误判为失败 → 重复下单），
+            # 而是返回 pending_query + client_order_id，让上层入对账队列。
+            logger.warning(
+                f"下单网络错误（可能已成交，待对账）"
+                f" {order.symbol} {order.side} {order.amount}: {e}"
+            )
+            return OrderResult(
+                order_id=None,
+                status="pending_query",
+                reason=f"网络错误，需对账：{e}",
+                client_order_id=order.client_order_id,
             )
         except Exception as e:
             return OrderResult(
-                order_id=None, status="error", reason=f"下单失败：{e}"
+                order_id=None, status="error", reason=f"下单失败：{e}",
+                client_order_id=order.client_order_id,
             )
 
     def cancel_order(self, order_id: str) -> bool:

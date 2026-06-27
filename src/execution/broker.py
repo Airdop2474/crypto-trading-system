@@ -23,16 +23,30 @@ class Order:
     order_type: str = "market"  # 'market', 'limit', 'stop_limit'
     limit_price: Optional[float] = None  # 限价单价格 / stop-limit 的限价
     stop_price: Optional[float] = None   # stop-limit 的触发价
+    # 幂等键：用于网络错误后对账查询，避免重复下单。
+    # 由调用方生成（如 strategy_id-bar_ts-side-amount_hash），传给交易所做去重。
+    client_order_id: Optional[str] = None
 
 
 @dataclass
 class OrderResult:
-    """下单结果"""
+    """下单结果
+
+    status 取值：
+    - 'filled'/'partial'：已成交（携带真实价量）
+    - 'rejected'：交易所拒单（资金不足、sizing 不过等，无 order_id）
+    - 'pending'：挂单等待成交（限价单未触发）
+    - 'pending_query'：下单请求已发但响应丢失（网络错误），需后续对账。
+    - 'timeout'：下单成功但确认超时（有 order_id，调用方决定撤单/对账）
+    - 'error'：其他未知错误
+    """
     order_id: Optional[str]
-    status: str  # 'filled', 'rejected', 'pending', 'error'
+    status: str
     filled_price: Optional[float] = None
     filled_amount: Optional[float] = None
     reason: Optional[str] = None
+    # 携带 client_order_id 便于后续对账查询（网络错误时尤其重要）
+    client_order_id: Optional[str] = None
 
 
 class BrokerInterface(ABC):

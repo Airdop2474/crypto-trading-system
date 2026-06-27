@@ -84,14 +84,17 @@ class ExchangeExecutor:
             return amount_r, False, f"名义额 {notional:.4f} < minNotional {min_cost}"
         return amount_r, True, ""
 
-    def place_and_confirm(self, symbol, side, amount, ref_price, order_type="market", **kwargs):
+    def place_and_confirm(self, symbol, side, amount, ref_price, order_type="market", client_order_id=None, **kwargs):
         """下单并确认成交。
 
-        返回 OrderResult，status ∈ {filled, partial, timeout, rejected}：
+        返回 OrderResult，status ∈ {filled, partial, timeout, rejected, pending_query}：
             - rejected：sizing 不过 或 交易所拒单（无 order_id）
             - filled/partial：拿到真实成交价量，按 FULL_FILL_TOL 判全/部分
-            - timeout：下单成功但 timeout 内未确认成交（调用方决定撤单/重试）
+            - timeout：下单成功但 timeout 内未确认成交（调用方决定撤单/对账）
+            - pending_query：下单请求发出但响应丢失（网络错误），需后续对账
 
+        参数：
+            client_order_id: 幂等键，传给交易所做去重；网络错误后用此键对账查询
         kwargs 支持:
             price: 限价单价格（覆盖 ref_price）
             stop_price: stop-limit 单的触发价
@@ -99,7 +102,8 @@ class ExchangeExecutor:
         amount_r, ok, reason = self.size_order(symbol, amount, ref_price)
         if not ok:
             logger.warning(f"sizing 拒单 {symbol} {side} {amount}: {reason}")
-            return OrderResult(order_id=None, status="rejected", reason=reason)
+            return OrderResult(order_id=None, status="rejected", reason=reason,
+                               client_order_id=client_order_id)
 
         price_arg = kwargs.get("price", ref_price)
         if order_type == "limit":
@@ -108,20 +112,68 @@ class ExchangeExecutor:
         stop_price = kwargs.get("stop_price")
         order_obj = Order(symbol, side, amount_r, price_arg, order_type,
                           limit_price=price_arg if order_type == "limit" else None,
-                          stop_price=stop_price)
+                          stop_price=stop_price,
+                          client_order_id=client_order_id)
 
         res = self.broker.place_order(order_obj)
-        if res.order_id is None:
+        # pending_query：网络错误，订单可能已成交，直接返回让上层入对账队列
+        if res.status == "pending_query":
+            return res
+        if res.order_id is None and res.status != "pending_query":
             return OrderResult(order_id=None, status="rejected",
-                               reason=res.reason or res.status)
+                               reason=res.reason or res.status,
+                               client_order_id=client_order_id)
 
         price, filled, _src = self._confirm(res)
         if price is None:
             return OrderResult(order_id=res.order_id, status="timeout",
-                               reason=f"{self.timeout}s 内未确认成交")
+                               reason=f"{self.timeout}s 内未确认成交",
+                               client_order_id=client_order_id)
         status = "filled" if filled >= amount_r * self.FULL_FILL_TOL else "partial"
         return OrderResult(order_id=res.order_id, status=status,
-                           filled_price=float(price), filled_amount=float(filled))
+                           filled_price=float(price), filled_amount=float(filled),
+                           client_order_id=client_order_id)
+
+    def place_limit_no_wait(self, symbol, side, amount, limit_price, ref_price,
+                            client_order_id=None) -> OrderResult:
+        """只挂限价单不确认（阶段3 路径统一）。
+
+        与 place_and_confirm 的区别：不调 _confirm 轮询 30s，挂单成功即返回 pending，
+        让上层入挂单队列，每 bar 由 check_pending_orders 查询状态。
+
+        返回 OrderResult：
+            - rejected：sizing 不过 或 交易所拒单
+            - filled：交易所同步返回已成交（testnet 偶尔瞬时成交）
+            - pending：挂单成功，等待跨 bar 撮合
+            - pending_query：网络错误，需对账
+        """
+        amount_r, ok, reason = self.size_order(symbol, amount, ref_price)
+        if not ok:
+            logger.warning(f"limit_no_wait sizing 拒单 {symbol} {side} {amount}: {reason}")
+            return OrderResult(order_id=None, status="rejected", reason=reason,
+                               client_order_id=client_order_id)
+
+        price_arg = float(self.exchange.price_to_precision(symbol, limit_price))
+        order_obj = Order(symbol, side, amount_r, price_arg, "limit",
+                          limit_price=price_arg, client_order_id=client_order_id)
+
+        res = self.broker.place_order(order_obj)
+        # pending_query：网络错误，直接返回让上层入对账队列
+        if res.status == "pending_query":
+            return res
+        if res.order_id is None:
+            return OrderResult(order_id=None, status="rejected",
+                               reason=res.reason or res.status,
+                               client_order_id=client_order_id)
+        # 交易所同步返回已成交（testnet 偶尔瞬时成交）→ 返 filled
+        price, filled, _src = extract_fill(res)
+        if price is not None and filled and filled > 0:
+            return OrderResult(order_id=res.order_id, status="filled",
+                               filled_price=float(price), filled_amount=float(filled),
+                               client_order_id=client_order_id)
+        # 挂单成功，未成交 → 返 pending，让上层入挂单队列
+        return OrderResult(order_id=res.order_id, status="pending",
+                           client_order_id=client_order_id)
 
     def _confirm(self, place_result):
         """取成交价量：先用下单返回（市价单同步即有），缺则轮询查单到超时。

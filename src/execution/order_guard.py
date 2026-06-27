@@ -62,5 +62,33 @@ class OrderRateGuard:
     def _same_day(self, ts):
         return self._day is not None and pd.Timestamp(ts).date() == self._day
 
+    def state_dict(self) -> dict:
+        """序列化运行时状态，用于 checkpoint 持久化。
+
+        不持久化 reference_capital 等配置（构造时已确定），
+        只持久化运行时累计的 _last_ts/_day/_count，避免重启后护栏失效。
+        """
+        return {
+            "_last_ts": str(self._last_ts) if self._last_ts is not None else None,
+            "_day": str(self._day) if self._day is not None else None,
+            "_count": self._count,
+        }
+
+    def load_state(self, st: dict) -> None:
+        """从 checkpoint 恢复运行时状态。
+
+        _day 从字符串还原为 date 对象；_last_ts 保持字符串（check 时用 pd.Timestamp 解析）。
+        """
+        if not st:
+            return
+        self._last_ts = st.get("_last_ts")
+        day_str = st.get("_day")
+        if day_str:
+            try:
+                self._day = pd.Timestamp(day_str).date()
+            except Exception:
+                self._day = None
+        self._count = st.get("_count", 0)
+
 
 __all__ = ["OrderRateGuard"]

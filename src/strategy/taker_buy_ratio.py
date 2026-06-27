@@ -35,6 +35,8 @@ class TakerBuyRatioStrategy(RiskAwareStrategy):
         self.n = n
         self.threshold = threshold
         self._in_position = False
+        # 标记是否已警告过数据列缺失（避免每根 bar 都刷日志）
+        self._warned_missing_col = False
         self.set_parameters(n=n, threshold=threshold)
         self._init_risk_state()
         logger.info(f"TakerBuyRatio initialized: n={n}, threshold={threshold}")
@@ -57,6 +59,22 @@ class TakerBuyRatioStrategy(RiskAwareStrategy):
 
         row = data.iloc[-1]
         vol = float(row["volume"])
+
+        # 数据列检查：taker_buy_base_volume 是 Binance 原生字段，
+        # 但 CCXT 统一 fetch_ohlcv 只返回标准 6 列 OHLCV，不包含此列。
+        # 缺失时策略无法计算主动买盘比，记录一次警告后返回 None（不出信号），
+        # 避免静默失效让用户误以为策略在运行。
+        if "taker_buy_base_volume" not in data.columns:
+            if not self._warned_missing_col:
+                logger.warning(
+                    "TakerBuyRatio: 数据缺少 'taker_buy_base_volume' 列，"
+                    "无法计算主动买盘比，策略将不产生信号。"
+                    "此策略需要 Binance 原生 klines 数据（12 列），"
+                    "当前数据源只提供标准 6 列 OHLCV。"
+                )
+                self._warned_missing_col = True
+            return None
+
         taker_buy = float(row.get("taker_buy_base_volume", 0))
         if vol <= 0:
             return None

@@ -1,7 +1,17 @@
 // 领域模型类型定义 —— 前后端共享的数据契约
 // 未来对接真实接口时，保持这些类型不变即可让 UI 无缝复用。
 
-export type StrategyType = "grid" | "rsi" | "ma" | "buyhold" | "donchian" | "structure" | "supertrend" | "reversal" | "priceaction" | "bollinger" | "macd" | "composite"
+export type StrategyType =
+  | "grid" | "rsi" | "ma" | "buyhold" | "donchian" | "structure" | "supertrend"
+  | "reversal" | "priceaction" | "bollinger" | "macd" | "composite"
+  | "multilevel" | "squeeze" | "strongmom" | "purekeylvl" | "confluence"
+  | "closebreak" | "threesoldiers" | "bigbar" | "pinsmall" | "morningstar"
+  | "pullback" | "ampbreak" | "wicksweep" | "confakeout" | "consmomentum"
+  | "accmomentum" | "bullengulfseq" | "shortlongsqz" | "insidechain"
+  | "qualitysqz" | "decaykey" | "multiwinkey" | "weightedvote" | "requiredcat"
+  | "masterslave" | "sessionfilter" | "dayofweek" | "monthpos" | "closemonotonic"
+  | "hlexpansion" | "closedist" | "mtfconfluence" | "dualbreakout"
+  | "tfdivergence" | "volbreakout" | "volpricediv" | "takerbuyratio"
 export type StrategyStatus = "running" | "paused" | "stopped"
 export type Side = "buy" | "sell"
 export type OrderStatus = "filled" | "open" | "partially_filled" | "canceled"
@@ -513,9 +523,10 @@ export interface EvolutionStats {
 
 /** PARAM_SCHEMA 中单个参数的约束 */
 export interface ParamConstraint {
-  type?: string          // "int" | "float" | "bool"（后端序列化后的字符串）
+  type?: string          // "int" | "float" | "bool" | "str" | "list"（后端序列化后的字符串）
   min?: number
   max?: number
+  default?: unknown      // 部分策略的默认值
 }
 
 /** 策略注册表中每个策略的注册信息 */
@@ -524,7 +535,7 @@ export interface StrategyRegistryEntry {
   name: string           // 中文标签
   description: string
   param_schema: Record<string, ParamConstraint>
-  defaults: Record<string, number | boolean>
+  defaults: Record<string, number | boolean | string>
   running: boolean
   instances: number
 }
@@ -533,13 +544,74 @@ export interface StrategyRegistryResponse {
   strategies: StrategyRegistryEntry[]
 }
 
+/** 策略归档状态条目 */
+export interface StrategyStatusEntry {
+  status: "active" | "archived" | "disabled"
+  reason: string
+  archived_at: string
+}
+
+/** 淘汰评估报告中的单个策略评估结果 */
+export interface EliminationEvalEntry {
+  strategy: string
+  label: string
+  category: string
+  total_score: number
+  scores: {
+    performance: number
+    robustness: number
+    diversity: number
+    category: number
+  }
+  metrics: {
+    sharpe: number
+    annual_return: number
+    max_drawdown: number
+    win_rate: number
+    profit_factor: number
+    total_trades: number
+    realized_pnl: number
+  }
+  elimination_flags: string[]
+  verdict: "KEEP" | "WARN" | "ELIMINATE"
+}
+
+/** 待归档策略条目 */
+export interface EliminationArchiveEntry {
+  strategy: string
+  label: string
+  reason: string
+  total_score: number
+}
+
+/** 淘汰评估报告响应 */
+export interface EliminationReportResponse {
+  exists: boolean
+  filename?: string
+  report?: {
+    timestamp: string
+    threshold: number
+    evaluated: EliminationEvalEntry[]
+    to_archive: EliminationArchiveEntry[]
+    skipped: { strategy: string; label: string; reason: string }[]
+    summary: {
+      total_active: number
+      evaluated: number
+      skipped: number
+      to_archive: number
+      remaining_after: number
+      threshold: number
+    }
+  }
+}
+
 /** 通用策略创建请求 */
 export interface CreateStrategyParams {
   type: StrategyType
   symbol: string
   investment: number
   timeframe?: string
-  params: Record<string, number | boolean>
+  params: Record<string, number | boolean | string>
 }
 
 /** 策略运行历史条目 */

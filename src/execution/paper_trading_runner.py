@@ -23,6 +23,24 @@ from src.strategy.base import Order as StrategyOrder
 from src.utils.logger import logger
 
 
+def _make_client_order_id(symbol: str, side: str, time, amount: float) -> str:
+    """生成幂等 clientOrderId：symbol-side-timestamp-amount_hash
+
+    用途：传给交易所做去重，网络错误后用此键对账查询，避免重复下单。
+    规则：同一 bar 同方向同数量的订单生成相同 ID（幂等）；
+    不同 bar/方向/数量生成不同 ID（区分）。
+    """
+    import hashlib
+    # 归一化：symbol 小写、amount 取 8 位小数避免浮点抖动
+    sym = symbol.replace("/", "").lower()
+    amt = f"{amount:.8f}"
+    ts = str(time)
+    raw = f"{sym}-{side}-{ts}-{amt}"
+    # 取 8 位短 hash 拼接，保证 ID 可读且不超长（交易所通常限制 36 字符）
+    h = hashlib.md5(raw.encode()).hexdigest()[:8]
+    return f"{sym}-{side}-{h}"
+
+
 @dataclass(frozen=True)
 class ExecutionConfig:
     """成交经济参数（手续费/滑点/初始资金）。
@@ -230,7 +248,8 @@ class PaperTradingRunner:
             return
         order_type = "limit" if limit_price is not None else "market"
         broker_order = BrokerOrder(
-            self.symbol, "buy", amount, price, order_type
+            self.symbol, "buy", amount, price, order_type,
+            client_order_id=_make_client_order_id(self.symbol, "buy", time, amount),
         )
         if limit_price is not None:
             broker_order.limit_price = limit_price
@@ -253,7 +272,8 @@ class PaperTradingRunner:
         lot = self.lots.get(tag)
         order_type = "limit" if limit_price is not None else "market"
         broker_order = BrokerOrder(
-            self.symbol, "sell", amount, price, order_type
+            self.symbol, "sell", amount, price, order_type,
+            client_order_id=_make_client_order_id(self.symbol, "sell", time, amount),
         )
         if limit_price is not None:
             broker_order.limit_price = limit_price

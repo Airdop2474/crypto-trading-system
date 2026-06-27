@@ -102,7 +102,7 @@ export function CreateStrategyDialog({ children }: Props) {
       return
     }
 
-    const parsedParams: Record<string, number | boolean> = {}
+    const parsedParams: Record<string, number | boolean | string> = {}
     for (const [key, constraint] of userParams) {
       const raw = params[key]
       if (raw == null || raw === "") {
@@ -111,6 +111,11 @@ export function CreateStrategyDialog({ children }: Props) {
       }
       if (constraint.type === "bool") {
         parsedParams[key] = raw === "true" || raw === "1"
+      } else if (constraint.type === "str") {
+        parsedParams[key] = raw
+      } else if (constraint.type === "list") {
+        // list 类型：用户输入逗号分隔（如 "1,2,3,4"），直接传字符串给后端解析
+        parsedParams[key] = raw
       } else {
         const num = Number(raw)
         if (isNaN(num)) {
@@ -242,36 +247,46 @@ export function CreateStrategyDialog({ children }: Props) {
               <span className="text-xs font-medium text-muted-foreground">
                 策略参数
               </span>
-              {userParams.map(([key, constraint]) => (
-                <div key={key} className="flex flex-col gap-1.5">
-                  <Label htmlFor={`param-${key}`} className="text-xs">
-                    {getParamLabel(key)}
-                  </Label>
-                  <Input
-                    id={`param-${key}`}
-                    type={constraint.type === "bool" ? "text" : "number"}
-                    placeholder={
-                      constraint.type === "bool"
-                        ? "true / false"
-                        : constraint.min != null && constraint.max != null
-                          ? `${constraint.min} ~ ${constraint.max}`
-                          : undefined
-                    }
-                    min={constraint.min}
-                    max={constraint.max}
-                    step={constraint.type === "int" ? 1 : 0.01}
-                    value={params[key] ?? ""}
-                    onChange={(e) => updateParam(key, e.target.value)}
-                  />
-                  {(constraint.min != null || constraint.max != null) && (
-                    <span className="text-[10px] text-muted-foreground">
-                      {constraint.min != null && `最小: ${constraint.min}`}
-                      {constraint.min != null && constraint.max != null && " | "}
-                      {constraint.max != null && `最大: ${constraint.max}`}
-                    </span>
-                  )}
-                </div>
-              ))}
+              {userParams.map(([key, constraint]) => {
+                const isNumeric = constraint.type === "int" || constraint.type === "float"
+                const isText = constraint.type === "str"
+                const isList = constraint.type === "list"
+                const isBool = constraint.type === "bool"
+                return (
+                  <div key={key} className="flex flex-col gap-1.5">
+                    <Label htmlFor={`param-${key}`} className="text-xs">
+                      {getParamLabel(key)}
+                    </Label>
+                    <Input
+                      id={`param-${key}`}
+                      type={isNumeric ? "number" : "text"}
+                      placeholder={
+                        isBool
+                          ? "true / false"
+                          : isList
+                            ? "逗号分隔，如 1,2,3,4"
+                            : isText
+                              ? "请输入文本"
+                              : constraint.min != null && constraint.max != null
+                                ? `${constraint.min} ~ ${constraint.max}`
+                                : undefined
+                      }
+                      min={isNumeric ? constraint.min : undefined}
+                      max={isNumeric ? constraint.max : undefined}
+                      step={constraint.type === "int" ? 1 : 0.01}
+                      value={params[key] ?? ""}
+                      onChange={(e) => updateParam(key, e.target.value)}
+                    />
+                    {isNumeric && (constraint.min != null || constraint.max != null) && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {constraint.min != null && `最小: ${constraint.min}`}
+                        {constraint.min != null && constraint.max != null && " | "}
+                        {constraint.max != null && `最大: ${constraint.max}`}
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
 

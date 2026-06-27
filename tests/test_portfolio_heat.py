@@ -115,7 +115,8 @@ class TestSharedFile:
             lots={"t1": {"amount": 0.1, "cost_price": 50000.0}},
             current_price=50000.0, atr=1000.0, initial_capital=10000.0
         )
-        assert (Path(tmp_state_dir) / "portfolio_heat.json").exists()
+        # 新设计：每策略独立文件 portfolio_heat_{strategy}.json
+        assert (Path(tmp_state_dir) / "portfolio_heat_rsi.json").exists()
 
     def test_multiple_strategies_aggregate(self, tmp_state_dir):
         """多个策略写入同一共享文件，读取时聚合"""

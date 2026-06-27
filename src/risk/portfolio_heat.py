@@ -63,6 +63,9 @@ class PortfolioHeatManager:
         self.strategy_name = strategy_name
         self.state_dir = Path(state_dir)
         self.max_heat = max_heat
+        # 每策略独立文件，避免多进程读-改-写共享文件导致丢失更新
+        self._my_file = self.state_dir / f"portfolio_heat_{strategy_name}.json"
+        # 兼容旧字段名（仍指向旧的共享文件，仅用于读取迁移）
         self._shared_file = self.state_dir / "portfolio_heat.json"
         self._my_heat: float = 0.0
         self._last_update: float = 0.0
@@ -186,63 +189,89 @@ class PortfolioHeatManager:
         }
 
     def _write_shared(self, position_value: float, position_risk: float) -> None:
-        """写入共享文件（合并更新）"""
+        """写入本策略独立文件（原子写，无多进程竞争）。"""
         try:
-            data = self._read_shared() or {
-                "strategies": {},
-                "updated_at": None,
-            }
-
-            data["strategies"][self.strategy_name] = {
+            data = {
+                "strategy": self.strategy_name,
                 "heat": round(self._my_heat, 6),
                 "position_value": round(position_value, 2),
                 "position_risk": round(position_risk, 2),
                 "updated_at": datetime.now().isoformat(),
             }
-            data["updated_at"] = datetime.now().isoformat()
-
-            # 原子写入
-            tmp_file = self._shared_file.with_suffix(".tmp")
-            tmp_file.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            tmp_file.replace(self._shared_file)
-
+            from src.utils.file_io import atomic_write_json
+            atomic_write_json(self._my_file, data)
         except Exception as e:
             logger.debug(f"PortfolioHeat write failed: {e}")
 
     def _read_shared(self) -> Optional[dict]:
-        """读取共享文件"""
+        """聚合读取所有策略的独立热力文件。
+
+        扫描 state_dir 下所有 portfolio_heat_*.json，合并为统一结构。
+        同时兼容旧的共享文件 portfolio_heat.json（若存在）。
+        """
         try:
-            if not self._shared_file.exists():
+            strategies: dict[str, dict] = {}
+            latest_updated_at = None
+
+            # 1. 兼容读取旧共享文件
+            if self._shared_file.exists():
+                try:
+                    legacy = json.loads(self._shared_file.read_text(encoding="utf-8"))
+                    if isinstance(legacy, dict) and "strategies" in legacy:
+                        strategies.update(legacy["strategies"])
+                        latest_updated_at = legacy.get("updated_at")
+                except Exception:
+                    pass
+
+            # 2. 读取每策略独立文件（覆盖旧共享文件的同名条目）
+            if self.state_dir.exists():
+                for f in self.state_dir.glob("portfolio_heat_*.json"):
+                    try:
+                        d = json.loads(f.read_text(encoding="utf-8"))
+                        if not isinstance(d, dict):
+                            continue
+                        sname = d.get("strategy")
+                        if not sname:
+                            continue
+                        strategies[sname] = {
+                            "heat": float(d.get("heat", 0)),
+                            "position_value": float(d.get("position_value", 0)),
+                            "position_risk": float(d.get("position_risk", 0)),
+                            "updated_at": d.get("updated_at"),
+                        }
+                        u = d.get("updated_at")
+                        if u and (latest_updated_at is None or u > latest_updated_at):
+                            latest_updated_at = u
+                    except Exception as e:
+                        logger.debug(f"PortfolioHeat 读取 {f.name} 失败: {e}")
+
+            if not strategies:
                 return None
-            return json.loads(
-                self._shared_file.read_text(encoding="utf-8")
-            )
+
+            return {
+                "strategies": strategies,
+                "updated_at": latest_updated_at,
+            }
         except Exception as e:
             logger.debug(f"PortfolioHeat read failed: {e}")
             return None
 
     def clear(self) -> None:
-        """清除本策略的热力记录（平仓后调用）"""
+        """清除本策略的热力记录（平仓后调用）。
+
+        只需写自己的独立文件为 0，无需读-改-写共享文件。
+        """
         self._my_heat = 0.0
         try:
-            data = self._read_shared() or {"strategies": {}, "updated_at": None}
-            if self.strategy_name in data.get("strategies", {}):
-                data["strategies"][self.strategy_name] = {
-                    "heat": 0.0,
-                    "position_value": 0.0,
-                    "position_risk": 0.0,
-                    "updated_at": datetime.now().isoformat(),
-                }
-                data["updated_at"] = datetime.now().isoformat()
-                tmp_file = self._shared_file.with_suffix(".tmp")
-                tmp_file.write_text(
-                    json.dumps(data, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                tmp_file.replace(self._shared_file)
+            data = {
+                "strategy": self.strategy_name,
+                "heat": 0.0,
+                "position_value": 0.0,
+                "position_risk": 0.0,
+                "updated_at": datetime.now().isoformat(),
+            }
+            from src.utils.file_io import atomic_write_json
+            atomic_write_json(self._my_file, data)
         except Exception as e:
             logger.debug(f"PortfolioHeat clear failed: {e}")
 

@@ -146,7 +146,7 @@ export function StrategyEvaluationPanel() {
 
         {!results && !error && !loading && (
           <div className="text-center text-sm text-muted-foreground py-8">
-            点击「运行评估」对 12 策略进行全面评估（含 MC 模拟 + 参数稳定性）
+            点击「运行评估」对所有运行中策略进行全面评估（含 MC 模拟 + 参数稳定性）
           </div>
         )}
       </CardContent>

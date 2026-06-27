@@ -329,8 +329,10 @@ class PerformanceMetrics:
         # 下行标准差（只计算负收益的标准差）
         downside_returns = returns[returns < 0]
         if len(downside_returns) == 0:
-            logger.info("Sortino: no downside volatility, returning inf")
-            return float("inf") if mean_return > 0 else 0.0
+            # 无下行波动时返回有限大数（与 profit_factor=999.0 约定一致），
+            # 避免 inf 破坏 JSON 序列化与下游加权评分
+            logger.info("Sortino: no downside volatility, returning 999.0")
+            return 999.0 if mean_return > 0 else 0.0
 
         downside_std = downside_returns.std()
         if downside_std == 0:

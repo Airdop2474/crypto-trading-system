@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.utils.logger import logger
+from src.utils.file_io import atomic_write_json, safe_read_json
 
 _STRATEGY_CONFIG_PATH = Path("data/strategy_configs.json")
 
@@ -18,20 +19,13 @@ def _load() -> dict[str, dict]:
     """读取全部策略配置。"""
     if not _STRATEGY_CONFIG_PATH.exists():
         return {}
-    try:
-        return json.loads(_STRATEGY_CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.warning(f"读取策略配置失败: {e}")
-        return {}
+    data = safe_read_json(_STRATEGY_CONFIG_PATH, default={})
+    return data if isinstance(data, dict) else {}
 
 
 def _save(data: dict[str, dict]) -> None:
-    """写入全部策略配置。"""
-    _STRATEGY_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _STRATEGY_CONFIG_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    """写入全部策略配置（原子写）。"""
+    atomic_write_json(_STRATEGY_CONFIG_PATH, data)
 
 
 def get_strategy_config(strategy_type: str) -> Optional[dict]:

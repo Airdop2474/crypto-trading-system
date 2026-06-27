@@ -335,6 +335,10 @@ class PaperTradingDaemon:
                 "last_pause_reason": getattr(self.risk, '_last_pause_reason', None),
             },
             "pending": _ser_pending(self.pending),
+            # OrderRateGuard 运行时状态：避免重启后护栏失效（日订单数计数归零）
+            "guard": self.broker.guard.state_dict() if (
+                self.args.broker == "exchange" and self.broker.guard is not None
+            ) else None,
         }
         target = Path(path) if path else self.state_file
         tmp = Path(str(target) + ".tmp")
@@ -357,6 +361,16 @@ class PaperTradingDaemon:
                 raise SystemExit(
                     f"重启发现未确认订单仍挂单 {still_open}：请人工处理后再续跑"
                     f"（exchange 模式非逐位一致）")
+            # 阶段3：重启对账限价挂单队列（与交易所侧 open 订单对齐）
+            unresolved_limits = self.broker.reconcile_pending_limits()
+            if unresolved_limits:
+                raise SystemExit(
+                    f"重启发现限价挂单查询失败 {unresolved_limits}：请人工处理后再续跑"
+                    f"（exchange 模式非逐位一致）")
+            # 恢复 OrderRateGuard 状态（日订单数计数），避免重启绕过护栏
+            guard_state = st.get("guard")
+            if guard_state and self.broker.guard is not None:
+                self.broker.guard.load_state(guard_state)
         else:
             self.broker.balance = b["balance"]
             self.broker.positions = b["positions"]
@@ -541,13 +555,22 @@ class PaperTradingDaemon:
             return
         self._reconcile_failures = 0  # 成功 → 重置
         local_net = sum(lot["amount"] for lot in self.runner.lots.values())
+        # 阶段3：扣除限价卖单挂起的冻结量——卖单挂起时本地 lots 仍记账，
+        # 但交易所侧 BTC 已冻结（free 减少），delta 对账需把这部分排除，
+        # 否则误判为持仓漂移触发熔断。
+        pending_sell_amount = sum(
+            p["amount"] for p in self.broker._pending_limits
+            if p.get("side") == "sell"
+        ) if hasattr(self.broker, "_pending_limits") else 0.0
+        local_net_adjusted = local_net - pending_sell_amount
         ok, drift = assess_position_drift(
-            real, self.broker.initial_position, local_net,
+            real, self.broker.initial_position, local_net_adjusted,
             abs_tol=self.args.drift_abs, rel_tol=self.args.drift_rel,
         )
         if not ok:
             logger.error(f"持仓漂移 drift={drift:.8f}（real={real}, "
-                         f"local_net={local_net}）→ 触发熔断")
+                         f"local_net={local_net}, pending_sell={pending_sell_amount}）"
+                         f"→ 触发熔断")
             self.risk.emergency_stop(f"持仓漂移 {drift:.8f}")
 
     # ---- 日报 ----
@@ -761,6 +784,12 @@ class PaperTradingDaemon:
 
         if self.args.broker == "exchange":
             self._reconcile_drift()
+            # 运行时对账：查询网络错误遗留的待确认订单，已成交的回填账本。
+            # 阶段 2 资金安全机制：避免 pending_query 订单被遗漏导致账本与交易所不一致。
+            try:
+                self.broker.reconcile_pending(timestamp=bar["timestamp"])
+            except Exception as e:
+                logger.warning(f"reconcile_pending 对账失败（下 bar 继续）: {e}")
 
         # 更新前一根收盘价（用于下一根闪崩检测）
         self._prev_close = float(bar["close"])

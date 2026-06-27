@@ -31,12 +31,29 @@ _MODE_PRIORITY = ["live_paper", "replay_paper", "testnet_live"]
 
 
 def _is_mode_running(mode: str) -> bool:
-    """检查指定模式是否正在运行（通过 mode_manager 状态）。"""
+    """检查指定模式是否正在运行。
+
+    优先检查 mode_manager 内存状态（同一进程内启动的模式）；
+    若内存状态为 idle（API 重启后丢失），回退到磁盘持久化文件 + PID 存活校验。
+    """
     try:
-        from src.api.mode_manager import mode_manager, ModeStatus
+        from src.api.mode_manager import mode_manager, ModeStatus, STATE_DIR, pid_alive
         st = mode_manager._modes.get(mode)
-        if st:
-            return st.status in (ModeStatus.RUNNING, ModeStatus.STOPPING)
+        if st and st.status in (ModeStatus.RUNNING, ModeStatus.STOPPING):
+            return True
+        # 回退：API 重启后内存状态丢失，读磁盘持久化文件
+        # 必须同时校验 PID 存活，避免 daemon 崩溃后磁盘残留 running 状态导致僵尸判定
+        import json
+        state_file = STATE_DIR / f"{mode}.json"
+        if state_file.exists():
+            data = json.loads(state_file.read_text(encoding="utf-8"))
+            if data.get("status") not in ("running", "stopping"):
+                return False
+            # 校验 PID 存活；无 PID 字段则不信任磁盘状态
+            pid = data.get("pid")
+            if not pid:
+                return False
+            return pid_alive(pid)
     except Exception as e:
         logger.debug(f"_is_mode_running({mode}) 检查失败: {e}")
     return False

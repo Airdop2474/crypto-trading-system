@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useMemo } from "react"
 import {
   Dna,
   Loader2,
@@ -10,39 +10,71 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
+  CheckSquare,
+  Square,
 } from "lucide-react"
 import { toast } from "sonner"
 import { mutate } from "swr"
 import { api } from "@/lib/api"
-import type { EvolutionResult } from "@/lib/types"
+import type { EvolutionResult, StrategyType } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { ParamDiff } from "./param-diff"
+import {
+  STRATEGY_TYPE_LABEL,
+  STRATEGY_TYPE_CATEGORY,
+  STRATEGY_CATEGORY_LABEL,
+  STRATEGY_CATEGORIES,
+  type StrategyCategory,
+} from "@/lib/strategy-meta"
 
-const ALL_STRATEGIES = [
-  { id: "grid-btc-usdt", label: "网格策略", type: "grid" },
-  { id: "rsi-btc-usdt", label: "RSI 动量", type: "rsi" },
-  { id: "ma-btc-usdt", label: "均线策略", type: "ma" },
-  { id: "donchian-btc-usdt", label: "唐奇安通道", type: "donchian" },
-  { id: "structure-btc-usdt", label: "市场结构", type: "structure" },
-  { id: "supertrend-btc-usdt", label: "SuperTrend", type: "supertrend" },
-  { id: "reversal-btc-usdt", label: "关键位反转", type: "reversal" },
-  { id: "priceaction-btc-usdt", label: "价格行为学", type: "priceaction" },
-  { id: "bollinger-btc-usdt", label: "布林带均值回归", type: "bollinger" },
-  { id: "macd-btc-usdt", label: "MACD 趋势跟踪", type: "macd" },
-  { id: "composite-btc-usdt", label: "复合趋势", type: "composite" },
-] as const
+/**
+ * 全部可参与进化的策略（buyhold 基准策略不参与）
+ * 从 STRATEGY_TYPE_LABEL 动态生成，覆盖全部 48 个策略
+ */
+interface StrategyOption {
+  id: string
+  label: string
+  type: StrategyType
+  category: StrategyCategory
+}
+
+const ALL_STRATEGIES: StrategyOption[] = (Object.keys(STRATEGY_TYPE_LABEL) as StrategyType[])
+  .filter((type) => type !== "buyhold")
+  .map((type) => ({
+    id: `${type}-btc-usdt`,
+    label: STRATEGY_TYPE_LABEL[type],
+    type,
+    category: STRATEGY_TYPE_CATEGORY[type],
+  }))
+
+/** 按分类分组 */
+const STRATEGIES_BY_CATEGORY = STRATEGY_CATEGORIES.map((cat) => ({
+  category: cat,
+  label: STRATEGY_CATEGORY_LABEL[cat],
+  items: ALL_STRATEGIES.filter((s) => s.category === cat),
+})).filter((g) => g.items.length > 0)
 
 export function EvolutionPanel() {
+  // 默认只勾选「趋势跟踪」和「突破」两类（核心可优化策略），避免 48 个全选导致搜索时间过长
   const [selected, setSelected] = useState<Set<string>>(
-    new Set(ALL_STRATEGIES.map((s) => s.id))
+    new Set(
+      ALL_STRATEGIES
+        .filter((s) => s.category === "trend" || s.category === "breakout")
+        .map((s) => s.id)
+    )
   )
   const [autoApply, setAutoApply] = useState(true)
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<EvolutionResult[]>([])
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+  // 默认全部分类折叠（避免 48 个策略一次展开太长）
+  const [collapsedCats, setCollapsedCats] = useState<Set<StrategyCategory>>(
+    new Set(STRATEGY_CATEGORIES)
+  )
 
   const toggleStrategy = useCallback((id: string) => {
     setSelected((prev) => {
@@ -50,6 +82,40 @@ export function EvolutionPanel() {
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
+    })
+  }, [])
+
+  const toggleCategory = useCallback((cat: StrategyCategory) => {
+    setCollapsedCats((prev) => {
+      const next = new Set(prev)
+      if (next.has(cat)) next.delete(cat)
+      else next.add(cat)
+      return next
+    })
+  }, [])
+
+  /** 全选/反选某个分类 */
+  const toggleCategorySelection = useCallback((cat: StrategyCategory) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      const catItems = STRATEGIES_BY_CATEGORY.find((g) => g.category === cat)?.items ?? []
+      const allSelected = catItems.every((s) => next.has(s.id))
+      if (allSelected) {
+        catItems.forEach((s) => next.delete(s.id))
+      } else {
+        catItems.forEach((s) => next.add(s.id))
+      }
+      return next
+    })
+  }, [])
+
+  /** 全选/反选全部 */
+  const toggleAllSelection = useCallback(() => {
+    setSelected((prev) => {
+      if (prev.size === ALL_STRATEGIES.length) {
+        return new Set()
+      }
+      return new Set(ALL_STRATEGIES.map((s) => s.id))
     })
   }, [])
 
@@ -97,35 +163,92 @@ export function EvolutionPanel() {
     setCooldown(30)
   }
 
+  const allSelected = selected.size === ALL_STRATEGIES.length
+
   return (
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
           <Dna className="h-4 w-4 text-purple-400" />
           策略参数进化
+          <Badge variant="outline" className="ml-1 text-[10px]">
+            已选 {selected.size} / {ALL_STRATEGIES.length}
+          </Badge>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* 策略选择器 */}
         <div>
-          <div className="text-xs text-muted-foreground mb-2">
-            选择要优化的策略（买入持有基准策略不参与进化）
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs text-muted-foreground">
+              选择要优化的策略（buyhold 基准不参与进化）
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[11px] gap-1"
+              onClick={toggleAllSelection}
+            >
+              {allSelected ? <Square className="size-3" /> : <CheckSquare className="size-3" />}
+              {allSelected ? "清空选择" : "全选"}
+            </Button>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {ALL_STRATEGIES.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => toggleStrategy(s.id)}
-                className={cn(
-                  "px-3 py-1.5 rounded-md text-xs font-medium border transition-colors",
-                  selected.has(s.id)
-                    ? "bg-purple-500/15 border-purple-500/40 text-purple-300"
-                    : "bg-muted/30 border-border/50 text-muted-foreground hover:bg-muted/50"
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
+
+          {/* 按分类分组展示，每组可折叠 */}
+          <div className="space-y-1 rounded-lg border border-border/40 overflow-hidden">
+            {STRATEGIES_BY_CATEGORY.map((group) => {
+              const collapsed = collapsedCats.has(group.category)
+              const catSelectedCount = group.items.filter((s) => selected.has(s.id)).length
+              const catAllSelected = catSelectedCount === group.items.length
+              return (
+                <div key={group.category} className="border-b border-border/30 last:border-b-0">
+                  {/* 分类标题行（可折叠 + 全选切换） */}
+                  <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-muted/30 hover:bg-muted/50 transition-colors">
+                    <button
+                      type="button"
+                      onClick={() => toggleCategory(group.category)}
+                      className="flex items-center gap-1 flex-1 text-left"
+                    >
+                      {collapsed ? (
+                        <ChevronRight className="size-3 text-muted-foreground" />
+                      ) : (
+                        <ChevronDown className="size-3 text-muted-foreground" />
+                      )}
+                      <span className="text-xs font-medium">{group.label}</span>
+                      <span className="text-[10px] text-muted-foreground">
+                        ({catSelectedCount}/{group.items.length})
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleCategorySelection(group.category)}
+                      className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded"
+                    >
+                      {catAllSelected ? "取消" : "全选"}
+                    </button>
+                  </div>
+                  {/* 分类内的策略按钮 */}
+                  {!collapsed && (
+                    <div className="flex flex-wrap gap-1.5 px-2.5 py-2">
+                      {group.items.map((s) => (
+                        <button
+                          key={s.id}
+                          onClick={() => toggleStrategy(s.id)}
+                          className={cn(
+                            "px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors",
+                            selected.has(s.id)
+                              ? "bg-purple-500/15 border-purple-500/40 text-purple-300"
+                              : "bg-muted/30 border-border/50 text-muted-foreground hover:bg-muted/50"
+                          )}
+                        >
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </div>
 

@@ -648,12 +648,17 @@ class StopConfigUpdateRequest(BaseModel):
 
 @app.get("/risk/stop-config")
 def get_stop_configs(_=Security(verify_api_token)):
-    """获取所有策略类型的止损配置"""
-    from src.strategy.stop_configs import STRATEGY_STOP_CONFIGS
-    from src.strategy.stop_loss import StopLossConfig
+    """获取所有策略类型的止损配置
+
+    遍历全部 49 个注册策略，未显式配置的回退到 get_stop_config() 兜底
+    （TREND_STOP_CONFIG for 趋势类，RANGE_STOP_CONFIG for 均值回归类）。
+    """
+    from src.strategy.registry import STRATEGY_REGISTRY
+    from src.strategy.stop_configs import get_stop_config
 
     result = {}
-    for stype, cfg in STRATEGY_STOP_CONFIGS.items():
+    for stype in STRATEGY_REGISTRY.keys():
+        cfg = get_stop_config(stype)
         result[stype] = {
             "stop_type": cfg.stop_type,
             "atr_mult": cfg.atr_mult,
@@ -677,12 +682,18 @@ def update_stop_config(
 
     安全边界：参数会被 StopLossConfig.__post_init__ 自动 clamp 到安全范围
     """
-    from src.strategy.stop_configs import STRATEGY_STOP_CONFIGS
+    from src.strategy.stop_configs import STRATEGY_STOP_CONFIGS, get_stop_config
     from src.strategy.stop_loss import StopLossConfig
 
     stype = body.strategy_type
+    # 未显式配置的策略回退到 get_stop_config() 兜底，允许用户首次保存配置
     if stype not in STRATEGY_STOP_CONFIGS:
-        raise HTTPException(400, f"未知策略类型: {stype}")
+        # 确认是合法策略类型（防止任意字符串注入）
+        from src.strategy.registry import STRATEGY_REGISTRY
+        if stype not in STRATEGY_REGISTRY:
+            raise HTTPException(400, f"未知策略类型: {stype}")
+        # 用兜底配置初始化（后续会被用户提交的值覆盖）
+        STRATEGY_STOP_CONFIGS[stype] = get_stop_config(stype)
 
     # 构建新配置（StopLossConfig 会自动 clamp 到安全范围）
     new_cfg = StopLossConfig(
@@ -734,8 +745,11 @@ def auto_optimize_stop_config(
     from src.strategy.stop_loss import StopLossConfig
 
     stype = body.strategy_type
+    # 未显式配置的策略回退到 get_stop_config() 兜底
     if stype not in STRATEGY_STOP_CONFIGS:
-        raise HTTPException(400, f"未知策略类型: {stype}")
+        from src.strategy.registry import STRATEGY_REGISTRY
+        if stype not in STRATEGY_REGISTRY:
+            raise HTTPException(400, f"未知策略类型: {stype}")
 
     current_cfg = get_stop_config(stype)
 
@@ -1322,12 +1336,15 @@ def update_strategy_params_endpoint(
 ):
     """更新策略参数（先持久化到配置，再热替换运行中实例）。"""
     try:
-        # 先持久化（引擎未运行也能保存，下次启动生效）
         strategy_type = strategy_id.split("-")[0]
-        update_strategy_config(strategy_type, body.params)
+        # 先根据 PARAM_SCHEMA 做类型转换（list 字符串 -> list[int]）
+        # 确保持久化到 JSON 的是正确的 Python 类型，daemon 重启加载时不会静默失效
+        coerced = service.coerce_params(strategy_type, body.params)
+        # 持久化转换后的值（引擎未运行也能保存，下次启动生效）
+        update_strategy_config(strategy_type, coerced)
         # 再尝试热替换运行中实例（引擎未运行会跳过）
         state = service.get_state()
-        result = service.update_strategy_params(state, strategy_id, body.params)
+        result = service.update_strategy_params(state, strategy_id, coerced)
         return result
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -1348,6 +1365,72 @@ def delete_strategy_config_endpoint(
     if not ok:
         raise HTTPException(404, f"策略 {strategy_type} 无已保存配置")
     return {"deleted": strategy_type}
+
+
+# --------------------------------------------------------------------------
+# 策略状态管理（归档/启用）
+# --------------------------------------------------------------------------
+@app.get("/strategies/status")
+def get_strategies_status(_=Security(verify_api_token)):
+    """获取全部策略的归档状态。
+
+    返回 {strategy_type: {"status": "active"/"archived"/"disabled", "reason": "...", "archived_at": "..."}}
+    未在 strategy_status.json 中出现的策略默认 active。
+    """
+    from src.api.strategy_status_store import get_all_status
+    from src.strategy.registry import STRATEGY_REGISTRY
+    status_data = get_all_status()
+    result = {}
+    for stype in STRATEGY_REGISTRY.keys():
+        entry = status_data.get(stype)
+        if entry:
+            result[stype] = entry
+        else:
+            result[stype] = {"status": "active", "reason": "", "archived_at": ""}
+    return result
+
+
+@app.post("/strategies/{strategy_type}/status")
+def set_strategy_status_endpoint(
+    strategy_type: str,
+    status: str = Query(..., pattern="^(active|archived|disabled)$"),
+    reason: str = Query("", max_length=500),
+    _=Security(verify_api_token),
+):
+    """手动设置策略状态（归档/恢复）。
+
+    - status=archived：归档策略（自动淘汰或手动），下次启动模式时默认跳过
+    - status=disabled：禁用策略（语义同 archived）
+    - status=active：恢复策略为启用状态
+    - reason：归档/禁用原因（可选，用于报告）
+    """
+    from src.api.strategy_status_store import set_strategy_status
+    from src.strategy.registry import STRATEGY_REGISTRY
+    if strategy_type not in STRATEGY_REGISTRY:
+        raise HTTPException(400, f"未知策略类型: {strategy_type}")
+    result = set_strategy_status(strategy_type, status, reason)
+    return {"strategy_type": strategy_type, **result}
+
+
+@app.get("/strategies/elimination/report")
+def get_latest_elimination_report(_=Security(verify_api_token)):
+    """获取最新的淘汰评估报告（如果存在）。
+
+    扫描 data/reports/elimination/ 目录，返回最新的一份报告。
+    """
+    from pathlib import Path
+    report_dir = Path("data/reports/elimination")
+    if not report_dir.exists():
+        return {"exists": False, "report": None}
+    reports = sorted(report_dir.glob("*_elimination_report*.json"), reverse=True)
+    if not reports:
+        return {"exists": False, "report": None}
+    try:
+        import json as _json
+        report = _json.loads(reports[0].read_text(encoding="utf-8"))
+        return {"exists": True, "filename": reports[0].name, "report": report}
+    except Exception as e:
+        raise HTTPException(500, f"读取报告失败: {e}")
 
 
 @app.delete("/strategies/{strategy_id}/instance")

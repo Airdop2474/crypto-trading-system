@@ -90,3 +90,73 @@ def test_daily_count_resets_next_day():
     # 跨日 → 计数归零
     t_next = pd.Timestamp("2024-01-02 00:00")
     assert g.check(100.0, t_next)[0]
+
+
+class TestOrderRateGuardPersistence:
+    """OrderRateGuard 状态持久化测试（修复护栏可绕过）"""
+
+    def test_state_dict_roundtrip(self):
+        """state_dict → load_state 后状态应一致"""
+        g = OrderRateGuard(reference_capital=10000.0,
+                           max_position_per_trade=1.0,
+                           min_trade_interval=60,
+                           max_trades_per_day=10)
+        ts = pd.Timestamp("2024-01-01 12:00")
+        for _ in range(3):
+            g.check(100.0, ts)
+            g.record(ts)
+        assert g._count == 3
+
+        # 序列化 → 反序列化
+        st = g.state_dict()
+        g2 = OrderRateGuard(reference_capital=10000.0,
+                            max_position_per_trade=1.0,
+                            min_trade_interval=60,
+                            max_trades_per_day=10)
+        g2.load_state(st)
+
+        # 验证状态一致（_last_ts 序列化为字符串，加载后保持字符串，pd.Timestamp 可解析）
+        assert g2._count == 3
+        assert g2._day == g._day
+        assert pd.Timestamp(g2._last_ts) == pd.Timestamp(g._last_ts)
+
+        # 续跑：再下一单应到 count=4
+        g2.check(100.0, ts)
+        g2.record(ts)
+        assert g2._count == 4
+
+    def test_load_state_with_empty_dict(self):
+        """空 dict 不影响默认状态（向后兼容旧 checkpoint 无 guard 字段）"""
+        g = OrderRateGuard(reference_capital=10000.0)
+        g.load_state({})
+        assert g._count == 0
+        assert g._day is None
+
+    def test_load_state_with_none(self):
+        """None 不影响默认状态"""
+        g = OrderRateGuard(reference_capital=10000.0)
+        g.load_state(None)
+        assert g._count == 0
+
+    def test_persistence_prevents_bypass(self):
+        """护栏持久化后重启不再绕过日订单上限"""
+        g = OrderRateGuard(reference_capital=10000.0,
+                           max_position_per_trade=1.0,
+                           min_trade_interval=0,
+                           max_trades_per_day=5)
+        ts = pd.Timestamp("2024-01-01 12:00")
+        # 当天已下 5 单（达上限）
+        for _ in range(5):
+            g.check(100.0, ts)
+            g.record(ts)
+
+        # 模拟重启：序列化 → 新实例加载
+        st = g.state_dict()
+        g2 = OrderRateGuard(reference_capital=10000.0,
+                            max_position_per_trade=1.0,
+                            min_trade_interval=0,
+                            max_trades_per_day=5)
+        g2.load_state(st)
+        # 重启后继续下单应被拒绝（未绕过）
+        ok, _ = g2.check(100.0, ts)
+        assert ok is False

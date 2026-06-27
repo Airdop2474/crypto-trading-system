@@ -39,13 +39,15 @@ class FakeExchange:
         self.orders = {"EX_1": {"id": "EX_1", "status": "closed"}}
         self.last_cancel_symbol = "__unset__"
         self.last_fetch_symbol = "__unset__"
+        self.last_params = {}  # 记录最近一次 create_order 的 params（验证 clientOrderId）
 
     def fetch_balance(self):
         return self._balance
 
-    def create_order(self, symbol, type, side, amount, price):
+    def create_order(self, symbol, type, side, amount, price=None, params=None):
         if self._create_raises is not None:
             raise self._create_raises
+        self.last_params = params or {}
         return self._create_result
 
     def cancel_order(self, order_id, symbol=None):
@@ -97,10 +99,31 @@ class TestPlaceOrder:
         assert "资金不足" in r.reason
 
     def test_place_order_network_error(self):
+        """网络错误不再返回 error，而是 pending_query（避免重复下单）"""
         b = make_broker(create_raises=ccxt.NetworkError("timeout"))
         r = b.place_order(Order("BTC/USDT", "buy", 0.1, 50000))
-        assert r.status == "error"
+        assert r.status == "pending_query"
         assert "网络错误" in r.reason
+        assert r.order_id is None  # 响应丢失，无 order_id
+
+    def test_place_order_network_error_carries_client_order_id(self):
+        """网络错误时 OrderResult 携带 client_order_id，便于后续对账查询"""
+        b = make_broker(create_raises=ccxt.NetworkError("timeout"))
+        order = Order("BTC/USDT", "buy", 0.1, 50000,
+                      client_order_id="btcusdt-buy-abc12345")
+        r = b.place_order(order)
+        assert r.status == "pending_query"
+        assert r.client_order_id == "btcusdt-buy-abc12345"
+
+    def test_place_order_passes_client_order_id_to_exchange(self):
+        """client_order_id 通过 params 传给 ccxt create_order 做幂等去重"""
+        fake = FakeExchange(create_result={"id": "EX_1", "status": "closed"})
+        b = ExchangeBroker(exchange=fake)
+        order = Order("BTC/USDT", "buy", 0.1, 50000,
+                      client_order_id="btcusdt-buy-abc12345")
+        b.place_order(order)
+        # FakeExchange.create_order 把 params 存到 last_params
+        assert fake.last_params.get("clientOrderId") == "btcusdt-buy-abc12345"
 
     def test_place_order_generic_error(self):
         b = make_broker(create_raises=ValueError("boom"))

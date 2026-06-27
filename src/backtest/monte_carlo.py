@@ -283,8 +283,10 @@ class MonteCarloSimulator:
             [float(e.get("total_equity", 0)) for e in equity_curve]
         )
 
-        # 计算每 bar 收益率
-        returns_per_bar = np.diff(equities) / equities[:-1]
+        # 计算每 bar 收益率（保护除零：equities 含 0 时返回 0）
+        with np.errstate(divide="ignore", invalid="ignore"):
+            returns_per_bar = np.diff(equities) / equities[:-1]
+        returns_per_bar = np.nan_to_num(returns_per_bar, nan=0.0, posinf=0.0, neginf=0.0)
         n_bars = len(returns_per_bar)
 
         if n_bars < 5:
@@ -296,11 +298,12 @@ class MonteCarloSimulator:
         )
         sampled_returns = returns_per_bar[indices]  # (n_sim, n_bars)
 
-        # 构建权益路径
-        equity_paths = np.empty((self.n_simulations, n_bars + 1))
-        equity_paths[:, 0] = initial_capital
-        for i in range(n_bars):
-            equity_paths[:, i + 1] = equity_paths[:, i] * (1 + sampled_returns[:, i])
+        # 构建权益路径（向量化 cumprod 替代逐 bar 循环，数学等价但更快）
+        growth = np.concatenate(
+            [np.ones((self.n_simulations, 1)), 1 + sampled_returns],
+            axis=1,
+        )
+        equity_paths = initial_capital * np.cumprod(growth, axis=1)
 
         # 计算指标
         returns, max_dds, sharpes = self._calculate_metrics_vectorized(
@@ -329,7 +332,10 @@ class MonteCarloSimulator:
         # 最大回撤（向量化）
         # running max along axis 1
         running_max = np.maximum.accumulate(equity_paths, axis=1)
-        drawdowns = (equity_paths - running_max) / running_max
+        # 保护除零：running_max=0 时（权益触 0）会产生 inf/nan，污染 max_drawdowns
+        with np.errstate(divide="ignore", invalid="ignore"):
+            drawdowns = (equity_paths - running_max) / running_max
+        drawdowns = np.nan_to_num(drawdowns, nan=0.0, posinf=0.0, neginf=-1.0)
         max_drawdowns = np.abs(np.min(drawdowns, axis=1))
 
         # Sharpe Ratio（年化，假设 4h K线 → 6 bars/day → 2190 bars/year）

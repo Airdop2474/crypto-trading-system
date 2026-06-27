@@ -22,8 +22,8 @@ interface Props {
   strategyId: string
   strategyName: string
   paramSchema: Record<string, ParamConstraint>
-  currentParams: Record<string, number | boolean>
-  defaultParams?: Record<string, number | boolean | null>
+  currentParams: Record<string, number | boolean | string>
+  defaultParams?: Record<string, number | boolean | string | null>
   open: boolean
   onOpenChange: (open: boolean) => void
 }
@@ -72,13 +72,15 @@ export function StrategyParamsDialog({
     e.preventDefault()
     setLoading(true)
 
-    const parsed: Record<string, number | boolean> = {}
+    const parsed: Record<string, number | boolean | string> = {}
     for (const [key, constraint] of Object.entries(paramSchema)) {
       const raw = params[key]
       if (raw == null || raw === "") continue
 
       if (constraint.type === "bool") {
         parsed[key] = raw === "true" || raw === "1"
+      } else if (constraint.type === "str" || constraint.type === "list") {
+        parsed[key] = raw
       } else {
         const num = Number(raw)
         if (isNaN(num)) {
@@ -161,21 +163,25 @@ export function StrategyParamsDialog({
                     </div>
                     <Input
                       id={`sp-${key}`}
-                      type={constraint.type === "bool" ? "text" : "number"}
+                      type={(constraint.type === "int" || constraint.type === "float") ? "number" : "text"}
                       placeholder={
                         constraint.type === "bool"
                           ? "true / false"
-                          : constraint.min != null && constraint.max != null
-                            ? `${constraint.min} ~ ${constraint.max}`
-                            : undefined
+                          : constraint.type === "list"
+                            ? "逗号分隔，如 1,2,3,4"
+                            : constraint.type === "str"
+                              ? "请输入文本"
+                              : constraint.min != null && constraint.max != null
+                                ? `${constraint.min} ~ ${constraint.max}`
+                                : undefined
                       }
-                      min={constraint.min}
-                      max={constraint.max}
+                      min={(constraint.type === "int" || constraint.type === "float") ? constraint.min : undefined}
+                      max={(constraint.type === "int" || constraint.type === "float") ? constraint.max : undefined}
                       step={constraint.type === "int" ? 1 : 0.01}
                       value={params[key] ?? ""}
                       onChange={(e) => updateParam(key, e.target.value)}
                     />
-                    {(constraint.min != null || constraint.max != null) && (
+                    {(constraint.type === "int" || constraint.type === "float") && (constraint.min != null || constraint.max != null) && (
                       <span className="text-[10px] text-muted-foreground">
                         {constraint.min != null && `最小: ${constraint.min}`}
                         {constraint.min != null && constraint.max != null && " | "}

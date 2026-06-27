@@ -54,9 +54,19 @@ class MemoryCache:
             return value
 
     def set(self, key: str, value: str, ttl: Optional[int] = None) -> None:
-        """设置值"""
+        """设置值
+
+        ttl 语义：
+        - None：永不过期
+        - 0 或负数：视为立即过期（不存储，避免永驻内存）
+        - 正数：ttl 秒后过期
+        """
         with self._lock:
-            expire_time = time.time() + ttl if ttl else None
+            if ttl is not None and ttl <= 0:
+                # 立即过期：删除已有项，不存储新值
+                self._store.pop(key, None)
+                return
+            expire_time = time.time() + ttl if ttl is not None else None
             self._store[key] = (value, expire_time)
 
     def delete(self, key: str) -> None:
@@ -65,13 +75,20 @@ class MemoryCache:
             self._store.pop(key, None)
 
     def keys(self, pattern: str = "*") -> List[str]:
-        """获取匹配的键（简单前缀匹配）"""
+        """获取匹配的键（简单前缀匹配），同步清理已过期项避免内存泄漏"""
         with self._lock:
+            now = time.time()
+            expired = [
+                k for k, (_, exp) in self._store.items()
+                if exp is not None and now > exp
+            ]
+            for k in expired:
+                del self._store[k]
+            remaining = list(self._store.keys())
             if pattern == "*":
-                return list(self._store.keys())
-
+                return remaining
             prefix = pattern.rstrip("*")
-            return [k for k in self._store.keys() if k.startswith(prefix)]
+            return [k for k in remaining if k.startswith(prefix)]
 
     def ping(self) -> bool:
         """内存缓存总是可用"""

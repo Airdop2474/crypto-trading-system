@@ -26,6 +26,7 @@ class FakeExchange:
         self._min_amount = min_amount
         self._min_cost = min_cost
         self._order_status = order_status
+        self.last_params = {}  # 记录最近一次 create_order 的 params（验证 clientOrderId）
 
     def amount_to_precision(self, symbol, amount):
         return f"{float(amount):.5f}"
@@ -37,9 +38,10 @@ class FakeExchange:
         return {"limits": {"amount": {"min": self._min_amount},
                            "cost": {"min": self._min_cost}}}
 
-    def create_order(self, symbol, type, side, amount, price):
+    def create_order(self, symbol, type, side, amount, price=None, params=None):
         if self._create_raises is not None:
             raise self._create_raises
+        self.last_params = params or {}
         # 默认市价全成：返回真实成交价量
         return self._create_result or {
             "id": "OID", "status": "closed",
@@ -161,3 +163,68 @@ class TestExtractFill:
 
     def test_none(self):
         assert extract_fill(self._Res(), None) == (None, None, "none")
+
+
+# ---- place_limit_no_wait（阶段3 路径统一：只挂不确认）----
+
+class TestPlaceLimitNoWait:
+    """限价单挂单路径：只挂不轮询 30s，挂单成功即返 pending。
+
+    与 place_and_confirm 的区别：不调 _confirm，挂单成功返回 pending 让上层入队。
+    """
+
+    def test_pending_when_open(self):
+        """挂单成功（交易所返 open）→ status=pending，携带 order_id"""
+        ex = _executor(create_result={
+            "id": "L1", "status": "open", "average": None, "filled": 0.0,
+        })
+        r = ex.place_limit_no_wait("BTC/USDT", "buy", 0.001, 64000.0, 65000.0)
+        assert r.status == "pending"
+        assert r.order_id == "L1"
+        assert r.filled_price is None
+        assert r.filled_amount is None
+
+    def test_filled_when_synchronous_fill(self):
+        """交易所同步成交（testnet 偶尔）→ status=filled，携带价量"""
+        ex = _executor(create_result={
+            "id": "L2", "status": "closed", "average": 63900.0, "filled": 0.001,
+        })
+        r = ex.place_limit_no_wait("BTC/USDT", "buy", 0.001, 64000.0, 65000.0)
+        assert r.status == "filled"
+        assert r.order_id == "L2"
+        assert r.filled_price == 63900.0
+        assert r.filled_amount == pytest.approx(0.001)
+
+    def test_rejected_by_sizing(self):
+        """sizing 拒单 → status=rejected，无 order_id"""
+        ex = _executor(min_amount=1.0)
+        r = ex.place_limit_no_wait("BTC/USDT", "buy", 0.001, 64000.0, 65000.0)
+        assert r.status == "rejected" and r.order_id is None
+
+    def test_rejected_by_exchange(self):
+        """交易所拒单（InsufficientFunds）→ status=rejected"""
+        ex = _executor(create_raises=ccxt.InsufficientFunds("no money"))
+        r = ex.place_limit_no_wait("BTC/USDT", "buy", 0.001, 64000.0, 65000.0)
+        assert r.status == "rejected" and r.order_id is None
+
+    def test_pending_query_on_network_error(self):
+        """网络错误 → status=pending_query，携带 client_order_id"""
+        ex = _executor(create_raises=ccxt.NetworkError("timeout"))
+        cid = "btcusdt-buy-abcd1234"
+        r = ex.place_limit_no_wait("BTC/USDT", "buy", 0.001, 64000.0, 65000.0,
+                                   client_order_id=cid)
+        assert r.status == "pending_query"
+        assert r.client_order_id == cid
+
+    def test_carries_client_order_id(self):
+        """client_order_id 透传给交易所"""
+        ex = _executor(create_result={
+            "id": "L3", "status": "open", "average": None, "filled": 0.0,
+        })
+        cid = "btcusdt-sell-xyz789"
+        r = ex.place_limit_no_wait("BTC/USDT", "sell", 0.001, 66000.0, 65000.0,
+                                   client_order_id=cid)
+        assert r.status == "pending"
+        assert r.client_order_id == cid
+        # FakeExchange.create_order 应收到 clientOrderId
+        assert ex.exchange.last_params.get("clientOrderId") == cid

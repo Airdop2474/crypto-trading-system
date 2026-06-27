@@ -48,9 +48,9 @@ class TestSortino:
     def test_short_curve_zero(self):
         assert M.sortino_ratio(_equity([100])) == 0.0
 
-    def test_no_downside_positive_mean_is_inf(self):
-        # 单调上升 → 无负收益 → inf
-        assert M.sortino_ratio(_equity([100, 110, 120, 130])) == float("inf")
+    def test_no_downside_positive_mean_is_large_finite(self):
+        # 单调上升 → 无负收益 → 返回有限大数 999.0（避免 inf 破坏 JSON 序列化）
+        assert M.sortino_ratio(_equity([100, 110, 120, 130])) == 999.0
 
     def test_with_downside_is_finite(self):
         eq = _equity([100, 90, 100, 95, 105])

@@ -131,7 +131,8 @@ def test_checkpoint_serializes_adapter_ledger(tmp_path, monkeypatch):
     d._checkpoint()
     st = json.loads((tmp_path / "st.json").read_text(encoding="utf-8"))
     assert set(st["broker"]) == {"ledger", "unconfirmed", "errors",
-                                 "initial_balance", "initial_position"}
+                                 "initial_balance", "initial_position",
+                                 "pending_limits", "pending_order_records"}
 
 
 def test_restore_refuses_when_unconfirmed_still_open(tmp_path, monkeypatch):
