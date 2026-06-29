@@ -85,10 +85,10 @@ def setup_logger(
         colorize=True,
     )
 
-    # 添加文件输出（所有日志）
+    # 添加文件输出（跟随 log_level，避免 INFO 模式下仍写大量 DEBUG 日志）
     logger.add(
         log_path / "app_{time:YYYY-MM-DD}.log",
-        level="DEBUG",
+        level=log_level,
         format=(
             "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | "
             "{name}:{function}:{line} | {message}"
@@ -116,7 +116,7 @@ def setup_logger(
     if enable_json:
         logger.add(
             log_path / "app_json_{time:YYYY-MM-DD}.log",
-            level="DEBUG",
+            level=log_level,
             serialize=True,
             rotation=rotation,
             retention=retention,

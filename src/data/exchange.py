@@ -41,6 +41,7 @@ class ExchangeClient:
         # 配置参数
         params: dict[str, Any] = {
             "enableRateLimit": True,  # 启用限流保护
+            "timeout": 30000,  # 30s 超时（经 Clash 代理时 P99 可能 >5s，默认 10s 易误熔断）
         }
 
         # 如果提供了 API Key
@@ -53,6 +54,16 @@ class ExchangeClient:
             params["options"] = {"defaultType": "spot"}
 
         self.exchange = exchange_class(params)
+
+        # 注入 requests.Session + HTTPAdapter：连接池复用 TCP/TLS，避免每分钟重建握手
+        # 经 HTTP 代理时尤为关键（每分钟省 200-500ms 的 CONNECT+TLS 开销）
+        import requests
+        from requests.adapters import HTTPAdapter
+        _session = requests.Session()
+        _adapter = HTTPAdapter(pool_connections=4, pool_maxsize=10, max_retries=0)
+        _session.mount("http://", _adapter)
+        _session.mount("https://", _adapter)
+        self.exchange.session = _session
 
         # 有凭据的 testnet 必须切换 sandbox 端点，防止测试网 Key 发往主网
         if testnet and api_key is not None and api_key != "" and secret is not None and secret != "":

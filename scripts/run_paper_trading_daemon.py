@@ -270,7 +270,7 @@ class PaperTradingDaemon:
         client = self._live_client
         df = client.fetch_ohlcv(self.symbol, self.args.timeframe,
                                 limit=max(WARMUP + 5, 200))
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        # fetch_ohlcv 内部已做 pd.to_datetime(unit="ms")，无需重复转换
         # 丢掉仍在形成中的最后一根（只用已收盘 bar）
         return df.iloc[:-1].reset_index(drop=True)
 
@@ -781,6 +781,7 @@ class PaperTradingDaemon:
         self.pending = self.runner.process_bar(
             bar, self._history.loc[: bar.name], self.strategy, self.pending
         )
+        has_fill = len(self.runner.closed_trades) > before
         for t in self.runner.closed_trades[before:]:
             self.risk.record_fill(t)
 
@@ -799,6 +800,7 @@ class PaperTradingDaemon:
         # 更新前一根收盘价（用于下一根闪崩检测）
         self._prev_close = float(bar["close"])
 
+        day_changed = False
         day = pd.Timestamp(bar["timestamp"]).date()
         if self.current_day is None:
             self.current_day = day
@@ -806,6 +808,7 @@ class PaperTradingDaemon:
             self._write_daily_report(self.current_day, float(bar["close"]))
             self.day_count += 1
             self.current_day = day
+            day_changed = True
 
         self.alert_mgr.check_risk_events(self.risk)
         total_ret = self.runner.realized_pnl / self.args.initial
@@ -822,7 +825,12 @@ class PaperTradingDaemon:
                 self.collector.snapshots.clear()  # 已落库的清掉，避免重复写
             except Exception as e:
                 logger.debug(f"落库跳过（DB 不可用）：{type(e).__name__}")
-        self._checkpoint()
+        # checkpoint 降频：只在有成交、日切、或每 30 根 bar 时才写盘
+        # 无成交的 bar state 几乎不变（除 last_bar_ts），跳过省 80% 磁盘 I/O
+        self._bar_count_since_checkpoint = getattr(self, '_bar_count_since_checkpoint', 0) + 1
+        if has_fill or day_changed or self._bar_count_since_checkpoint >= 30:
+            self._checkpoint()
+            self._bar_count_since_checkpoint = 0
 
     # ---- 主循环 ----
     def run(self):

@@ -94,6 +94,13 @@ def apply_proxy_to_ccxt(exchange, testnet: bool = False, public: bool = False) -
             "http": proxy_url,
             "https": proxy_url,
         }
+        # 优先设到 session.proxies（ExchangeClient 已注入 requests.Session）
+        # 这样连接池与代理复用协同，避免每分钟重建 TCP+CONNECT+TLS
+        if getattr(exchange, "session", None) is not None:
+            exchange.session.proxies = {
+                "http": proxy_url,
+                "https": proxy_url,
+            }
         logger.info(f"Binance API 通过 HTTP 代理访问: {proxy_url}")
         return True
 

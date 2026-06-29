@@ -14,5 +14,19 @@ CREATE TABLE IF NOT EXISTS monitor_metrics (
     consecutive_losses  INTEGER
 );
 
--- 转为 hypertable（按时间分片）；if_not_exists 保证幂等
-SELECT create_hypertable('monitor_metrics', 'timestamp', if_not_exists => TRUE);
+-- 转为 hypertable（按时间分片）；显式 chunk_time_interval=1 天，匹配 bar 频率
+SELECT create_hypertable('monitor_metrics', 'timestamp',
+    if_not_exists => TRUE,
+    chunk_time_interval => INTERVAL '1 day'
+);
+
+-- 索引：按 risk_state 过滤 + 时间倒序查询（Grafana 常用模式）
+CREATE INDEX IF NOT EXISTS idx_metrics_risk_state
+    ON monitor_metrics(risk_state, timestamp DESC);
+
+-- 压缩策略：7 天前的 chunk 压缩，减 80% 存储
+ALTER TABLE monitor_metrics SET (timescaledb.compress);
+SELECT add_compression_policy('monitor_metrics', INTERVAL '7 days');
+
+-- retention 策略：90 天后自动清理，避免无限增长
+SELECT add_retention_policy('monitor_metrics', INTERVAL '90 days');

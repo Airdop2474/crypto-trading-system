@@ -170,10 +170,17 @@ class AlertManager:
 
         返回：本次新产生的告警列表
         """
-        # deque 不支持切片，先转为 list（events 上限 10000，成本可接受）
-        events_list = list(rm.events)
-        new_events = events_list[self._seen_event_count:]
-        self._seen_event_count = len(events_list)
+        # 增量消费：用 len() 对比上次已消费数量，只取新增部分
+        # 避免 list(rm.events) 每根 bar 复制整个 deque（上限 10000，O(n)）
+        current_len = len(rm.events)
+        if current_len <= self._seen_event_count:
+            # deque 被 maxlen 截断后重置计数（避免索引错位）
+            if current_len < self._seen_event_count:
+                self._seen_event_count = 0
+            return []
+        # deque 支持切片（Python 3.5+），直接切新增部分
+        new_events = list(rm.events)[self._seen_event_count:]
+        self._seen_event_count = current_len
 
         new_alerts = []
         for ev in new_events:
