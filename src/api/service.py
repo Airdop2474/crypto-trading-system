@@ -1512,51 +1512,31 @@ def _serialize_schema(schema: dict) -> dict:
     return result
 
 
-def get_registry(state: dict) -> list[dict]:
-    """返回策略的注册信息（名称、PARAM_SCHEMA、默认参数、运行状态）。
+# 策略注册表静态信息缓存（schema/defaults/name/description 不变，启动时算一次）
+_REGISTRY_STATIC_CACHE: Optional[list[dict]] = None
 
-    运行状态判断优先级：
-      1. live_data：daemon 实盘模式下，根据 state 文件 + 模式运行状态判断
-      2. _multi_runner：预跑/回测模式下，根据 multi_runner.slots 判断
+
+def _build_registry_static() -> list[dict]:
+    """构建策略注册表的静态部分（不含 running 状态），结果全局缓存。
+
+    避免 /strategies/registry 每次请求都实例化 49 个策略类取默认参数（~150ms）。
     """
+    global _REGISTRY_STATIC_CACHE
+    if _REGISTRY_STATIC_CACHE is not None:
+        return _REGISTRY_STATIC_CACHE
+
     from src.strategy.registry import STRATEGY_REGISTRY, _STRATEGY_LABELS
-
-    # 优先用 live_data 判断 running（实盘 daemon 模式）
-    live_running_keys: set[str] = set()
-    try:
-        from src.api import live_data
-        live_states = live_data._load_all_states()
-        if live_states:
-            active_mode = live_data._find_active_mode()
-            mode_running = live_data._is_mode_running(active_mode) if active_mode else False
-            if mode_running:
-                # 过滤空 strategy_name，避免误入空串
-                live_running_keys = {
-                    s.get("strategy_name", "") for s in live_states
-                    if s.get("strategy_name")
-                }
-    except Exception as e:
-        logger.debug(f"get_registry: live_data 判断 running 失败: {e}")
-
-    # 回退：预跑/回测模式用 _multi_runner
-    multi_runner = state.get("_multi_runner")
-    running_ids = set()
-    if multi_runner:
-        running_ids = {slot.config.strategy_id for slot in multi_runner.slots}
 
     result = []
     for key, cls in STRATEGY_REGISTRY.items():
         schema = getattr(cls, "PARAM_SCHEMA", {})
-        # 过滤掉风控参数（前端创建时不展示），并序列化 type 对象
         user_schema = _serialize_schema(
             {k: v for k, v in schema.items() if k not in _RISK_PARAM_KEYS}
         )
 
-        # 提取默认值：实例化策略（无参 / 最小参数）拿 parameters
         defaults = {}
         try:
             if key == "grid":
-                # Grid 需要 lower/upper_price 才能实例化
                 defaults = {
                     "grid_count": 10,
                     "position_per_grid": 0.05,
@@ -1572,13 +1552,6 @@ def get_registry(state: dict) -> list[dict]:
                 }
         except Exception as e:
             logger.debug(f"策略默认参数读取失败 ({key}): {e}")
-            pass
-
-        # 当前有多少个此类型的实例在运行
-        # 1. 预跑/回测模式：从 multi_runner.slots 统计
-        instances = sum(1 for sid in running_ids if sid.startswith(f"{key}-"))
-        # 2. 实盘 daemon 模式：检查是否有对应的 state 文件且模式在运行
-        is_live_running = key in live_running_keys
 
         result.append({
             "key": key,
@@ -1586,10 +1559,56 @@ def get_registry(state: dict) -> list[dict]:
             "description": _STRATEGY_DESCRIPTIONS.get(key, ""),
             "param_schema": user_schema,
             "defaults": defaults,
+        })
+
+    _REGISTRY_STATIC_CACHE = result
+    return result
+
+
+def get_registry(state: dict) -> list[dict]:
+    """返回策略的注册信息（名称、PARAM_SCHEMA、默认参数、运行状态）。
+
+    运行状态判断优先级：
+      1. live_data：daemon 实盘模式下，根据 state 文件 + 模式运行状态判断
+      2. _multi_runner：预跑/回测模式下，根据 multi_runner.slots 判断
+
+    静态部分（schema/defaults/name/description）全局缓存，避免每次实例化 49 个策略类。
+    """
+    # 静态部分走缓存
+    static_entries = _build_registry_static()
+
+    # 优先用 live_data 判断 running（实盘 daemon 模式）
+    live_running_keys: set[str] = set()
+    try:
+        from src.api import live_data
+        live_states = live_data._load_all_states()
+        if live_states:
+            active_mode = live_data._find_active_mode()
+            mode_running = live_data._is_mode_running(active_mode) if active_mode else False
+            if mode_running:
+                live_running_keys = {
+                    s.get("strategy_name", "") for s in live_states
+                    if s.get("strategy_name")
+                }
+    except Exception as e:
+        logger.debug(f"get_registry: live_data 判断 running 失败: {e}")
+
+    multi_runner = state.get("_multi_runner")
+    running_ids = set()
+    if multi_runner:
+        running_ids = {slot.config.strategy_id for slot in multi_runner.slots}
+
+    # 合并静态部分 + 动态 running 状态
+    result = []
+    for entry in static_entries:
+        key = entry["key"]
+        instances = sum(1 for sid in running_ids if sid.startswith(f"{key}-"))
+        is_live_running = key in live_running_keys
+        result.append({
+            **entry,
             "running": instances > 0 or is_live_running,
             "instances": max(instances, 1 if is_live_running else 0),
         })
-
     return result
 
 

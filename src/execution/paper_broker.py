@@ -54,6 +54,8 @@ class PaperBroker(BrokerInterface):
         self.positions: Dict[str, float] = {}
         self.orders: List[dict] = []
         self.order_id_counter = 0
+        # P1-5: order_id -> order 的哈希索引，供 get_order_status O(1) 查询
+        self._orders_by_id: Dict[str, dict] = {}
         # 限价单挂单队列：待撮合的订单
         self.pending_orders: List[dict] = []
         # P1-5: 增量统计——避免遍历全量 orders 列表
@@ -191,7 +193,7 @@ class PaperBroker(BrokerInterface):
         )
 
         order_id = self._generate_order_id()
-        self.orders.append({
+        order_record = {
             "order_id": order_id,
             "timestamp": timestamp if timestamp is not None else datetime.now(),
             "symbol": order.symbol,
@@ -205,7 +207,10 @@ class PaperBroker(BrokerInterface):
             "status": "filled",
             "balance_after": self.balance,
             "position_after": self.positions.get(order.symbol, 0.0),
-        })
+        }
+        self.orders.append(order_record)
+        # P1-5: 同步维护哈希索引，供 get_order_status O(1) 查询
+        self._orders_by_id[order_id] = order_record
 
         # P1-5: 增量累加，避免 get_statistics 遍历全量列表
         self._total_commission += commission_paid
@@ -451,10 +456,8 @@ class PaperBroker(BrokerInterface):
         return False
 
     def get_order_status(self, order_id: str) -> Optional[dict]:
-        for order in self.orders:
-            if order["order_id"] == order_id:
-                return order
-        return None
+        # P1-5: 通过哈希索引 O(1) 查询，避免线性扫描 self.orders
+        return self._orders_by_id.get(order_id)
 
     # ---- 风控 ----
 
@@ -514,6 +517,9 @@ class PaperBroker(BrokerInterface):
             return
         excess = len(self.orders) - self.MAX_ORDERS
         self._archived_order_count += excess
+        # P1-5: 同步清理哈希索引中被归档的旧订单
+        for archived in self.orders[:excess]:
+            self._orders_by_id.pop(archived["order_id"], None)
         self.orders = self.orders[excess:]
         logger.debug(f"Pruned {excess} old orders, archived total: {self._archived_order_count}")
 

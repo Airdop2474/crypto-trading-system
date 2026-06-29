@@ -252,7 +252,16 @@ def health():
 
     检查关键依赖：DB 连通性 + Redis/缓存连通性。
     任一失败返回 503，便于编排系统自动重启。
+
+    带 5s 内存缓存，避免高频 healthcheck 压库（Docker 30s + Grafana 30s + 前端 30s）。
     """
+    import time as _time
+    cache_key = "_health_cache"
+    now = _time.monotonic()
+    cached = globals().get(cache_key)
+    if cached and (now - cached[0]) < 5.0:
+        return cached[1]
+
     checks = {}
     all_ok = True
 
@@ -279,11 +288,14 @@ def health():
 
     if not all_ok:
         from fastapi.responses import JSONResponse
-        return JSONResponse(
+        result = JSONResponse(
             status_code=503,
             content={"status": "degraded", "checks": checks},
         )
-    return {"status": "ok", "checks": checks}
+    else:
+        result = {"status": "ok", "checks": checks}
+    globals()[cache_key] = (now, result)
+    return result
 
 
 @app.get("/health/detailed")

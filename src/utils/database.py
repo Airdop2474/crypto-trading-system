@@ -5,9 +5,7 @@
 """
 
 import os
-import threading
 from typing import Optional
-import psycopg2
 from psycopg2.extras import RealDictCursor
 from redis import Redis
 from sqlalchemy import create_engine
@@ -26,8 +24,6 @@ class DatabaseManager:
         self._engine = None
         self._session_factory = None
         self._redis_client = None
-        self._pg_connection = None
-        self._pg_lock = threading.Lock()
 
     def init_postgres(self) -> None:
         """初始化 PostgreSQL 连接"""
@@ -42,16 +38,6 @@ class DatabaseManager:
             )
             self._session_factory = sessionmaker(bind=self._engine)
             logger.info("PostgreSQL engine initialized")
-
-            # psycopg2 连接（用于批量操作）
-            self._pg_connection = psycopg2.connect(
-                host=config.TIMESCALE_HOST,
-                port=config.TIMESCALE_PORT,
-                user=config.TIMESCALE_USER,
-                password=config.TIMESCALE_PASSWORD,
-                database=config.TIMESCALE_DATABASE,
-            )
-            logger.info("PostgreSQL connection established")
 
         except Exception as e:
             logger.error(f"Failed to initialize PostgreSQL: {e}")
@@ -94,17 +80,6 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def _ensure_pg_connection(self) -> None:
-        """确保 psycopg2 连接可用，断线则重连。
-
-        psycopg2 连接的 .closed 为非 0 表示已关闭（如网络中断、服务端超时）。
-        裸连接没有 SQLAlchemy 的 pool_pre_ping，需手动检测并重建。
-        """
-        if self._pg_connection is None or self._pg_connection.closed != 0:
-            if self._pg_connection is not None:
-                logger.warning("PostgreSQL connection lost, reconnecting...")
-            self.init_postgres()
-
     @contextmanager
     def get_cursor(self, dict_cursor: bool = True):
         """
@@ -118,37 +93,25 @@ class DatabaseManager:
                 cursor.execute("SELECT * FROM table")
                 results = cursor.fetchall()
 
-        线程安全：通过 _pg_lock 保护裸 psycopg2 连接的并发访问。
+        并发：从 SQLAlchemy 连接池获取连接，无锁，多线程可并发调用。
         """
-        with self._pg_lock:
-            self._ensure_pg_connection()
+        if not self._engine:
+            self.init_postgres()
 
+        conn = self._engine.raw_connection()
+        try:
             cursor_factory = RealDictCursor if dict_cursor else None
-            cursor = self._pg_connection.cursor(cursor_factory=cursor_factory)
-
+            cursor = conn.cursor(cursor_factory=cursor_factory)
             try:
                 yield cursor
-                self._pg_connection.commit()
-            except (psycopg2.OperationalError, psycopg2.InterfaceError):
-                # 连接级故障：标记关闭，下次调用触发重连
-                self._safe_close_pg()
-                raise
+                conn.commit()
             except Exception:
-                self._pg_connection.rollback()
+                conn.rollback()
                 raise
             finally:
-                if self._pg_connection is not None and self._pg_connection.closed == 0:
-                    cursor.close()
-
-    def _safe_close_pg(self) -> None:
-        """安全关闭裸连接，置空以触发下次重连。"""
-        try:
-            if self._pg_connection is not None:
-                self._pg_connection.close()
-        except Exception as e:
-            logger.debug(f"关闭 PG 连接失败（非致命）: {e}")
+                cursor.close()
         finally:
-            self._pg_connection = None
+            conn.close()  # 归还连接池
 
     def execute_query(self, query: str, params: Optional[tuple] = None) -> list:
         """
@@ -236,10 +199,6 @@ class DatabaseManager:
 
     def close(self) -> None:
         """关闭所有连接"""
-        if self._pg_connection:
-            self._pg_connection.close()
-            logger.info("PostgreSQL connection closed")
-
         if self._redis_client:
             self._redis_client.close()
             logger.info("Redis connection closed")

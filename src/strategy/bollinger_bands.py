@@ -13,6 +13,7 @@ Bollinger Bands 均值回归策略
 
 from typing import Optional, List
 from datetime import datetime
+from collections import deque
 import pandas as pd
 import numpy as np
 
@@ -81,8 +82,13 @@ class BollingerBandsStrategy(RiskAwareStrategy):
 
         # 增量计算状态
         self._price_buffer: List[float] = []
+        self._price_deque: deque = deque(maxlen=self.bb_period)
+        self._price_sum: float = 0.0
+        self._price_sq_sum: float = 0.0
         self._rsi_gain_buffer: List[float] = []
         self._rsi_loss_buffer: List[float] = []
+        self._avg_gain: float = 0.0
+        self._avg_loss: float = 0.0
         self._prev_close: Optional[float] = None
         self._prev_rsi: Optional[float] = None
         self._bar_count: int = 0
@@ -91,6 +97,11 @@ class BollingerBandsStrategy(RiskAwareStrategy):
     def reset(self) -> None:
         super().reset()
         self._price_buffer.clear()
+        self._price_deque.clear()
+        self._price_sum = 0.0
+        self._price_sq_sum = 0.0
+        self._avg_gain = 0.0
+        self._avg_loss = 0.0
         self._rsi_gain_buffer.clear()
         self._rsi_loss_buffer.clear()
         self._init_adx(self._adx_period)
@@ -124,10 +135,19 @@ class BollingerBandsStrategy(RiskAwareStrategy):
         # ADX 增量更新
         self._update_adx(high, low, close)
 
-        # 1. 增量更新价格缓冲区（用于 SMA + Std）
+        # 1. 增量更新价格缓冲区（供 get_bands 使用）
         self._price_buffer.append(close)
         if len(self._price_buffer) > self.bb_period * 3:
             self._price_buffer = self._price_buffer[-(self.bb_period * 3):]
+
+        # 增量更新 deque + 滚动求和（O(1) SMA/Std）
+        if len(self._price_deque) == self.bb_period:
+            old = self._price_deque[0]
+            self._price_sum -= old
+            self._price_sq_sum -= old * old
+        self._price_deque.append(close)
+        self._price_sum += close
+        self._price_sq_sum += close * close
 
         # 样本不足
         if self._bar_count < self.bb_period + self.rsi_period:
@@ -138,38 +158,42 @@ class BollingerBandsStrategy(RiskAwareStrategy):
         if self.enable_adx_filter and self._is_trending():
             return None
 
-        # 2. 计算布林带（滑动窗口）
-        recent = self._price_buffer[-(self.bb_period + 1):-1] if len(self._price_buffer) > self.bb_period else self._price_buffer[:-1]
-        if len(recent) < self.bb_period:
+        # 2. 计算布林带（增量 SMA/Std，O(1)）
+        n = self.bb_period
+        if len(self._price_deque) < n:
             self._prev_close = close
             return None
 
-        sma = np.mean(recent)
-        std = np.std(recent, ddof=1)
+        sma = self._price_sum / n
+        var = self._price_sq_sum / n - sma * sma
+        if var < 0:
+            var = 0.0
+        std = (var * n / (n - 1)) ** 0.5
         upper_band = sma + self.bb_std * std
         lower_band = sma - self.bb_std * std
 
-        # 3. 增量 RSI
+        # 3. 增量 RSI（纯 Wilder 平滑）
         if self._prev_close is not None:
             change = close - self._prev_close
             gain = max(change, 0)
             loss = abs(min(change, 0))
 
             if self._prev_rsi is None:
+                # 种子阶段：累积 gain/loss，满 period 后用 SMA 初始化一次
                 self._rsi_gain_buffer.append(gain)
                 self._rsi_loss_buffer.append(loss)
                 if len(self._rsi_gain_buffer) >= self.rsi_period:
-                    avg_gain = np.mean(self._rsi_gain_buffer[-self.rsi_period:])
-                    avg_loss = np.mean(self._rsi_loss_buffer[-self.rsi_period:])
-                    rsi = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 100.0
+                    self._avg_gain = sum(self._rsi_gain_buffer[-self.rsi_period:]) / self.rsi_period
+                    self._avg_loss = sum(self._rsi_loss_buffer[-self.rsi_period:]) / self.rsi_period
+                    rsi = 100 - (100 / (1 + self._avg_gain / self._avg_loss)) if self._avg_loss > 0 else 100.0
                     self._prev_rsi = rsi
             else:
-                avg_gain = np.mean(self._rsi_gain_buffer[-self.rsi_period:]) if self._rsi_gain_buffer else 0
-                avg_loss = np.mean(self._rsi_loss_buffer[-self.rsi_period:]) if self._rsi_loss_buffer else 0
-                avg_gain = (avg_gain * (self.rsi_period - 1) + gain) / self.rsi_period
-                avg_loss = (avg_loss * (self.rsi_period - 1) + loss) / self.rsi_period
-                rsi = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 100.0
+                # Wilder 平滑：纯增量
+                self._avg_gain = (self._avg_gain * (self.rsi_period - 1) + gain) / self.rsi_period
+                self._avg_loss = (self._avg_loss * (self.rsi_period - 1) + loss) / self.rsi_period
+                rsi = 100 - (100 / (1 + self._avg_gain / self._avg_loss)) if self._avg_loss > 0 else 100.0
                 self._prev_rsi = rsi
+                # 保留 buffer 供调试
                 self._rsi_gain_buffer.append(gain)
                 self._rsi_loss_buffer.append(loss)
                 if len(self._rsi_gain_buffer) > self.rsi_period * 3:
