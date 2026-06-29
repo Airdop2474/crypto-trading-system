@@ -131,13 +131,24 @@ class PaperTradingDaemon:
 
         if strat_name == "grid":
             # grid 也从 saved 配置加载参数（grid_count / position_per_grid / enable_filters）
-            grid_kwargs = dict(
-                lower_price=lower, upper_price=upper, grid_count=10,
-                initial_capital=initial,
-                max_consecutive_losses=_cfg.MAX_CONSECUTIVE_LOSSES,
-                max_daily_loss=_cfg.MAX_DAILY_LOSS,
-            )
+            # auto_range 模式下不传 lower_price/upper_price（运行时自动设定）
             grid_schema = getattr(GridTradingStrategy, "PARAM_SCHEMA", {})
+            auto_range_enabled = bool(saved.get("auto_range", False))
+            if auto_range_enabled:
+                grid_kwargs = dict(
+                    grid_count=10,
+                    initial_capital=initial,
+                    max_consecutive_losses=_cfg.MAX_CONSECUTIVE_LOSSES,
+                    max_daily_loss=_cfg.MAX_DAILY_LOSS,
+                    auto_range=True,
+                )
+            else:
+                grid_kwargs = dict(
+                    lower_price=lower, upper_price=upper, grid_count=10,
+                    initial_capital=initial,
+                    max_consecutive_losses=_cfg.MAX_CONSECUTIVE_LOSSES,
+                    max_daily_loss=_cfg.MAX_DAILY_LOSS,
+                )
             for k, v in saved.items():
                 if k in grid_schema:
                     grid_kwargs[k] = v

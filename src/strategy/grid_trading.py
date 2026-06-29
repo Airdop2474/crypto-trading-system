@@ -46,12 +46,14 @@ class GridTradingStrategy(RiskAwareStrategy):
         "grid_count": {"type": int, "min": 5, "max": 30},
         "position_per_grid": {"type": float, "min": 0.02, "max": 0.15},
         "enable_filters": {"type": bool},
+        "auto_range": {"type": bool},
+        "auto_lookback": {"type": int, "min": 20, "max": 200},
     }
 
     def __init__(
         self,
-        lower_price: float,
-        upper_price: float,
+        lower_price: Optional[float] = None,
+        upper_price: Optional[float] = None,
         grid_count: int = 10,
         position_per_grid: Optional[float] = None,
         enable_filters: bool = True,
@@ -61,13 +63,16 @@ class GridTradingStrategy(RiskAwareStrategy):
         max_daily_loss: float = 0.02,
         initial_capital: float = 10000.0,
         stop_loss_config=None,
+        auto_range: bool = False,
+        auto_lookback: int = 50,
+        auto_buffer: float = 0.02,
     ):
         """
         初始化网格策略
 
         参数：
-            lower_price: 价格下界
-            upper_price: 价格上界
+            lower_price: 价格下界（auto_range=True 时可省略，运行时自动计算）
+            upper_price: 价格上界（auto_range=True 时可省略，运行时自动计算）
             grid_count: 网格数量（安全范围 5-30）
             position_per_grid: 每档占初始资金比例（默认 1/grid_count，安全范围 2%-15%）
             enable_filters: 是否启用趋势/波动率过滤器
@@ -75,6 +80,9 @@ class GridTradingStrategy(RiskAwareStrategy):
             max_daily_loss: 当日亏损熔断阈值（占初始资金比例）
             initial_capital: 初始资金（用于当日亏损熔断的资金基准，应与引擎一致）
             stop_loss_config: 止损配置（StopLossConfig，可选，网格策略有自身边界保护不使用）
+            auto_range: 是否自动识别价格范围（首次有足够历史数据时设定，之后不变）
+            auto_lookback: 自动识别时使用的历史 bar 数量（默认 50）
+            auto_buffer: 自动识别时的上下沿缓冲比例（默认 2%）
         """
         super().__init__(
             name="GridTrading",
@@ -84,8 +92,12 @@ class GridTradingStrategy(RiskAwareStrategy):
             stop_loss_config=stop_loss_config,
         )
 
-        if lower_price >= upper_price:
-            raise ValueError("lower_price must be less than upper_price")
+        # 自动识别模式：lower/upper 可省略，运行时由 on_bar 首次设定
+        if not auto_range:
+            if lower_price is None or upper_price is None:
+                raise ValueError("lower_price/upper_price 必填（或启用 auto_range）")
+            if lower_price >= upper_price:
+                raise ValueError("lower_price must be less than upper_price")
 
         if not (GRID_COUNT_MIN <= grid_count <= GRID_COUNT_MAX):
             raise ValueError(
@@ -104,37 +116,50 @@ class GridTradingStrategy(RiskAwareStrategy):
                 f"got {position_per_grid:.4f}"
             )
 
-        self.lower_price = lower_price
-        self.upper_price = upper_price
+        self.lower_price = lower_price if lower_price is not None else 0.0
+        self.upper_price = upper_price if upper_price is not None else 0.0
         self.grid_count = grid_count
         self.position_per_grid = position_per_grid
         self.enable_filters = enable_filters
         self.enable_adx_filter = enable_adx_filter
+        self.auto_range = auto_range
+        self.auto_lookback = auto_lookback
+        self.auto_buffer = auto_buffer
+        self._auto_range_set: bool = False  # 自动范围是否已设定（只设一次）
 
         # ADX 初始化
         self._init_adx(adx_period)
 
-        # 计算网格间距与网格线
-        self.grid_spacing = (upper_price - lower_price) / grid_count
+        # 计算网格间距与网格线（auto_range 模式下首次 on_bar 时重算）
+        self.grid_spacing = (self.upper_price - self.lower_price) / grid_count if self.upper_price > self.lower_price else 0.0
         self.grids = [
-            lower_price + i * self.grid_spacing for i in range(grid_count + 1)
-        ]
+            self.lower_price + i * self.grid_spacing for i in range(grid_count + 1)
+        ] if self.grid_spacing > 0 else []
 
         self._init_grid_state()
 
         self.set_parameters(
-            lower_price=lower_price,
-            upper_price=upper_price,
+            lower_price=self.lower_price,
+            upper_price=self.upper_price,
             grid_count=grid_count,
             position_per_grid=position_per_grid,
+            auto_range=auto_range,
+            auto_lookback=auto_lookback,
         )
 
-        logger.info(
-            f"GridTrading initialized: "
-            f"range=[{lower_price:.2f}, {upper_price:.2f}], "
-            f"grids={grid_count}, spacing={self.grid_spacing:.2f}, "
-            f"pos/grid={position_per_grid:.2%}"
-        )
+        if auto_range:
+            logger.info(
+                f"GridTrading initialized (auto_range): "
+                f"lookback={auto_lookback}, buffer={auto_buffer:.0%}, "
+                f"grids={grid_count}, pos/grid={position_per_grid:.2%}"
+            )
+        else:
+            logger.info(
+                f"GridTrading initialized: "
+                f"range=[{self.lower_price:.2f}, {self.upper_price:.2f}], "
+                f"grids={grid_count}, spacing={self.grid_spacing:.2f}, "
+                f"pos/grid={position_per_grid:.2%}"
+            )
 
     def _init_grid_state(self) -> None:
         """初始化/重置网格专属运行状态（熔断状态由 RiskAwareStrategy 管理）"""
@@ -170,17 +195,53 @@ class GridTradingStrategy(RiskAwareStrategy):
             return ("LIQUIDATE", f"价格突破网格下沿{self.PRICE_RANGE_BUFFER:.0%}，建议清仓")
         return ("CONTINUE", None)
 
+    def _set_auto_range(self, data: pd.DataFrame) -> None:
+        """根据历史数据自动设定网格价格范围（只调用一次）。
+
+        用最近 auto_lookback 根 bar 的 low/high 极值，加上 auto_buffer 缓冲。
+        设定后网格线固定，后续不再变动（避免持仓档位错位）。
+        """
+        recent = data.tail(self.auto_lookback)
+        low_min = float(recent["low"].min())
+        high_max = float(recent["high"].max())
+        # 上下沿加缓冲，避免边界频繁触发 PAUSE/LIQUIDATE
+        self.lower_price = low_min * (1 - self.auto_buffer)
+        self.upper_price = high_max * (1 + self.auto_buffer)
+        # 重算网格线
+        self.grid_spacing = (self.upper_price - self.lower_price) / self.grid_count
+        self.grids = [
+            self.lower_price + i * self.grid_spacing for i in range(self.grid_count + 1)
+        ]
+        logger.info(
+            f"GridTrading auto_range 设定: "
+            f"range=[{self.lower_price:.2f}, {self.upper_price:.2f}] "
+            f"(hist low={low_min:.2f}, high={high_max:.2f}, buffer={self.auto_buffer:.0%}), "
+            f"spacing={self.grid_spacing:.2f}"
+        )
+
     def on_bar(self, data: pd.DataFrame, current_time: datetime):
         """
         处理每根 K 线，返回订单列表（可能为空）
 
         决策顺序：
+        0. auto_range 首次设定网格范围（只设一次）
         1. _is_paused() 熔断 → 停止交易
         2. _check_boundary_breach() 边界检测 → PAUSE/LIQUIDATE
         3. NO_TRADE 过滤（价格越界/趋势/波动率/数据异常）→ 本根不交易
         4. 网格穿越 → 生成多档买卖订单
         """
+        # --- auto_range 首次设定 ---
+        if self.auto_range and not self._auto_range_set:
+            if len(data) >= self.auto_lookback:
+                self._set_auto_range(data)
+                self._auto_range_set = True
+
         if len(data) < 2:
+            self.last_price = data.iloc[-1]["close"] if len(data) else None
+            return []
+
+        # auto_range 模式下，未攒够历史数据时不交易（避免用空网格交易）
+        if self.auto_range and not self._auto_range_set:
             self.last_price = data.iloc[-1]["close"] if len(data) else None
             return []
 

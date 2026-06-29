@@ -1,8 +1,8 @@
 {
   "grid": {
-    "lower_price": 50000,
-    "upper_price": 80000,
-    "grid_count": 30,
+    "auto_range": true,
+    "auto_lookback": 50,
+    "grid_count": 15,
     "position_per_grid": 0.05,
     "enable_filters": true
   },
