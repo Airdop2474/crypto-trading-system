@@ -107,6 +107,7 @@ class PaperTradingDaemon:
         self.day_count = 0
         self.current_day = None
         self.last_bar_ts = None
+        self._live_client = None  # daemon 级复用的 ExchangeClient（避免每分钟新建 ccxt 实例）
 
         # 对账失败独立计数器——不与 risk.api_failures 共享，避免被
         # _run_live 主循环的 record_api_success() 重置而永远无法累积到阈值
@@ -259,10 +260,14 @@ class PaperTradingDaemon:
         return df.reset_index(drop=True)
 
     def _fetch_live_df(self):
-        from src.data.exchange import create_binance_client
-        # 主网公共行情=真实价格；public=True 不带凭据（公开数据无需签名，
-        # 且 .env 配的是 testnet key，传给主网会被拒 -2008）。
-        client = create_binance_client(testnet=False, public=True)
+        # 复用 daemon 级 ExchangeClient，避免每分钟新建 ccxt 实例造成内存抖动
+        # （ccxt.binance 实例 ~5-10MB，频繁创建/GC 导致 RSS 抖动 10-30MB）
+        if self._live_client is None:
+            from src.data.exchange import create_binance_client
+            # 主网公共行情=真实价格；public=True 不带凭据（公开数据无需签名，
+            # 且 .env 配的是 testnet key，传给主网会被拒 -2008）。
+            self._live_client = create_binance_client(testnet=False, public=True)
+        client = self._live_client
         df = client.fetch_ohlcv(self.symbol, self.args.timeframe,
                                 limit=max(WARMUP + 5, 200))
         df["timestamp"] = pd.to_datetime(df["timestamp"])
@@ -807,6 +812,10 @@ class PaperTradingDaemon:
         self.alert_mgr.check_drawdown(total_ret)
 
         self.last_bar_ts = str(bar["timestamp"])
+        # 运行时截断 closed_trades，避免长期运行内存累积（仅保留最近 200 条）
+        # checkpoint 落盘也是 200 条，内存对齐避免"内存多、磁盘少"的不一致
+        if len(self.runner.closed_trades) > 200:
+            self.runner.closed_trades = self.runner.closed_trades[-200:]
         if self.writer is not None:
             try:
                 self.writer.write_collector(self.collector)
@@ -882,6 +891,7 @@ class PaperTradingDaemon:
               f"轮询 {self.args.poll_seconds}s（Ctrl+C 停止，可重启续跑）")
         # 只处理启动后真实到达的新 bar（冷启动种子已在 _seed_live_warmup 标记为已见）
         self._consume_new_bars()
+        import gc
         while self.day_count < self.args.days:
             time.sleep(self.args.poll_seconds)
             try:
@@ -892,6 +902,8 @@ class PaperTradingDaemon:
                 continue
             self.risk.record_api_success()
             self._consume_new_bars()
+            # 主动 GC：每轮轮询后回收旧 DataFrame，减少内存占用
+            gc.collect()
         return self._finish()
 
     def _consume_new_bars(self):

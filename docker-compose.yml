@@ -146,12 +146,17 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@timescaledb:${POSTGRES_PORT:-5432}/crypto_trading
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:${REDIS_PORT:-6379}/0
       TIMESCALE_HOST: timescaledb
+      # GC 调优：降低阈值让 ccxt 临时对象更快回收，减少内存抖动
+      PYTHONMALLOC: malloc
+      PYTHONGCSEED: "1"
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
       - ./config:/app/config
+    mem_limit: 512m
+    memswap_limit: 768m
     restart: unless-stopped
-    command: python scripts/run_paper_trading_daemon.py --days 20 --timeframe 1h
+    command: python -X gc=1 scripts/run_paper_trading_daemon.py --days 20 --timeframe 1h
     # 不设 ports —— 守护进程不需要对外暴露端口
     # 通过 checkpoint 文件（data/paper_daemon_state.json）实现崩溃恢复
 
