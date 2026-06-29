@@ -891,7 +891,6 @@ class PaperTradingDaemon:
               f"轮询 {self.args.poll_seconds}s（Ctrl+C 停止，可重启续跑）")
         # 只处理启动后真实到达的新 bar（冷启动种子已在 _seed_live_warmup 标记为已见）
         self._consume_new_bars()
-        import gc
         while self.day_count < self.args.days:
             time.sleep(self.args.poll_seconds)
             try:
@@ -902,8 +901,6 @@ class PaperTradingDaemon:
                 continue
             self.risk.record_api_success()
             self._consume_new_bars()
-            # 主动 GC：每轮轮询后回收旧 DataFrame，减少内存占用
-            gc.collect()
         return self._finish()
 
     def _consume_new_bars(self):
